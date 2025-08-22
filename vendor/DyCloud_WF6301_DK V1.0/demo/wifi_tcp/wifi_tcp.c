@@ -194,9 +194,9 @@ static errcode_t wifi_connect(void)
         osDelay(1); // 延迟1ms
         if (netif_p->ip_addr.u_addr.ip4.addr != 0) {
             printf("本地IP: %u.%u.%u.%u\r\n", (netif_p->ip_addr.u_addr.ip4.addr & 0x000000ff),
+                     // >>8将地址右移8位，将原来的第二个字节移动到最低字节位置,>>16 将地址右移16位，将原来的第三个字节移动到最低字节位置
                    (netif_p->ip_addr.u_addr.ip4.addr >> 8) & 0xff, (netif_p->ip_addr.u_addr.ip4.addr >> 16) & 0xff,
-                   (netif_p->ip_addr.u_addr.ip4.addr >> 24) & 0xff); // >>8将地址右移8位，将原来的第二个字节移动到最低字节位置
-            // >>16 将地址右移16位，将原来的第三个字节移动到最低字节位置, >>24将地址右移24位，将原来的第四个字节移动到最低字节位置
+                   (netif_p->ip_addr.u_addr.ip4.addr >> 24) & 0xff); // >>24将地址右移24位，将原来的第四个字节移动到最低字节位置
             printf("连接成功!\r\n");
             return ERRCODE_SUCC;
         }
