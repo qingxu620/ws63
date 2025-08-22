@@ -21,7 +21,7 @@
   },
   {
     "buildTarget": "ws63-liteos-app",
-    "relativePath": "demo/pwm_led",
+    "relativePath": "demo/key",
     "chip": "WS63",
     "buildDef": "CONFIG_KEY_PIN=12",
     "needSmoke": "false",
