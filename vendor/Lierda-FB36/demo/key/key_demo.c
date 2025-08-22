@@ -42,7 +42,7 @@ static int key_task(const char *arg)
     // Configure key pin direction input
     ret = uapi_gpio_set_dir(CONFIG_KEY_PIN, GPIO_DIRECTION_INPUT);
     if (ERRCODE_SUCC != ret) {
-         osal_printk("ERROR: Failed to set GPIO direction\r\n");
+        osal_printk("ERROR: Failed to set GPIO direction\r\n");
         return -1;
     }
 
@@ -81,8 +81,7 @@ static void key_entry(void)
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, KEY_TASK_PRIO); // Set task priority
         osal_kfree(task_handle);
-    }
-    else {
+    } else {
         osal_printk("ERROR: Failed to create KeyTask\r\n");
     }
 

@@ -81,8 +81,6 @@ static int pwm_led_task(const char *arg)
         // Check if low_tmp limits are reached and reverse direction
         if (duty >= PWM_HIGH_TIME || duty <= 0) {
             step = -step;
-            /*osal_printk("Brightness direction changed: %s\r\n", 
-                       (step > 0) ? "Increasing" : "Decreasing");*/
         }
 
         // Add delay to control breathing speed
@@ -112,8 +110,7 @@ static void pwm_led_entry(void)
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, LED_TASK_PRIO); // Set task priority
         osal_kfree(task_handle);
-    }
-    else {
+    } else {
         osal_printk("ERROR: Failed to create PwmledTask\r\n");
     }
 

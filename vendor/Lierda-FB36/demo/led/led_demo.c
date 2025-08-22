@@ -36,7 +36,7 @@ static int led_task(const char *arg)
     // Configure LED pin direction output
     ret = uapi_gpio_set_dir(CONFIG_LED_PIN, GPIO_DIRECTION_OUTPUT);
     if (ERRCODE_SUCC != ret) {
-         osal_printk("ERROR: Failed to set GPIO direction\r\n");
+        osal_printk("ERROR: Failed to set GPIO direction\r\n");
         return -1;
     }
 
@@ -72,8 +72,7 @@ static void led_entry(void)
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, LED_TASK_PRIO); // Set task priority
         osal_kfree(task_handle);
-    }
-    else {
+    } else {
         osal_printk("ERROR: Failed to create LedTask\r\n");
     }
 
