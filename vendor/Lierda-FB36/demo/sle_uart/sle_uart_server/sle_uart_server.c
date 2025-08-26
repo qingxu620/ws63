@@ -106,8 +106,9 @@ static void sle_uart_init(void)
     /* UART init config */
     uart_init_config();
 
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
-        UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_server_read_int_handler);
+    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS,
+                                                    UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE,
+                                                    1, sle_uart_server_read_int_handler);
     if (ret != ERRCODE_SUCC) {
         osal_printk("uart%d register rx callback fail!\r\n", CONFIG_SLE_UART_BUS);
     }
@@ -127,7 +128,7 @@ static void sle_uuid_setu2(uint16_t u2, sle_uuid_t *out)
 {
     sle_uuid_set_base(out);
     out->len = UUID_LEN_2;
-    encode2byte_little(&out->uuid[14], u2);
+    encode2byte_little(&out->uuid[BT_INDEX_14], u2);
 }
 
 static void ssaps_read_request_cbk(uint8_t server_id, uint16_t conn_id, ssaps_req_read_cb_t *read_cb_para,

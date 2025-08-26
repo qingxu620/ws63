@@ -111,8 +111,9 @@ static void sle_uart_init(void)
     /* UART init config */
     uart_init_config();
 
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
-        UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_read_int_handler);
+    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS,
+                                                    UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE,
+                                                    1, sle_uart_read_int_handler);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[Sle Client] uart%d register rx callback fail!\r\n", CONFIG_SLE_UART_BUS);
     }
