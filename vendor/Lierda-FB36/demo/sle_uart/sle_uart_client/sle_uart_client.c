@@ -30,6 +30,7 @@
 #define UART_DEFAULT_TIMEOUT_MULTIPLIER 0x1f4
 #define UART_DEFAULT_SCAN_INTERVAL      400
 #define UART_DEFAULT_SCAN_WINDOW        20
+#define UART_DURATION_MS                2000
 
 static sle_announce_seek_callbacks_t g_seek_cbk = {0};
 static sle_connection_callbacks_t    g_connect_cbk = {0};
@@ -84,7 +85,7 @@ static void uart_init_config(void)
 
 static void sle_uart_read_int_handler(const void *buffer, uint16_t length, bool error)
 {
-    unused(error); 
+    unused(error);
     uint8_t value[SLE_UART_TRANSFER_SIZE+1] = {0};
     (void)memcpy_s(value, SLE_UART_TRANSFER_SIZE, buffer, length);
     osal_printk("uart%d get %d length data: %s\r\n", CONFIG_SLE_UART_BUS, length, value);
@@ -95,12 +96,10 @@ static void sle_uart_read_int_handler(const void *buffer, uint16_t length, bool 
     param.data_len = length;
     param.data = value;
     (void)memcpy_s(param.data, param.data_len, buffer, length);
-    if (true == g_bis_conn)
-    {
+    if (true == g_bis_conn) {
         ssapc_write_req(0, g_conn_id, &param);
     }
-    else
-    {
+    else {
         osal_printk("sle is not connected, please connect first\r\n");
     }
 }
@@ -113,7 +112,7 @@ static void sle_uart_init(void)
     /* UART init config */
     uart_init_config();
 
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS,
+    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
         UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_read_int_handler);
 
     if (ret != ERRCODE_SUCC) {
@@ -314,8 +313,8 @@ void sle_sample_find_structure_cbk(uint8_t client_id, uint16_t conn_id, ssapc_fi
 void sle_sample_find_structure_cmp_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_find_structure_result_t *structure_result, errcode_t status)
 {
-    osal_printk("[ssap client] sle_sample_find_structure_cmp_cbk client id:%d status:%d type:%d uuid len:%d conn_id:%d\r\n",
-        client_id, status, structure_result->type, structure_result->uuid.len, conn_id);
+    osal_printk("[ssap client] sle_sample_find_structure_cmp_cbk client id:%d status:%d type:%d conn_id:%d\r\n",
+        client_id, status, structure_result->type, conn_id);
 }
 
 void sle_sample_find_property_cbk(uint8_t client_id, uint16_t conn_id,
@@ -361,7 +360,7 @@ void sle_sample_ssapc_cbk_register(ssapc_notification_callback notification_cb,
 
 static void sle_client_init(void)
 {
-    osal_msleep(2000);
+    osal_msleep(UART_DURATION_MS);
     sle_sample_seek_cbk_register();
     sle_sample_connect_cbk_register();
     sle_sample_ssapc_cbk_register(sle_uart_notification_cb, sle_uart_indication_cb);

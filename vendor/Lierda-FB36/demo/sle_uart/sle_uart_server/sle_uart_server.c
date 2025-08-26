@@ -23,8 +23,10 @@
 #include "pinctrl.h"
 #include "uart.h"
 
-static char     g_sle_uuid_app_uuid[UUID_LEN_2] = {0x0, 0x0};                           /* sle server app uuid for test */
-static char     g_sle_property_value[OCTET_BIT_LEN] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};   /* server notify property uuid for test */
+/* sle server app uuid for test */
+static char     g_sle_uuid_app_uuid[UUID_LEN_2] = {0x0, 0x0};                           
+/* server notify property uuid for test */
+static char     g_sle_property_value[OCTET_BIT_LEN] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
 static uint16_t g_conn_id = 0;          /* sle connect acb handle */
 static uint8_t  g_server_id = 0;        /* sle server handle */
 static uint16_t g_service_handle = 0;   /* sle service handle */
@@ -35,12 +37,11 @@ static bool     g_bis_conn = false;
 static uint8_t sle_uuid_base[] = { 0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA, \
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-#define encode2byte_little(_ptr, data) \
-    do { \
-        *(uint8_t *)((_ptr) + 1) = (uint8_t)((data) >> 8); \
-        *(uint8_t *)(_ptr) = (uint8_t)(data); \
-    } while (0)
-
+static void encode2byte_little(uint8_t *_ptr, uint16_t data)
+{
+    *(uint8_t *)((_ptr) + 1) = (uint8_t)((data) >> 8);
+    *(uint8_t *)(_ptr) = (uint8_t)(data);
+}
 
 static uint8_t g_app_uart_rx_buff[SLE_UART_TRANSFER_SIZE] = {0};
 
@@ -79,7 +80,7 @@ static void uart_init_config(void)
 
 static void sle_uart_server_read_int_handler(const void *buffer, uint16_t length, bool error)
 {
-    unused(error); 
+    unused(error);
     uint8_t value[SLE_UART_TRANSFER_SIZE+1] = {0};
     (void)memcpy_s(value, SLE_UART_TRANSFER_SIZE, buffer, length);
     osal_printk("uart%d get %d length data: %s\r\n", CONFIG_SLE_UART_BUS, length, value);
@@ -90,12 +91,10 @@ static void sle_uart_server_read_int_handler(const void *buffer, uint16_t length
     param.value_len = length;
     param.value = value;
     (void)memcpy_s(param.value, param.value_len, buffer, length);
-    if (true == g_bis_conn)
-    {
+    if (true == g_bis_conn) {
         ssaps_notify_indicate(g_server_id, g_conn_id, &param);
     }
-    else
-    {
+    else {
         osal_printk("sle is not connected, please connect first\r\n");
     }
 }
@@ -108,7 +107,7 @@ static void sle_uart_init(void)
     /* UART init config */
     uart_init_config();
 
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS,
+    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
         UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_server_read_int_handler);
 
     if (ret != ERRCODE_SUCC) {
@@ -194,7 +193,7 @@ static errcode_t sle_uuid_server_property_add(void)
 
     sle_uuid_setu2(SLE_UUID_SERVER_NTF_REPORT, &property.uuid);
     property.permissions = SLE_UUID_TEST_PROPERTIES;
-    property.operate_indication = SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_NOTIFY | SSAP_OPERATE_INDICATION_BIT_WRITE;
+    property.operate_indication = SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_NOTIFY;
     property.value = osal_vmalloc(sizeof(g_sle_property_value));
     if (property.value == NULL) {
         osal_printk("[uart server] sle property mem fail\r\n");
@@ -363,6 +362,7 @@ void sle_enable_server_cbk(void)
 
 void sle_server_init(void)
 {
+    osal_msleep(UART_DURATION_MS);
     uapi_watchdog_disable();
     sle_announce_register_cbks();
     sle_conn_register_cbks();
