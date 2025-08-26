@@ -28,5 +28,15 @@
     "key":"3",
     "name":"key",
     "description":"Key interrupt"
+  },
+  {
+    "buildTarget": "ws63-liteos-app",
+    "relativePath": "demo/sle_uart",
+    "chip": "WS63",
+    "buildDef": "",
+    "needSmoke": "false",
+    "key":"4",
+    "name":"sle_uart",
+    "description":"sle uart demo, include server and client"
   }
 ]
