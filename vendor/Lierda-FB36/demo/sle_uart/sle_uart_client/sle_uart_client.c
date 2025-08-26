@@ -98,8 +98,7 @@ static void sle_uart_read_int_handler(const void *buffer, uint16_t length, bool 
     (void)memcpy_s(param.data, param.data_len, buffer, length);
     if (true == g_bis_conn) {
         ssapc_write_req(0, g_conn_id, &param);
-    }
-    else {
+    } else {
         osal_printk("sle is not connected, please connect first\r\n");
     }
 }
@@ -114,7 +113,6 @@ static void sle_uart_init(void)
 
     errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
         UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_read_int_handler);
-
     if (ret != ERRCODE_SUCC) {
         osal_printk("[Sle Client] uart%d register rx callback fail!\r\n", CONFIG_SLE_UART_BUS);
     }

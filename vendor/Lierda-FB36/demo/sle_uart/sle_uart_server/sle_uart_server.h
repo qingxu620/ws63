@@ -27,11 +27,12 @@
 /* Descriptor Property */
 #define SLE_UUID_TEST_DESCRIPTOR   (SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE)
 
-#define OCTET_BIT_LEN 8
-#define UUID_LEN_2     2
-#define BT_INDEX_4     4
-#define BT_INDEX_5     5
-#define BT_INDEX_0     0
+#define OCTET_BIT_LEN   8
+#define UUID_LEN_2      2
+#define BT_INDEX_4      4
+#define BT_INDEX_5      5
+#define BT_INDEX_0      0
+#define BT_INDEX_14     14
 
 #define UART_DEFAULT_KTHREAD_SIZE 0x2000
 #define UART_DEFAULT_KTHREAD_PROI 26

@@ -24,7 +24,7 @@
 #include "uart.h"
 
 /* sle server app uuid for test */
-static char     g_sle_uuid_app_uuid[UUID_LEN_2] = {0x0, 0x0};                           
+static char     g_sle_uuid_app_uuid[UUID_LEN_2] = {0x0, 0x0};
 /* server notify property uuid for test */
 static char     g_sle_property_value[OCTET_BIT_LEN] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
 static uint16_t g_conn_id = 0;          /* sle connect acb handle */
@@ -39,7 +39,7 @@ static uint8_t sle_uuid_base[] = { 0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xE
 
 static void encode2byte_little(uint8_t *_ptr, uint16_t data)
 {
-    *(uint8_t *)((_ptr) + 1) = (uint8_t)((data) >> 8);
+    *(uint8_t *)((_ptr) + 1) = (uint8_t)((data) >> 0x08);
     *(uint8_t *)(_ptr) = (uint8_t)(data);
 }
 
@@ -93,8 +93,7 @@ static void sle_uart_server_read_int_handler(const void *buffer, uint16_t length
     (void)memcpy_s(param.value, param.value_len, buffer, length);
     if (true == g_bis_conn) {
         ssaps_notify_indicate(g_server_id, g_conn_id, &param);
-    }
-    else {
+    } else {
         osal_printk("sle is not connected, please connect first\r\n");
     }
 }
@@ -109,7 +108,6 @@ static void sle_uart_init(void)
 
     errcode_t ret = uapi_uart_register_rx_callback(CONFIG_SLE_UART_BUS, 
         UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, sle_uart_server_read_int_handler);
-
     if (ret != ERRCODE_SUCC) {
         osal_printk("uart%d register rx callback fail!\r\n", CONFIG_SLE_UART_BUS);
     }
