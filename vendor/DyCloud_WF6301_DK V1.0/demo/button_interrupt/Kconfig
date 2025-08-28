@@ -1,5 +1,0 @@
-config BUTTON_PIN
-    int
-    prompt "Choose BUTTON_PIN pin."
-    depends on SAMPLE_SUPPORT_BUTTON_INTERRUPT
-    default 12

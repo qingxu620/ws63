@@ -24,6 +24,7 @@
 #include "soc_osal.h"
 #define BUTTON_TASK_PRIO 24         //任务优先级
 #define BUTTON_TASK_STACK_SIZE 1024 //任务栈大小
+#define CONFIG_BUTTON_PIN 12
 
 static void gpio_callback_func(pin_t pin, uintptr_t param)
 {
