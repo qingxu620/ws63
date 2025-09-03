@@ -55,8 +55,6 @@
 | FB36星闪开发板（利尔达）                                     | [利尔达FB36星闪开发板（淘宝）](https://e.tb.cn/h.hkidLj95hZzH1cz?tk=yzWe4W7VT4X) | ![image-20250801141835783](./vendor/Lierda-FB36/image-20250801141835783.png) |
 | FB36星闪Wi-Fi6 AI开发板（利尔达）                            | [利尔达FB36星闪Wi-Fi6 AI开发板（淘宝）](https://e.tb.cn/h.hkUwR5OhAz12Ija?tk=latG4WfuOeAtG-#22>lD) | ![image-20250801142242182](./vendor/Lierda-FB36/image-20250801142237377.png) |
 
-## 免责声明
-
 模组及开发板等产品均由相应厂家自行销售，由其对产品质量负责，如侵犯他人知识产权的由其自行承担全部责任及赔偿。海思不提供任何保证及担保，亦不承担责任及赔偿。
 
 
