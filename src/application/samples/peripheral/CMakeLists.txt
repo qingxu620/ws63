@@ -10,6 +10,10 @@ if(DEFINED CONFIG_SAMPLE_SUPPORT_BLINKY)
     add_subdirectory_if_exist(blinky)
 endif()
 
+if(DEFINED CONFIG_SAMPLE_SUPPORT_HELLOWORLD)
+    add_subdirectory_if_exist(helloworld)
+endif()
+
 if(DEFINED CONFIG_SAMPLE_SUPPORT_BUTTON)
     add_subdirectory_if_exist(button)
 endif()
