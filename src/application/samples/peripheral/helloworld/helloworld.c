@@ -35,5 +35,5 @@ static void helloworld_entry(void)
     osal_kthread_unlock();
 }
 
-/* Run the pwm_entry. */
+/* Run the helloword_entry. */
 app_run(helloworld_entry);
