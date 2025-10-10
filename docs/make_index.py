@@ -8,7 +8,8 @@ index_filename = 'index.rst'
 
 
 top_dirs = {
-    'software': '软件资料'
+    'software': '软件资料',
+    'tool': '工具资料'
 }
 
 
