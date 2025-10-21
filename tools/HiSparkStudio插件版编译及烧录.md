@@ -12,7 +12,7 @@
 
 - 2.1 在Vscode扩展里面搜索“Chinese”，点击安装即可。
 
-![image-20251021111615915](../../fbb_bs2x_4/vendor/HH-D03/doc/media/readme/image-20251021111615915.png)
+![image-20251021111615915](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251021111615915-17610397011281.png)
 
 - 2.2 在Vscode扩展里面搜索“HiSpark Studio”，点击安装即可。
 
