@@ -80,7 +80,7 @@
 
 ![image-20251021145120866](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251021145120866.png)
 
-- B. 根据提示步骤安装，将下图路径复制添加到环境变量中，如何添加环境变量参考https://blog.csdn.net/zcq125521/article/details/89146184
+- B. 根据提示步骤安装，将下图路径复制添加到环境变量中，如何添加环境变量参考https://blog.csdn.net/weixin_52534056/article/details/144449026
 
   ![image-20251022113224045](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022113224045.png)
 
@@ -144,7 +144,7 @@
 
 ## 7. 镜像烧录
 
-- A. 硬件搭建：Typec线将板端与PC端连接
+- A. 硬件搭建：Typec线将板端与PC端连接，这里以HiHope_NearLink_DK3863E_V03开发板为例，其他开发板请用户自行参考开发板原理图，
 
 ![image-20240801173105245](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20240801173105245.png)
 
@@ -154,14 +154,48 @@
 
 ![image-20240801173618611](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20240801173618611.png)
 
-- C. 安装成功后，在HiSpark Studio插件中点击“工程配置”按钮，选择“程序加载”，传输方式选择“serial”，端口选择“comxxx”，com口在设备管理器中查看。
+- C. 安装成功后，在HiSpark Studio插件中点击“Project Config”按钮，选择“程序加载”，传输方式选择“serial”，端口选择“comxxx”，com口在设备管理器中查看。
 
 ![image-20250716164922699](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716164922699.png)
 
-- D. 配置完成后，点击工具“程序加载”按钮烧录，出现“Connecting, please reset device...”字样时，复位开发板，等待烧录结束。
+- D. 配置完成后，点击工具“程序加载”按钮烧录，出现“Connecting, please reset device...”字样时，复位开发板（这里以HiHope_NearLink_DK3863E_V03开发板为例，其他开发板请用户自行参考开发板原理图，复位RST按键在开发板右边，如图2），等待烧录结束。
 
 ![image-20250716170835615](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716170835615.png)
+
+![image-20251022164131474](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022164131474.png)
 
 - E. 在HiSpark Studio插件底端选择“监视器”，选择端口（**开发板需要与电脑通过typec连接**），如果没有端口显示可以刷新一下，点击“开始监视”，复位开发板，出现“flashboot version”字样代表编译烧录成功
 
 ![image-20250307171224611](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250307171224611.png)
+
+## 8. 如何编译第一个程序“Hello World”
+
+- A. 本案例使用硬件：[HiHope_NearLink_DK3863E_V03开发板](https://e.tb.cn/h.TyIdVOFouZyhA23?tk=vPA6eoh0e0u)
+
+  ![image-20251022161649879](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022161649879.png)
+
+- B. 在HiSpark Sudio插件版本里面选择“Kconfig”->Application->Enable Sample -> Enable the Sample of peripheral->Support hello world oled Sample->Save保存，保存后关闭即可。
+
+![image-20251022155417499](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022155417499.png)
+
+- C. 点击“rebuild”或者“clean+build”进行编译。
+
+  ![image-20251022160429803](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022160429803.png)
+
+- D. 等待编译完成，显示“SUCCESS Took xxx seconds”，如下图所示。
+
+![image-20251022160622201](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022160622201.png)
+
+- E. 在HiSpark Studio插件中点击“Project Config”按钮，选择“程序加载”，传输方式选择“serial”，端口选择“comxxx”，com口在设备管理器中查看。
+
+  ![image-20250716164922699](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20250716164922699.png)
+
+- F.  配置完成后，点击工具“程序加载”按钮烧录，出现“Connecting, please reset device...”字样时，复位开发板（复位RST按键在开发板右边，如图2），等待烧录结束。
+
+  ![image-20250716170835615](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20250716170835615.png)
+  
+  ![image-20251022164131474](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022164131474.png)
+  
+- G.  烧录结束复位开发板（复位RST按键在开发板右边），屏幕上会显示“Hello World！！！”字样。
+
+![image-20251022161649879](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/tools/image-20251022161649879.png)
