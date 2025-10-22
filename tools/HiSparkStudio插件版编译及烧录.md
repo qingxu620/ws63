@@ -18,7 +18,7 @@
 
 ![image-20250716161307500](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716161307500.png)
 
-- 4.安装完成后，在vscode侧边栏出现“HiSpark Stuido”图标，点击“Home”主页。
+- 4.安装完成后，在vscode侧边栏出现“HiSpark Studio”图标，点击“Home”主页。
 
 ![image-20250716162432995](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716162432995.png)
 
