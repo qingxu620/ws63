@@ -11,6 +11,7 @@ config ENABLE_ALL_PERIPHERAL_SAMPLE
     select SAMPLE_SUPPORT_AMIC if ADC_SUPPORT_AMIC
     select SAMPLE_SUPPORT_BLINKY
     select SAMPLE_SUPPORT_HELLOWORLD
+    select SAMPLE_SUPPORT_HELLOWORLD_OLED
     select SAMPLE_SUPPORT_BUTTON
     select SAMPLE_SUPPORT_CALENDAR
     select SAMPLE_SUPPORT_CLOCKS
@@ -90,6 +91,20 @@ config SAMPLE_SUPPORT_HELLOWORLD
 if SAMPLE_SUPPORT_HELLOWORLD
 menu "Hello World Sample Configuration"
     osource "application/samples/peripheral/helloworld/Kconfig"
+endmenu
+endif
+
+config SAMPLE_SUPPORT_HELLOWORLD_OLED
+    bool
+    prompt "Support hello world oled Sample."
+    default n
+    depends on ENABLE_PERIPHERAL_SAMPLE
+    help
+        This option means support Hello World oled Sample.
+
+if SAMPLE_SUPPORT_HELLOWORLD_OLED
+menu "Hello World Sample Configuration"
+    osource "application/samples/peripheral/helloworld_oled/Kconfig"
 endmenu
 endif
 

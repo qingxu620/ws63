@@ -121,4 +121,9 @@ endif()
 if(DEFINED CONFIG_SAMPLE_SUPPORT_CLOCKS)
     add_subdirectory_if_exist(clocks)
 endif()
+
+if(DEFINED CONFIG_SAMPLE_SUPPORT_HELLOWORLD_OLED)
+    add_subdirectory_if_exist(helloworld_oled)
+endif()
+
 set(SOURCES "${SOURCES}" PARENT_SCOPE)
