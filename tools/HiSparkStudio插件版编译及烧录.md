@@ -144,7 +144,7 @@
 
 ## 7. 镜像烧录
 
-- A. 硬件搭建：Typec线将板端与PC端连接
+- A. 硬件搭建：Typec线将板端与PC端连接，这里以HiHope_NearLink_DK3863E_V03开发板为例，其他开发板请用户自行参考开发板原理图，
 
 ![image-20240801173105245](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20240801173105245.png)
 
@@ -158,7 +158,7 @@
 
 ![image-20250716164922699](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716164922699.png)
 
-- D. 配置完成后，点击工具“程序加载”按钮烧录，出现“Connecting, please reset device...”字样时，复位开发板（复位RST按键在开发板右边，如图2），等待烧录结束。
+- D. 配置完成后，点击工具“程序加载”按钮烧录，出现“Connecting, please reset device...”字样时，复位开发板（这里以HiHope_NearLink_DK3863E_V03开发板为例，其他开发板请用户自行参考开发板原理图，复位RST按键在开发板右边，如图2），等待烧录结束。
 
 ![image-20250716170835615](../vendor/HiHope_NearLink_DK_WS63E_V03/doc/media/readme/image-20250716170835615.png)
 
