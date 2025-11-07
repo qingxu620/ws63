@@ -427,6 +427,15 @@ endif()
 set(Wi-Fi-PUBLIC_DEFINES
 )
 
+if(CONFIG_SUPPORT_SLE_BASE_STATION IN_LIST DEFINES)
+    list(APPEND Wi-Fi-PUBLIC_HEADER
+        ${ROOT_DIR}/protocol/wifi/source/host/inc/oal/
+        ${ROOT_DIR}/protocol/wifi/source/host/inc/oal/liteOS/
+        ${ROOT_DIR}/protocol/wifi/source/host/forward/liteOS/
+        ${WIFI_DEVICE_DIR}/source/device/hal/hal_ws63/src
+    )
+endif()
+
 if("__ALIOS__" IN_LIST DEFINES OR "__FREERTOS__" IN_LIST DEFINES)
     list (APPEND Wi-Fi-PRIVATE_DEFINES
         FREERTOS_DEFINE

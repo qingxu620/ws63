@@ -2,8 +2,8 @@
 			<MSG STRUCTURE="diag_log_msg0" NAME="[gle manger enable]enter @gle_manager_ui.c(68),INFO" ID="0xde3c0225" />
 			<MSG STRUCTURE="diag_log_msg1" NAME="[gle manger enable]result = 0x%02x @gle_manager_ui.c(75),INFO" ID="0xde3c025d" />
 			<MSG STRUCTURE="diag_log_msg0" NAME="[gle manger disable] enter reset @gle_manager_ui.c(89),INFO" ID="0xde3c02cd" />
-			<MSG STRUCTURE="diag_log_msg0" NAME="[gle manger disable] done @gle_manager_ui.c(105),INFO" ID="0xde3c034d" />
-			<MSG STRUCTURE="diag_log_msg0" NAME="gle adapter deinit fail @gle_manager_ui.c(109),ERROR" ID="0xde3c036a" />
+			<MSG STRUCTURE="diag_log_msg0" NAME="gle adapter deinit fail @gle_manager_ui.c(104),ERROR" ID="0xde3c0342" />
+			<MSG STRUCTURE="diag_log_msg0" NAME="[gle manger disable] done @gle_manager_ui.c(116),INFO" ID="0xde3c03a5" />
 			<MSG STRUCTURE="diag_log_msg0" NAME="gle ind cbks table new fail @gle_manager_ui.c(177),ERROR" ID="0xde3c058a" />
 			<MSG STRUCTURE="diag_log_msg0" NAME="gle manager exter_cbks will be overlaped @gle_manager_ui.c(185),WARNING" ID="0xde3c05cb" />
 			<MSG STRUCTURE="diag_log_msg0" NAME="gle manager exter_cbks mem new failed @gle_manager_ui.c(190),ERROR" ID="0xde3c05f2" />

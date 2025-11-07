@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "errcode.h"
 #include "bts_def.h"
+#include "stdbool.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -610,6 +611,18 @@ typedef struct {
     uint8_t ltk[BLE_PAIRED_LTK_LEN];            /*!< @if Eng link key.
                                                   @else   链路密钥。 @endif */
 } ble_auth_info_evt_t;
+
+/**
+ * @if Eng
+ * @brief Enum of connection feature.
+ * @else
+ * @brief 连接特性枚举。
+ * @endif
+ */
+typedef enum {
+    BLE_FEATURE_CONNNECTION_ASYNC = 0x00,                   /*!< @if Eng async connection
+                                                                  @else   异步连接 @endif */
+} ble_feature_type_t;
 
 /**
  * @if Eng
@@ -1607,6 +1620,27 @@ errcode_t gap_ble_connect_param_update(gap_conn_param_update_t *params);
 
 /**
  * @if Eng
+ * @brief  Configure connection feature。
+ * @par    Configure connection feature。
+ * @param  [in]  feature Set the feature number. For details, see @ref ble_feature_type_t 。
+ * @param  [in]  val Enable/disable the corresponding feature 。
+ * @retval ERRCODE_SUCC Success。
+ * @par 依赖:
+ * @li  bts_def.h
+ * @else
+ * @brief  配置连接特性。
+ * @par    配置连接特性。
+ * @param  [in]  feature 表示要设置的特性编号，详情见 @ref ble_feature_type_t。
+ * @param  [in]  val 启用/禁用对应的特性。
+ * @retval ERRCODE_SUCC 成功。
+ * @par 依赖:
+ * @li  bts_def.h
+ * @endif
+ */
+errcode_t ble_set_feature(ble_feature_type_t feature, bool val);
+
+/**
+ * @if Eng
  * @brief Use this funtion to connect to a remote device.
  * @par   Use this funtion to establish an ACL connection with a remote device.
  * @param  [in]  addr address of the remote device.
@@ -1680,6 +1714,25 @@ errcode_t gap_ble_set_sec_param(gap_ble_sec_params_t *params);
  * @endif
  */
 errcode_t gap_ble_read_remote_device_rssi(uint16_t conn_id);
+
+/**
+ * @if Eng
+ * @brief  Cancels the creation of a connection.
+ * @par Description: Cancels the creation of a connection.
+ * @retval ERRCODE_SUCC Success.
+ * @retval Other        Failure. For details, see @ref errcode_t
+ * @par Depends:
+ * @li  bts_def.h
+ * @else
+ * @brief  取消创建连接。
+ * @par Description: 取消创建连接。
+ * @retval ERRCODE_SUCC 成功。
+ * @retval Other        失败。参考 @ref errcode_t
+ * @par 依赖：
+ * @li  bts_def.h
+ * @endif
+ */
+errcode_t gap_ble_create_connection_cancel(void);
 
 /**
  * @if Eng

@@ -3313,6 +3313,105 @@ int uapi_wifi_send_pkt(osal_void *dev, const data_segment_t *seg, uint8_t seg_le
 */
 int uapi_wifi_set_brctl(const char *oper, const char *if_name);
 
+/**
+* @ingroup  soc_wifi_basic
+* @brief  设置STA协议模式.CNcomment:设置STA协议模式.CNend
+*
+* @par Description:
+*           Set wireless mode.CNcomment:设置STA协议模式.CNend
+*
+* @attention  NULL
+* @param  param                    [IN]     Type #sta wireless mode
+*
+* @retval #EXT_WIFI_OK  Excute successfully
+* @retval #Other        Error code
+*
+* @par Dependency:
+*            @li soc_wifi_api.h: WiFi API
+* @see  NULL
+* @since
+*/
+int uapi_wifi_set_sta_wireless_mode(const char *param);
+
+/**
+ * @if Eng
+ * @brief  Struct of mac frame trx info config.
+ * @else
+ * @brief  驱动收发包统计参数。
+ * @endif
+ */
+typedef struct {
+    uint32_t rx_total_num; // 所有接收帧总数
+    uint32_t rx_data_num; // 接收数据帧总数
+    uint32_t rx_droped_num; // 接收丢弃总数
+ 
+    uint32_t tx_total_num; // 所有发送帧总数
+    uint32_t tx_data_num; // 发送数据帧总数
+    uint32_t tx_droped_num; // 发送丢弃总数
+} mac_frame_trx_info;
+ 
+/**
+* @ingroup  soc_wifi_basic
+* @brief  维测接口，获取驱动收发包统计结果.CNcomment:获取驱动收发包统计结果.CNend
+*
+* @par Description:
+*           Get mac frame trx info.CNcomment:获取驱动收发包统计结果.CNend
+*
+* @attention  NULL
+* @param  info                    [IN]     Type #mac frame trx info
+*
+* @retval #EXT_WIFI_OK  Excute successfully
+* @retval #Other        Error code
+*
+* @par Dependency:
+*            @li soc_wifi_api.h: WiFi API
+* @see  NULL
+* @since
+*/
+int uapi_wifi_get_mac_frame_trx_info(mac_frame_trx_info *info);
+ 
+/**
+* @ingroup  soc_wifi_basic
+* @brief  维测接口，驱动收发包统计结果清零.CNcomment:驱动收发包统计结果清零.CNend
+*
+* @par Description:
+*           Mac frame trx info clear.CNcomment:驱动收发包统计结果清零.CNend
+*
+* @attention  NULL
+* @param  NULL                    [IN]     Type #NULL
+*
+* @retval #EXT_WIFI_OK  Excute successfully
+* @retval #Other        Error code
+*
+* @par Dependency:
+*            @li soc_wifi_api.h: WiFi API
+* @see  NULL
+* @since
+*/
+int uapi_wifi_mac_frame_trx_info_clear(void);
+ 
+/**
+* @ingroup  soc_wifi_basic
+* @brief  设置wifi发射功率补偿值.CNcomment:设置wifi发射功率补偿值.CNend
+*
+* @par Description:
+*           Set tx power db offset.CNcomment:设置wifi发射功率补偿值.CNend
+*
+* @attention  NULL
+* @param  protocol                  [IN]     Type #wifi protocol 0:11b 1:11g 2:11n 20M/11ax 20M 3:11n 40M
+* @param  rate                      [IN]     Type #protocol rate
+* @param  offset                    [IN]     Type #offset
+*
+* @retval #EXT_WIFI_OK  Excute successfully
+* @retval #Other        Error code
+*
+* @par Dependency:
+*            @li soc_wifi_api.h: WiFi API
+* @see  NULL
+* @since
+*/
+int uapi_wifi_set_tx_power_db_offset(int8_t protocol, int8_t rate, int8_t offset);
+
 #ifdef __cplusplus
 #if __cplusplus
     }

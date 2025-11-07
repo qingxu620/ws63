@@ -720,10 +720,10 @@ void pm_port_enter_lowpower(void)
 {
     uint32_t irq_status, index, reg_addr, reg_val;
 
-    PRINT("Enter low-power start.\r\n");
-    uapi_tcxo_delay_ms(UART_PRINT_DELAY_MS);
 #ifdef CONFIG_PM_SUPPORT_SRV_DECOUPLING
     irq_status = osal_irq_lock();
+    PRINT("Enter low-power start.\r\n");
+    uapi_tcxo_delay_ms(UART_PRINT_DELAY_MS);
     g_pm_srv_ctrl.ctrl_protect = PM_CTRL_SUSPEND;
     if (g_pm_srv_ctrl.ctrl_mode == PM_CTRL_SUSPEND) {
         PRINT("Already in low-power state, enter process return.\r\n");

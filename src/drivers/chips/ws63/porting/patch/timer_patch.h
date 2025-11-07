@@ -60,7 +60,7 @@ extern timers_manager_t g_timers_manager[CONFIG_TIMER_MAX_NUM];
 
 // new func
 errcode_t uapi_timer_read(timer_handle_t timer, uint32_t *time_us);
-void ws63_timer_patch_init(void);
+void timer_patch_init(void);
 
 #ifdef __cplusplus
 #if __cplusplus

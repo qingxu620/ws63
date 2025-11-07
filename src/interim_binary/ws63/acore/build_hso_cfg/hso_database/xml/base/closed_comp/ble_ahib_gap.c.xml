@@ -32,8 +32,9 @@
 			<MSG STRUCTURE="diag_log_msg1" NAME="bt mpc passkey response err! len = %d @ble_ahib_gap.c(395),ERROR" ID="0xdea60c5a" />
 			<MSG STRUCTURE="diag_log_msg1" NAME="bt mpc read remote rssi: %d @ble_ahib_gap.c(423),ERROR" ID="0xdea60d3a" />
 			<MSG STRUCTURE="diag_log_msg1" NAME="bt mpc read remote rssi err! len = %d @ble_ahib_gap.c(426),ERROR" ID="0xdea60d52" />
-			<MSG STRUCTURE="diag_log_msg1" NAME="bt mpc set local addr = %d @ble_ahib_gap.c(434),ERROR" ID="0xdea60d92" />
-			<MSG STRUCTURE="diag_log_msg1" NAME="[ahib internal cbk] invalid event:%d @ble_ahib_gap.c(788),WARNING" ID="0xdea618a3" />
-			<MSG STRUCTURE="diag_log_msg1" NAME="[ahib cbk reg] invalid event:%d @ble_ahib_gap.c(797),WARNING" ID="0xdea618eb" />
-			<MSG STRUCTURE="diag_log_msg0" NAME="[AHIB][ERROR] failed to register bcore callback. @ble_ahib_gap.c(843),ERROR" ID="0xdea61a5a" />
+			<MSG STRUCTURE="diag_log_msg0" NAME="create connection cancel fail @ble_ahib_gap.c(435),ERROR" ID="0xdea60d9a" />
+			<MSG STRUCTURE="diag_log_msg1" NAME="bt mpc set local addr = %d @ble_ahib_gap.c(444),ERROR" ID="0xdea60de2" />
+			<MSG STRUCTURE="diag_log_msg1" NAME="[ahib internal cbk] invalid event:%d @ble_ahib_gap.c(801),WARNING" ID="0xdea6190b" />
+			<MSG STRUCTURE="diag_log_msg1" NAME="[ahib cbk reg] invalid event:%d @ble_ahib_gap.c(810),WARNING" ID="0xdea61953" />
+			<MSG STRUCTURE="diag_log_msg0" NAME="[AHIB][ERROR] failed to register bcore callback. @ble_ahib_gap.c(856),ERROR" ID="0xdea61ac2" />
 			</MSG_LOG>

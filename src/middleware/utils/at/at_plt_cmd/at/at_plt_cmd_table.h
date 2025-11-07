@@ -163,6 +163,10 @@ typedef struct {
     uint16_t                acccode;
 } acccode_args_t;
 
+typedef struct {
+    uint8_t          task_id;
+} task_id_t;
+
 /* AT Command */
 at_ret_t plt_nv_read(const nvread_args_t *args);
 
@@ -265,6 +269,15 @@ at_ret_t save_license(const license_args_t *args);
 
 /* AT+WRITEACCC */
 at_ret_t at_write_acccode(const acccode_args_t *args);
+
+/* AT+HEAPSTAT */
+static at_ret_t plt_heap_stats(void);
+ 
+/* AT+TASKSTACK */
+static at_ret_t plt_task_stack_stats(void);
+ 
+/* AT+TASKMALLOC */
+static at_ret_t plt_task_heap_stats(const task_id_t *arg);
 
 const at_para_parse_syntax_t nvread_syntax[] = {
     {
@@ -595,6 +608,17 @@ const at_para_parse_syntax_t acccode_syntax[] = {
     },
 };
 
+const at_para_parse_syntax_t g_plt_at_heap_stats_params[] = {
+    {
+        .type = AT_SYNTAX_TYPE_INT,
+        .last = true,
+        .attribute = 0,
+        .entry.int_range.min_val = 0,
+        .entry.int_range.max_val = 0,
+        .offset = offsetof(task_id_t, task_id)
+    },
+};
+ 
 const at_cmd_entry_t at_plt_cmd_parse_table[] = {
     {
         "NVREAD",
@@ -914,6 +938,36 @@ const at_cmd_entry_t at_plt_cmd_parse_table[] = {
         acccode_syntax,
         NULL,
         (at_set_func_t)at_write_acccode,
+        NULL,
+        NULL,
+    },
+    {
+        "HEAPSTAT",
+        5,
+        0,
+        NULL,
+        plt_heap_stats,
+        NULL,
+        NULL,
+        NULL,
+    },
+    {
+        "TASKSTACK",
+        6,
+        0,
+        NULL,
+        plt_task_stack_stats,
+        NULL,
+        NULL,
+        NULL,
+    },
+    {
+        "TASKMALLOC",
+        7,
+        0,
+        g_plt_at_heap_stats_params,
+        NULL,
+        (at_set_func_t)plt_task_heap_stats,
         NULL,
         NULL,
     },

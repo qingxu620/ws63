@@ -3,8 +3,7 @@ import os
 import sys
 import shutil
 import platform
-import tarfile
-import subprocess
+
 
 file_dir = os.path.dirname(os.path.realpath(__file__))
 g_root = os.path.realpath(os.path.join(file_dir, "..", "..", "..", "..", ".."))
@@ -57,7 +56,7 @@ def sign_app(file_path, type, cfg_name):
     if os.path.isfile(file_path):
         print("sign name: ", file_path)
         dd64c(file_path)
-        ret = subprocess.run([sign_tool, type, cfg_name])
+        ret = subprocess.run([sign_tool, type, cfg_name], stdout=subprocess.DEVNULL)
         if ret.returncode == 0:
             print(file_path, " generated successfully!!!")
         else:
@@ -104,7 +103,7 @@ if os.path.isfile("params.bin"):
 
     # generate params_sign.bin
     param_bin_ecc_cmd = [sign_tool, "0", "param_bin_ecc.cfg"]
-    ret = subprocess.run(param_bin_ecc_cmd, cwd=cwd_path)
+    ret = subprocess.run(param_bin_ecc_cmd, cwd=cwd_path, stdout=subprocess.DEVNULL)
     if ret.returncode == 0:
         print("params_sign.bin generate successfully!!!")
     else:
@@ -112,7 +111,7 @@ if os.path.isfile("params.bin"):
 
     # generate root public key
     root_pubk_cmd = [sign_tool, "1", "root_pubk.cfg"]
-    ret = subprocess.run(root_pubk_cmd, cwd=cwd_path)
+    ret = subprocess.run(root_pubk_cmd, cwd=cwd_path, stdout=subprocess.DEVNULL)
     if ret.returncode == 0:
         print("root_pubk.bin generate successfully!!!")
     else:
@@ -136,7 +135,7 @@ if os.path.isfile(os.path.join(mfg_bin, "ws63-liteos-mfg.bin")):
 if os.path.isfile(os.path.join(out_put, "ws63-ssb/ssb.bin")):
     dd64c(os.path.join(out_put, "ws63-ssb/ssb.bin"))
     shutil.copy(os.path.join(out_put, "ws63-ssb/ssb.bin"), pktbin)
-    ret1 = subprocess.run([sign_tool, "0", "ssb_bin_ecc.cfg"])
+    ret1 = subprocess.run([sign_tool, "0", "ssb_bin_ecc.cfg"], stdout=subprocess.DEVNULL)
     if ret1.returncode == 0:
         print("ssb_sign.bin generated successfully!!!")
         shutil.copy(os.path.join(out_put, "ws63-ssb/ssb_sign.bin"), boot_bin)
@@ -160,8 +159,8 @@ if os.path.isfile(os.path.join(inter_bin, 'ssb.bin')):
 if os.path.isfile(os.path.join(out_put, "ws63-flashboot/flashboot.bin")):
     dd64c(os.path.join(out_put, "ws63-flashboot/flashboot.bin"))
     shutil.copy(os.path.join(out_put, "ws63-flashboot/flashboot.bin"), pktbin)
-    ret1 = subprocess.run([sign_tool, "0", "flash_bin_ecc.cfg"])
-    ret2 = subprocess.run([sign_tool, "0", "flash_backup_bin_ecc.cfg"])
+    ret1 = subprocess.run([sign_tool, "0", "flash_bin_ecc.cfg"], stdout=subprocess.DEVNULL)
+    ret2 = subprocess.run([sign_tool, "0", "flash_backup_bin_ecc.cfg"], stdout=subprocess.DEVNULL)
     if ret1.returncode == 0 and ret2.returncode == 0:
         print("flash_sign.bin generated successfully!!!")
     else:
@@ -174,7 +173,7 @@ if os.path.isfile(os.path.join(out_put, "ws63-flashboot/flashboot.bin")):
 
 if os.path.isfile(os.path.join(out_put, "ws63-ate-flash", "ws63-ate-flash.bin")):
     dd64c(os.path.join(out_put, "ws63-ate-flash", "ws63-ate-flash.bin"))
-    ret1 = subprocess.run([sign_tool, "0", "flash_htol_bin_ecc.cfg"])
+    ret1 = subprocess.run([sign_tool, "0", "flash_htol_bin_ecc.cfg"], stdout=subprocess.DEVNULL)
     if ret1.returncode == 0:
         print("ws63_ate_flash.bin generated successfully!!!")
     else:
@@ -183,7 +182,7 @@ if os.path.isfile(os.path.join(out_put, "ws63-ate-flash", "ws63-ate-flash.bin"))
 if os.path.isfile(os.path.join(out_put, "ws63-loaderboot", "loaderboot.bin")):
     dd64c(os.path.join(out_put, "ws63-loaderboot", "loaderboot.bin"))
     shutil.copy(os.path.join(out_put, "ws63-loaderboot", "loaderboot.bin"), pktbin)
-    ret1 = subprocess.run([sign_tool, "0", "loaderboot_bin_ecc.cfg"])
+    ret1 = subprocess.run([sign_tool, "0", "loaderboot_bin_ecc.cfg"], stdout=subprocess.DEVNULL)
     if ret1.returncode == 0:
         print("loaderboot_sign.bin generated successfully!!!")
     else:
@@ -214,6 +213,10 @@ if os.path.isfile(os.path.join(inter_bin, 'loaderboot.bin')):
 sign_app(os.path.join(out_put, "ws63-liteos-testsuite/ws63-liteos-testsuite.bin"), "0", "testsuit_app_bin_ecc.cfg")
 
 sign_app(os.path.join(out_put, "ws63-liteos-app/ws63-liteos-app.bin"), "0", "liteos_app_bin_ecc.cfg")
+
+sign_app(os.path.join(out_put, "ws63-liteos-spi-host/ws63-liteos-spi-host.bin"), "0", "liteos_spi_host_bin_ecc.cfg")
+
+sign_app(os.path.join(out_put, "ws63-liteos-spi-device/ws63-liteos-spi-device.bin"), "0", "liteos_spi_device_bin_ecc.cfg")
 
 sign_app(os.path.join(out_put, "ws63-liteos-hilink/ws63-liteos-hilink.bin"), "0", "liteos_hilink_bin_ecc.cfg")
 

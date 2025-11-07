@@ -10,6 +10,7 @@
 #include "pinctrl.h"
 #include "pinctrl_porting.h"
 #include "watchdog.h"
+#include "memory_info.h"
 #ifdef CONFIG_MIDDLEWARE_SUPPORT_FTM
 #include "factory.h"
 #endif
@@ -348,7 +349,7 @@ at_ret_t get_efuse_mac_addr(void)
     if (ret != ERRCODE_SUCC || nv_mac_length != MAC_LEN) {
         uapi_at_print("GET NV SLE MAC ERROR, ret : 0x%x\r\n", ret);
     }
-    if (mac_addr_nv_check(mac_addr)) {
+    if (mac_addr_nv_check(mac_addr) != 0) {
         /* 获取NV中的MAC为非法值时，尝试获取NV工厂区中的MAC */
         ret = kv_read_factory(NV_ID_SYSTEM_FACTORY_SLE_MAC, MAC_LEN, &nv_mac_length, mac_addr);
         if (ret != ERRCODE_SUCC || nv_mac_length != MAC_LEN) {
@@ -647,10 +648,6 @@ static errcode_t at_uart_check_bus_id(int32_t dbg_uart_bus, int32_t at_uart_bus,
             return ERRCODE_INVALID_PARAM;
     }
 
-    if ((at_uart_bus == hso_uart_bus) || (hso_uart_bus == dbg_uart_bus)) {
-        return ERRCODE_NOT_SUPPORT;
-    }
-
     return ERRCODE_SUCC;
 }
 
@@ -820,16 +817,14 @@ static td_u32 at_setup_iosetmode_cmd(td_s32 argc, const setiomode_args_t *args)
         return AT_RET_CMD_ATTR_NOT_ALLOW;
     }
 
-    ret = uapi_pin_get_pull(io_num);
-    if (ret != PIN_PULL_MAX) {
+    if (uapi_pin_get_pull(io_num) != PIN_PULL_MAX) {
         ret = uapi_pin_set_pull(io_num, io_pull_stat);
         if (ret != EXT_ERR_SUCCESS) {
             return AT_RET_CMD_ATTR_NOT_ALLOW;
         }
     }
 
-    ret = uapi_pin_get_ds(io_num);
-    if (ret != PIN_DS_MAX) {
+    if (uapi_pin_get_ds(io_num) != PIN_DS_MAX) {
         ret = uapi_pin_set_ds(io_num, io_capalibity);
         if (ret != EXT_ERR_SUCCESS) {
             return AT_RET_CMD_ATTR_NOT_ALLOW;
@@ -1454,5 +1449,23 @@ at_ret_t at_write_acccode(const acccode_args_t *args)
 #else
     unused(args);
 #endif
+    return AT_RET_OK;
+}
+
+at_ret_t plt_heap_stats(void)
+{
+    print_heap_statistics_riscv();
+    return AT_RET_OK;
+}
+ 
+at_ret_t plt_task_stack_stats(void)
+{
+    print_stack_waterline_riscv();
+    return AT_RET_OK;
+}
+ 
+at_ret_t plt_task_heap_stats(const task_id_t *arg)
+{
+    print_os_sys_task_heap(arg->task_id);
     return AT_RET_OK;
 }

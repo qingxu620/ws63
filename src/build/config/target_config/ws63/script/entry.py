@@ -85,33 +85,16 @@ def do_cmd(target_name: str, hook_name: str, env: Dict[str, Any])->bool:
     if hook_name == 'build_pre':
         return True
 
-    if target_name == 'ws63-liteos-app' and root_path.endswith('output/sdk') and hook_name == 'build_post':
-        print("start build ws63-liteos-app-haier target")
-        # 海尔代码编译
-        build_haier_script = os.path.join(root_path, '../../application/samples/custom/ws63/haier/boards/HI3863/GCC/build.sh')
-        errcode = subprocess.run(['bash', build_haier_script])
-        if errcode.returncode != 0:
-            print("run build.sh failed!")
-            sys.exit(1)
-        # 拷贝海尔编译结果        
-        src_folder = os.path.join(root_path, '../../application/samples/custom/ws63/haier/boards/HI3863/GCC/libs/libhrapplication.a')
-        dest_folder = os.path.join(root_path, '../../application/samples/custom/ws63/haier/boards/HI3863/sdk/application/ws63-liteos-app/libhrapplication.a')
-        shutil.copyfile(src_folder, dest_folder)
-        # 编译最终fwpkg      
-        build_app_script = os.path.join(root_path,  '../../application/samples/custom/ws63/haier/boards/HI3863/sdk/build.py')
-        errcode = exec_shell(['python3', build_app_script, "-c", "ws63-liteos-app"], None, True)
-        if errcode != 0:
-            print("build ws63-liteos-app-haier target failed!")
-            sys.exit(1)
-        # 拷贝最终编译结果到package目录      
-        dest_folder = os.path.join(root_path, '../package/ws63/ws63_haier')
-        if os.path.exists(dest_folder):
-            print("ws63-liteos-app-haier exist")
-            return True
-        src_folder = os.path.join(root_path, '../../application/samples/custom/ws63/haier/boards/HI3863/sdk/output/ws63')
-        shutil.copytree(src_folder, dest_folder)
-        print("end build ws63-liteos-app-haier target")
-        return True
+    if env.get('build_type', '') == 'custom' and hook_name == 'build_post':
+        custom_build_py = os.path.join(root_path, 'application/samples/custom/ws63/custom_build.py')
+        print(custom_build_py)
+        if os.path.isfile(custom_build_py):
+            print("===========================build custom target start========================================")
+            errcode = exec_shell([sys.executable, custom_build_py, target_name], None, True)
+            if errcode != 0:
+                print("custom_build_py failed!")
+                sys.exit(1)
+            print("===========================build custom target  end ========================================")
 
     if target_name == 'ws63-liteos-mfg' and hook_name == 'build_post':
         errcode = exec_shell([python_path, "build.py", "ws63-liteos-app"], None, True)

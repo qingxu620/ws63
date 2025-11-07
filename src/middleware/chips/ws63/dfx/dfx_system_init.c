@@ -193,7 +193,7 @@ errcode_t dfx_system_init(void)
     zdiag_filter_register_notify_hook(dfx_set_log_leve);
     dfx_set_log_leve(false);
 
-#ifndef FORBID_AUTO_LOG_REPORT
+#if !defined(FORBIT_AUTO_LOG_REPORT) && !defined(CONFIG_DIAG_BEAT_HEART_SUPPORT)
     diag_auto_log_report_enable();
 #else
 #if CONFIG_DFX_SUPPORT_DIAG_BEAT_HEART == DFX_YES

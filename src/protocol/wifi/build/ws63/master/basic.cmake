@@ -77,6 +77,14 @@ else()
         ${WIFI_DEVICE_DIR}/source/common/wifi_fe/fe_hal/rf/mpw
     )
 endif()
+if(CONFIG_SUPPORT_SLE_BASE_STATION IN_LIST DEFINES)
+    list(APPEND Wi-Fi-PUBLIC_HEADER
+        ${ROOT_DIR}/protocol/wifi/source/host/inc/oal/
+        ${ROOT_DIR}/protocol/wifi/source/host/inc/oal/liteOS/
+        ${ROOT_DIR}/protocol/wifi/source/host/forward/liteOS/
+        ${WIFI_DEVICE_DIR}/source/device/hal/hal_ws63/src/
+    )
+endif()
 set(Wi-Fi-PRIVATE_HEADER
     ${CMAKE_SOURCE_DIR}/middleware/utils/hcc/inc
     ${CMAKE_SOURCE_DIR}/middleware/utils/hcc/comm
