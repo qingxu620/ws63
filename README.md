@@ -4,7 +4,7 @@
 
 ## 代码仓介绍
 
-  ws63系列是2.4GHz Wi-Fi 6 星闪多模解决方案，其中ws63E支持2.4GHz的雷达人体活动检测功能，适用于大小家电、电工照明及对人体出没检测有需求的常电类物联网智能场景。该fbb_ws63代码包从统一开发平台FBB（Family Big Box，统一开发框架，统一API）构建而来，在该平台上开发的应用很容易被移植到其他星闪解决方案上，有效降低开发者门槛，缩短开发周期，支持开发者快速开发星闪产品。软件文档在线化链接：https://docs.hisilicon.com/repos/fbb_ws63/zh-CN/master/
+  ws63系列是2.4GHz Wi-Fi 6 星闪多模解决方案，其中ws63E支持2.4GHz的雷达人体活动检测功能，适用于大小家电、电工照明及对人体出没检测有需求的常电类物联网智能场景。该fbb_ws63代码包从统一开发平台FBB（Family Big Box，统一开发框架，统一API）构建而来，在该平台上开发的应用很容易被移植到其他星闪解决方案上，有效降低开发者门槛，缩短开发周期，支持开发者快速开发星闪产品。软件文档在线化链接：https://docs.hisilicon.com/repos/fbb_ws63/zh-CN/master/  
 
 ## 目录介绍
 
@@ -39,6 +39,8 @@
 | [模组：WS63E星闪模组](https://e.tb.cn/h.6p0TonQdm3whw0i?tk=ZjcNVTAUwUG) | 润和软件的星闪模组，基于WS63E的解决方案，支持雷达人体活动感知 |                                                              |
 | [模组：MYF-F63星闪模组链接 ](https://shop187806465.taobao.com/?spm=pc_detail.29232929.shop_block.dshopinfo.2fd27dd6T64Lbi) |             明裕丰的星闪模组、开发板，采用WS63解决方案             |                                                              |
 | [模组：KHM-3863A 星闪模组购买链接](https://mall.kaihong.com/productDetail?skuId=1839224386385612801&goodsId=1839224386133954561) | 深开鸿的星闪模组，采用WS63解决方案，支持星闪、WiFi、蓝牙三模SoC通信，支持AT指令及OpenCPU二次开发，支持KaihongOS Lite版本及星闪链路软总线特性等 |                                                              |
+
+**免费样片申请活动：[活动链接](https://developers.hisilicon.com/active?activity_id=4112f69ad3c0430fb1d488da2616aa7f&channelCode=hispark)**
 
 模组产品均由相应厂家自行销售，由其对产品质量负责，如侵犯他人知识产权的由其自行承担全部责任及赔偿。海思不提供任何保证及担保，亦不承担责任及赔偿。
 
