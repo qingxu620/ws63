@@ -70,6 +70,10 @@ elseif(EXISTS ${ROOT_DIR}/libs_url/${_CHIP}/cmake/radar.cmake)
     include(${ROOT_DIR}/libs_url/${_CHIP}/cmake/radar.cmake)
 endif()
 
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/radar/service/CMakeLists.txt)
+    add_subdirectory(radar/service)
+endif()
+
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/glp/hiex_v300/CMakeLists.txt)
     add_subdirectory(glp/hiex_v300)
 elseif(EXISTS ${ROOT_DIR}/libs_url/${_CHIP}/cmake/slp_client.cmake)

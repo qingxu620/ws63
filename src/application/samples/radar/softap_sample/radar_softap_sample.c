@@ -17,6 +17,10 @@
 #include "cmsis_os2.h"
 #include "soc_osal.h"
 #include "radar_service.h"
+#include "app_init.h"
+
+#define RADAR_STACK_SIZE          0x800
+#define RADAR_TASK_PRIO           24
 
 #define WIFI_IFNAME_MAX_SIZE             16
 #define WIFI_MAX_KEY_LEN                 65
@@ -39,7 +43,7 @@
 #define WIFI_HIDDEN_SSID_FLAG            1
 
 #define RADAR_STATUS_QUERY_DELAY         1000 // 10s
-#define RADAR_QUIT_DELAY_TIME            12 // 12s
+#define RADAR_QUIT_DELAY_TIME            8 // 8s
 
 #define RADAR_DEFAULT_TIMES 0
 #define RADAR_DEFAULT_LOOP 8
@@ -48,8 +52,19 @@
 #define RADAR_DEFAULT_DBG_TYPE 3
 #define RADAR_DEFAULT_WAVE 2
 
-#define RADAR_DBG_INFO_RPT_COEF 100
+#define RADAR_DBG_INFO_RPT_COEF 1
 #define RADAR_DBG_INFO_LEN 16
+
+// 微波模式识别默认参数定义
+#define GRAD_AMP_DROP_STA_THRES 400
+#define GRAD_AMP_MWO_STA_THRES  350
+#define GRAD_AMP_DROP_AP_THRES  500
+#define GRAD_AMP_MWO_AP_THRES   450
+#define GRAD_SLIDE_WIN_LEN      32
+#define GRAD_SLIDE_WIN_THRES    6
+#define MWO_TIME_THRES          1 // 单位:min
+#define MWO_RNG_THRES_COEF      12 // 扩大10倍存储
+#define MWO_MODE_PARAM_LEN      8
 
 /*****************************************************************************
   Radar SoftAP+Socket sample用例
@@ -120,8 +135,8 @@ static void radar_print_res(radar_result_t *res)
 
 static void radar_print_cur_frame_res(radar_current_frame_result_t *res)
 {
-    PRINT("[RADAR_SAMPLE] gear1:%u, gear2:%u, gear3:%u, ai:%u\r\n",
-        res->gear_one_flag, res->gear_two_flag, res->gear_three_flag, res->ai_flag);
+    PRINT("[RADAR_SAMPLE] gear:%u, rng:%04d, vel:%04d, snr:%u\r\n",
+        res->gear, res->rng, res->vel, (uint32_t)res->snr);
 }
 
 // 维测信息依次为:
@@ -174,17 +189,30 @@ static void radar_init_para(void)
     sel_para.fusion_ai = true;
     uapi_radar_select_alg_para(&sel_para);
 
-    // 算法门限, 前三个使用tools/bin/radar_tool/radar_para_gen_tool工具标定, 后面五个使用本sample给出的默认值即可
+    // 算法门限
     radar_alg_para_t alg_para;
     alg_para.d_th_1m = 20;
     alg_para.d_th_2m = 22;
     alg_para.p_th = 25;
     alg_para.t_th_1m = 13;
     alg_para.t_th_2m = 26;
-    alg_para.b_th_ratio = 20;
+    alg_para.b_th_ratio = 10;
     alg_para.b_th_cnt = 4;
     alg_para.a_th = 70;
+    alg_para.pt_cld_para_1 = 2;
+    alg_para.pt_cld_para_2 = 2;
+    alg_para.pt_cld_para_3 = 2;
+    alg_para.pt_cld_para_4 = 2;
+    alg_para.rd_pwr_para_1 = 2;
+    alg_para.rd_pwr_para_2 = 2;
+    alg_para.rd_pwr_para_3 = 2;
     uapi_radar_set_alg_para(&alg_para, 0);
+
+    // 微波模式识别
+    uint16_t arr[MWO_MODE_PARAM_LEN] = { GRAD_AMP_DROP_STA_THRES, GRAD_AMP_MWO_STA_THRES, GRAD_AMP_DROP_AP_THRES,
+        GRAD_AMP_MWO_AP_THRES, GRAD_SLIDE_WIN_LEN, GRAD_SLIDE_WIN_THRES, MWO_TIME_THRES, MWO_RNG_THRES_COEF
+    };
+    uapi_radar_set_mwo_mode_para(arr, MWO_MODE_PARAM_LEN, 1);
 }
 
 td_s32 radar_start_sta(td_void)
@@ -221,7 +249,7 @@ int radar_demo_init(void *param)
     uapi_radar_get_isolation(&ap_iso);
     uapi_radar_set_status(RADAR_STATUS_STOP);
     wifi_sta_disable();
-	
+
 	(void)osDelay(WIFI_START_SOFTAP_DELAY);
 
     radar_start_softap(ap_iso);
@@ -239,8 +267,6 @@ int radar_demo_init(void *param)
         uapi_radar_get_isolation(&iso);
         radar_result_t res = {0};
         uapi_radar_get_result(&res);
-        radar_current_frame_result_t cur_frame_res = {0};
-        uapi_radar_get_current_frame_result(&cur_frame_res);
         int16_t arr[RADAR_DBG_INFO_LEN] = {0};
         uapi_radar_get_debug_info(arr, RADAR_DBG_INFO_LEN);
         radar_print_dbg_info(arr, RADAR_DBG_INFO_LEN);
@@ -248,3 +274,22 @@ int radar_demo_init(void *param)
 
     return 0;
 }
+
+static void radar_sample_entry(void)
+{
+    osThreadAttr_t attr;
+    attr.name       = "radar_sample_task";
+    attr.attr_bits  = 0U;
+    attr.cb_mem     = NULL;
+    attr.cb_size    = 0U;
+    attr.stack_mem  = NULL;
+    attr.stack_size = RADAR_STACK_SIZE;
+    attr.priority   = RADAR_TASK_PRIO;
+    if (osThreadNew((osThreadFunc_t)radar_demo_init, NULL, &attr) == NULL) {
+        PRINT("[RADAR_SAMPLE] Create softap_sample_task fail.\r\n");
+    }
+    PRINT("[RADAR_SAMPLE] Create softap_sample_task succ.\r\n");
+}
+
+/* Run the softap_sample_task. */
+app_run(radar_sample_entry);

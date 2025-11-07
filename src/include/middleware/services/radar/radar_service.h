@@ -7,6 +7,7 @@
 #define SERVICE_RADAR_SERVICE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "errcode.h"
 
 #ifdef __cplusplus
@@ -95,14 +96,14 @@ typedef struct {
  * @endif
  */
 typedef struct {
-    uint8_t gear_one_flag;    /*!< @if Eng radar current frame result: Is there any movement in gear 1
-                                    @else   雷达当前帧结果，1档位置(默认距雷达水平距离1米处)是否有人运动 @endif */
-    uint8_t gear_two_flag;    /*!< @if Eng radar current frame result: Is there any movement in gear 2
-                                    @else   雷达当前帧结果，2档位置(默认距雷达水平距离2米处)是否有人运动 @endif */
-    uint8_t gear_three_flag;  /*!< @if Eng radar current frame result: Is there any movement in gear 3
-                                    @else   雷达当前帧结果，3档位置(默认距雷达水平距离6米处)是否有人运动 @endif */
-    uint8_t ai_flag;          /*!< @if Eng radar current frame AI result: Is there any movement
-                                    @else   雷达当前帧AI结果，是否为人体运动 @endif */
+    uint32_t gear;   /*!< @if Eng radar current frame result: Indicates the position of the current frame
+                        @else   雷达当前帧结果，所处档位信息 @endif */
+    int32_t rng;    /*!< @if Eng radar current frame result: Indicates the range of the current frame
+                        @else   雷达当前帧结果，距离测量值信息 @endif */
+    int32_t vel;    /*!< @if Eng radar current frame result: Indicates the velocity of the current frame
+                        @else   雷达当前帧结果，速度测量值信息 @endif */
+    float snr;      /*!< @if Eng radar current frame result: Indicates the snr of the current frame
+                        @else   雷达当前帧结果，信噪比信息 @endif */
 } radar_current_frame_result_t;
 
 /**
@@ -127,18 +128,18 @@ typedef void (*radar_result_cb_t)(radar_result_t *result);
  * @par Description: Callback invoked after each frame is calculated.
  * @attention This callback function runs on the radar feature thread.
  * @attention It cannot be blocked or wait for a long time or use a large stack space.
- * @param [in] gear_1 radar gear_1 current frame result.
- * @param [in] gear_2 radar gear_2 current frame result.
- * @param [in] gear_3 radar gear_3 current frame result.
- * @param [in] ai     radar ai current frame result.
+ * @param [in] gear radar gear current frame result.
+ * @param [in] rng  radar rng current frame result.
+ * @param [in] vel  radar vel current frame result.
+ * @param [in] snr  radar snr current frame result.
  * @else
  * @brief  每一个雷达帧计算完成后的回调函数。
  * @par Description: 每一个雷达帧计算完成后的回调函数。
  * @attention  该回调函数运行于radar feature线程, 不能阻塞或长时间等待, 不能使用较大栈空间。
- * @param [in] gear_1 雷达档位1当前帧检测结果。
- * @param [in] gear_2 雷达档位2当前帧检测结果。
- * @param [in] gear_3 雷达档位3当前帧检测结果。
- * @param [in] ai     雷达AI当前帧检测结果。
+ * @param [in] gear 雷达档位当前帧检测结果。
+ * @param [in] rng  雷达距离测量值当前帧检测结果。
+ * @param [in] vel  雷达速度测量值当前帧检测结果。
+ * @param [in] snr  雷达信噪比当前帧检测结果。
  * @endif
  */
 typedef void (*radar_current_frame_result_cb_t)(radar_current_frame_result_t *result);
@@ -305,17 +306,17 @@ typedef struct {
                             @else   AI人体识别相似度门限, 范围0-99 @endif */
     uint8_t pt_cld_para_1;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 0-20
                             @else   0~1米范围点云门限, 范围0-20 @endif */
-    uint8_t pt_cld_para_2;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 0-20
+    uint8_t pt_cld_para_2;    /*!< @if Eng Point cloud threshold of 1~2 meter, range 0-20
                             @else   1~2米范围点云门限, 范围0-20 @endif */
-    uint8_t pt_cld_para_3;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 0-20
+    uint8_t pt_cld_para_3;    /*!< @if Eng Point cloud threshold of 2~5 meter, range 0-20
                             @else   2~5米范围点云门限, 范围0-20 @endif */
-    uint8_t pt_cld_para_4;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 0-20
+    uint8_t pt_cld_para_4;    /*!< @if Eng Point cloud threshold of 5+ meter, range 0-20
                             @else   5米以上范围点云门限, 范围0-20 @endif */
     uint8_t rd_pwr_para_1;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 1-100
                             @else   0~1米范围点云门限, 范围1-100 @endif */
-    uint8_t rd_pwr_para_2;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 1-100
+    uint8_t rd_pwr_para_2;    /*!< @if Eng Point cloud threshold of 1~2 meter, range 1-100
                             @else   1~2米范围点云门限, 范围1-100 @endif */
-    uint8_t rd_pwr_para_3;    /*!< @if Eng Point cloud threshold of 0~1 meter, range 1-100
+    uint8_t rd_pwr_para_3;    /*!< @if Eng Point cloud threshold of 2~6 meter, range 1-100
                             @else   2~6米范围点云门限, 范围1-100 @endif */
 } radar_alg_para_t;
 
@@ -532,8 +533,8 @@ errcode_t uapi_radar_select_alg_para(radar_sel_para_t *para);
 
 /**
  * @if Eng
- * @brief  Set algorithm parameter of radar.
- * @par Description: Set algorithm parameter of radar.
+ * @brief  Set algorithm parameters of radar.
+ * @par Description: Set algorithm parameters of radar.
  * @param [in] *para algorithm parameters of radar, see @ref radar_alg_para_t.
  * @param [in] write_to_flash whether write to flash or no.
  * @retval error code.
@@ -545,7 +546,7 @@ errcode_t uapi_radar_select_alg_para(radar_sel_para_t *para);
  * @retval 执行结果错误码。
  * @endif
  */
-errcode_t uapi_radar_set_alg_para(radar_alg_para_t *para, uint8_t write_to_flash);
+errcode_t uapi_radar_set_alg_para(radar_alg_para_t *para, bool write_to_flash);
 
 /**
  * @if Eng
@@ -607,7 +608,7 @@ errcode_t uapi_radar_get_debug_info(int16_t *arr, uint8_t len);
  * @attention 8.过去period帧中帧间隔超过Xms的帧数。
  * @attention 9.过去period帧中bitmap数量超过X门限的帧数。
  * @attention 10.过去period帧中bitmap比例超过X门限的帧数。
- * @attention 11.过去period帧中是在参与统计的帧数。
+ * @attention 11.过去period帧中实际参与统计的帧数。
  * @attention 12.过去period帧中帧间隔最大值。
  * @attention 13.过去period帧中帧间隔最大值下标。
  * @attention 14.当前所使用的算法参数MO1门限。
@@ -622,17 +623,96 @@ typedef void (*radar_debug_info_cb_t)(int16_t *arr, uint8_t len);
  * @brief  Radar maintenance and measurement data callback registration function.
  * @par Description: Radar maintenance and measurement data callback registration function.
  * @param [in] cb callback function.
- * @param [in] period Statistical period frame number, the value ranges from 0 to 32768.
+ * @param [in] period duration for collecting statistics on radar maintenance and test data, in minutes.
+ * The value ranges from 1 to 1440.
  * @retval error code.
  * @else
  * @brief  雷达维测数据回调注册函数。
  * @par Description: 雷达维测数据回调注册函数。
  * @param [in] cb 回调函数。
- * @param [in] period 雷达维测数据统计周期帧数，范围大于0，小于32768。
+ * @param [in] period 雷达维测数据统计时长，单位: 分钟, 范围大于0，小于等于1440。
  * @retval 执行结果错误码。
  * @endif
  */
 errcode_t uapi_radar_register_debug_info_cb(radar_debug_info_cb_t cb, uint16_t period);
+
+/**
+ * @if Eng
+ * @brief Callback function reported when the radar determines that the channel needs to be switched.
+ * @par Description: Callback function reported when the radar determines that the channel needs to be switched.
+ * @attention This callback function runs on the radar driver thread.
+ * @attention It cannot be blocked or wait for a long time or use a large stack space.
+ * @else
+ * @brief  雷达底层判断需要切换信道上报回调函数。
+ * @par Description: 雷达底层判断需要切换信道上报回调函数。
+ * @attention  该回调函数运行于radar driver线程, 不能阻塞或长时间等待, 不能使用较大栈空间。
+ * @endif
+ */
+typedef void (*radar_channel_switch_cb_t)(void);
+
+/**
+ * @if Eng
+ * @brief  Callback registration function reported when the radar determines that the channel needs to be switched.
+ * @param [in] cb callback function.
+ * @param [in] *arr radar bottom-layer channel switching parameter storage array address.
+ * @param [in] len Length of the array for storing radarchannel switching parameters. The length cannot exceed 8.
+ * @attention: The parameters are as follows:
+ * @attention 1. Indicates whether to enable adaptive switching of bottom-layer channels.
+ * @attention 2. Extremely abnormal frame interval threshold, in ms.
+ * @attention 3. Average abnormal frame interval threshold, in ms.
+ * @attention 4. Ratio of the number of frames that exceed the extremely abnormal frame interval threshold to
+ * @attention the total number of frames. The parameter value is increased by 10 times.
+ * @retval error code.
+ * @else
+ * @brief  雷达底层判断需要切换信道上报回调注册函数。
+ * @param [in] cb 回调函数。
+ * @param [in] *arr 雷达底层信道切换参数存储数组地址。
+ * @param [in] len 雷达底层信道切换参数存储数组长度，长度不超过8。
+ * @attention 参数信息依次为:
+ * @attention 1.是否开启底层信道自适应切换。
+ * @attention 2.极异常帧间隔门限, 单位ms。
+ * @attention 3.均值异常帧间隔门限, 单位ms。
+ * @attention 4.超过极异常帧间隔门限的帧数在总统计帧数的占比, 参数配置扩大10倍。
+ * @retval 执行结果错误码。
+ * @endif
+ */
+errcode_t uapi_radar_register_channel_switch_cb(radar_channel_switch_cb_t cb, uint16_t *arr, uint8_t len);
+
+/**
+ * @if Eng
+ * @brief  Set mwo mode parameters of radar.
+ * @par Description: Set mwo mode parameters of radar.
+ * @param [in] arr Parameter array address.
+ * @param [in] len Set the array length.
+ * @param [in] write_to_flash Whether to write data to the flash memory.
+ * @attention 1. Subframe gradient removal threshold in STA mode, ranging from 100 to 1000.
+ * @attention 2. Gradient threshold for MWO pattern recognition in STA mode. The value ranges from 100 to 1000.
+ * @attention 3. Subframe removal gradient threshold in SFTP mode, ranging from 100 to 1000.
+ * @attention 4. Gradient threshold for MWO pattern recognition in SOFTAP mode. The value ranges from 100 to 1000.
+ * @attention 5. Length of the MWO pattern recognition subframe window, ranging from 5 to 32.
+ * @attention 6. Subframe selection threshold for MWO mode recognition, ranging from 1 to 32.
+ * @attention 7. Timeout for MWO recognition. If this parameter is set to 0, MWO recognition is disabled.
+ * @attention 8. Coefficient of the range threshold in MWO mode. The parameter configuration is increased by 10 times.
+ * @retval error code.
+ * @else
+ * @brief  设置微波模式检测参数。
+ * @par Description: 设置雷达微波模式检测参数。
+ * @param [in] arr 参数设置数组地址。
+ * @param [in] len 参数设置数组长度。
+ * @param [in] write_to_flash 是否写入flash。
+ * @attention 参数信息依次为:
+ * @attention 1.STA模式下子帧剔除梯度门限, 范围100~1000。
+ * @attention 2.STA模式下MWO模式识别梯度门限, 范围100~1000。
+ * @attention 3.SOFTAP模式下子帧剔除梯度门限, 范围100~1000。
+ * @attention 4.SOFTAP模式下MWO模式识别梯度门限, 范围100~1000。
+ * @attention 5.MWO模式识别判断子帧窗长, 范围1~32。
+ * @attention 6.MWO模式识别判断子帧选择门限, 范围1~32。
+ * @attention 7.MWO模式识别超时时间, 设置为0表示关闭MWO模式识别, 单位:min。
+ * @attention 8.MWO模式距离门限扩大系数, 参数配置扩大10倍。
+ * @retval 执行结果错误码。
+ * @endif
+ */
+errcode_t uapi_radar_set_mwo_mode_para(uint16_t *arr, uint8_t len, bool write_to_flash);
 
 #ifdef __cplusplus
 }

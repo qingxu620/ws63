@@ -38,6 +38,7 @@ extern "C" {
 /*****************************************************************************
   2 宏定义
 *****************************************************************************/
+#define DEVICE_VAP_STAT_NUM (HMAC_PKTS_CNT_TYPE_BUTT - HOST_PKTS_CNT_TYPE_END)
 #ifdef _PRE_WLAN_DFT_STAT
 #define HMAC_DFT_PHY_STAT_NODE_0_BASE 0           /* phy统计节点0的基准bit，寄存器PHY_STA_01_EN的bit0 */
 #define HMAC_DFT_PHY_STAT_NODE_1_BASE 16          /* phy统计节点1的基准bit，寄存器PHY_STA_01_EN的bit16 */
@@ -49,8 +50,6 @@ extern "C" {
 #define HMAC_DFT_VAP_STAT_RATE_TO_KBPS 250        /* 速率单位是kbps，应该是字节数除以周期(2s)再除以1000在乘以8(B/b) */
 #define HMAC_DFT_REG_OTA_LEN 1024 /* 寄存器OTA上报的最大限制 */
 #define HMAC_DFT_VAP_AGGRE_REPORT_NUM 20          /* 聚合上报的数目 */
-
-#define DEVICE_VAP_STAT_NUM (HMAC_PKTS_CNT_TYPE_BUTT - HOST_PKTS_CNT_TYPE_END)
 
 /*****************************************************************************
   3 枚举定义

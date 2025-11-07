@@ -159,8 +159,6 @@ if __name__ == '__main__':
     conf = get_parameters()
     print("update param: ", conf)
     input_param = conf.pkt.split(",")
-    if "boot" not in input_param:
-        input_param.append("boot")
     if not check_bin_match(input_param, info):
         sys.exit(1)
     if len(conf.ver) > 16:  # 预留字节数为0~52，默认版本号占16字节

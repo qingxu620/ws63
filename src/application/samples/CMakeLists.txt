@@ -67,5 +67,6 @@ install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/radar" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/nfc" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/ble" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/sle" "*")
+install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/sle_chba" "*")
 
 build_component()

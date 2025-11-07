@@ -321,6 +321,14 @@ config LOSCFG_ENABLE_MAGICKEY
         ctrl + p : System panic;
         ctrl + e : Check system memory pool.
 
+config LOSCFG_DEBUG_RESOURCE_INFO
+    bool "Enable Resources Info Debugging"
+    default n
+    help
+      Answer Y to enable debug resources info. 
+      It means you want to get task, queue, mutex, semaphore, swtmr use information.
+      That means you can get these resources' usage, unused, max and use peak.
+
 config LOSCFG_DEBUG_VERSION
     bool "Enable a Debug Version"
     default n

@@ -282,9 +282,7 @@ typedef struct {
     UINT32 uwMaxFreeNodeSize;
     UINT32 uwUsedNodeNum;
     UINT32 uwFreeNodeNum;
-#ifdef LOSCFG_MEM_TASK_STAT
-    UINT32 uwUsageWaterLine;  /**< this structure member is defined only when LOSCFG_MEM_TASK_STAT is defined. */
-#endif
+    UINT32 uwUsageWaterLine;
 } LOS_MEM_POOL_STATUS;
 
 /**
@@ -735,6 +733,7 @@ extern UINT32 LOS_MemCheckLevelSet(UINT8 checkLevel);
  */
 extern UINT8 LOS_MemCheckLevelGet(VOID);
 #endif
+extern VOID LOS_MemTaskHeapInfoGet(VOID *pool, UINT8 taskId, VOID (*print)(const char *fmt, ...));
 
 /**
  * @ingroup los_memory

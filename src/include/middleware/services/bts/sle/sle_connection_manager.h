@@ -76,13 +76,13 @@ typedef enum {
  * @endif
  */
 typedef enum {
-    SLE_CRYTO_ALGO_AC1     = 0x00,   /*!< @if Eng crytography algorithm ac1
+    SLE_CRYTO_ALGO_AC1     = 0x01,   /*!< @if Eng crytography algorithm ac1
                                           @else   AC1加密算法类型 @endif */
-    SLE_CRYTO_ALGO_AC2     = 0x01,   /*!< @if Eng crytography algorithm ac2
+    SLE_CRYTO_ALGO_AC2     = 0x02,   /*!< @if Eng crytography algorithm ac2
                                           @else   AC2加密算法类型@endif */
-    SLE_CRYTO_ALGO_EA1     = 0x02,   /*!< @if Eng crytography algorithm ea1
+    SLE_CRYTO_ALGO_EA1     = 0x03,   /*!< @if Eng crytography algorithm ea1
                                           @else   EA1加密算法类型 @endif */
-    SLE_CRYTO_ALGO_EA2     = 0x03,   /*!< @if Eng crytography algorithm ea2
+    SLE_CRYTO_ALGO_EA2     = 0x04,   /*!< @if Eng crytography algorithm ea2
                                           @else   EA2加密算法类型 @endif */
 } sle_crypto_algo_t;
 
@@ -94,9 +94,9 @@ typedef enum {
  * @endif
  */
 typedef enum {
-    SLE_KEY_DERIV_ALGO_HA1     = 0x00,   /*!< @if Eng key derivation algorithm ac1
+    SLE_KEY_DERIV_ALGO_HA1     = 0x01,   /*!< @if Eng key derivation algorithm ac1
                                               @else   HA1秘钥分发算法类型 @endif */
-    SLE_KEY_DERIV_ALGO_HA2     = 0x01,   /*!< @if Eng key derivation algorithm ac2
+    SLE_KEY_DERIV_ALGO_HA2     = 0x02,   /*!< @if Eng key derivation algorithm ac2
                                               @else   HA2秘钥分发算法类型 @endif */
 } sle_key_deriv_algo_t;
 

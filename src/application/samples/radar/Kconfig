@@ -11,4 +11,10 @@ config SUPPORT_RADAR_STA_SAMPLE
 config SUPPORT_RADAR_SOFTAP_SAMPLE
     bool "Support RADAR SoftAP Sample."
 
+config SUPPORT_RADAR_WIRELESS_SAMPLE
+    bool "Support RADAR WIRELESS Sample"
+
+config SUPPORT_RADAR_SLP_SAMPLE
+    bool "Support RADAR SLP Sample"
+
 endchoice
