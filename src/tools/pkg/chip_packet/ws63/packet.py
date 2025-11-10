@@ -160,6 +160,14 @@ def make_all_in_one_packet(pack_style_str, extr_defines):
             'ws63-liteos-app_rom.bin',
             'ws63-liteos-app-sign.bin',
         ],
+        'ws63-liteos-spi-host': [
+            'ws63-liteos-spi-host_rom.bin',
+            'ws63-liteos-spi-host-sign.bin',
+        ],
+        'ws63-liteos-spi-device': [
+            'ws63-liteos-spi-device_rom.bin',
+            'ws63-liteos-spi-device-sign.bin',
+        ],
         'ws63-liteos-perf': [
             'ws63-liteos-perf_rom.bin',
             'ws63-liteos-perf-sign.bin',

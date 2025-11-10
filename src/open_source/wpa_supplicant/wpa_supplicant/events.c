@@ -2690,6 +2690,14 @@ int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
 {
 	struct wpa_bss *selected;
 	struct wpa_ssid *ssid = NULL;
+#ifdef LOS_WPA_PATCH
+	int scan_interval_policy_tbl[] = {5, 5, 5, 30, 30, 60};
+	u8 policy_size = (u8)(sizeof(scan_interval_policy_tbl) / sizeof(scan_interval_policy_tbl[0]));
+	if (g_reconnect_set.enable == WPA_FLAG_OFF) {
+		/* if sta reconnect policy isn't enabled, stop req scan <default policy> */
+		os_memset(scan_interval_policy_tbl, 0, sizeof(scan_interval_policy_tbl));
+	}
+#endif /* LOS_WPA_PATCH */
 #ifndef LOS_WPA_PATCH
 	int time_to_reenable = wpas_reenabled_network_time(wpa_s);
 
@@ -2727,6 +2735,9 @@ int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
 #endif /* CONFIG_MESH */
 #endif /* LOS_WPA_PATCH */
 	if (selected) {
+#ifdef LOS_WPA_PATCH
+		wpa_s->not_found_ssid_scan_cnt = 0;
+#endif
 #ifndef LOS_WPA_PATCH
 		int skip;
 		skip = !wpa_supplicant_need_to_roam(wpa_s, selected, ssid);
@@ -2810,8 +2821,23 @@ int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
 #ifndef LOS_WPA_PATCH
 			int timeout_sec = wpa_s->scan_interval;
 #else
+			/*
+			 * 1.if sta reconnect policy isn't enabled, stop req scan <default policy>
+			 * 2.if sta reconnect policy isn't enabled, scan interval reach max, stop req scan <resv policy>
+			 */
+			if ((scan_interval_policy_tbl[0] == 0) ||
+				((g_reconnect_set.enable == WPA_FLAG_OFF) &&
+				(wpa_s->not_found_ssid_scan_cnt >= policy_size))) {
+				wpa_s->not_found_ssid_scan_cnt = 0;
+				wpas_request_disconnection(wpa_s);
+				return 0;
+			}
+			/* if scan interval equal max, stop increase */
+			if (wpa_s->not_found_ssid_scan_cnt < policy_size)
+				wpa_s->not_found_ssid_scan_cnt++;
 			int timeout_sec = ((wpa_is_sta(wpa_s) == WPA_FLAG_ON) &&
-					   (g_reconnect_set.pending_flag == WPA_FLAG_ON)) ? 0 : 5;
+				(g_reconnect_set.pending_flag == WPA_FLAG_ON)) ? 0 :
+				scan_interval_policy_tbl[wpa_s->not_found_ssid_scan_cnt - 1];
 #endif /* LOS_WPA_PATCH */
 			int timeout_usec = 0;
 #ifdef CONFIG_P2P
@@ -4977,6 +5003,11 @@ static void wpas_event_disassoc(struct wpa_supplicant *wpa_s,
 		info->reason_code = info->reason_code & ~(1 << 14);
 		reason_code = info->reason_code;
 		locally_generated = info->locally_generated;
+#ifdef LOS_CONFIG_PMK_CACHE
+        if (locally_generated == 0) {
+            wifi_flush_pmk_cache();
+        }
+#endif /* LOS_CONFIG_PMK_CACHE */
 #ifndef CONFIG_PRINT_NOUSE
 		wpa_dbg(wpa_s, MSG_DEBUG, " * reason %u (%s)%s", reason_code,
 			reason2str(reason_code),

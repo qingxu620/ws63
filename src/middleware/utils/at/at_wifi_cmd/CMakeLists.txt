@@ -34,6 +34,10 @@ set(PRIVATE_HEADER
     ${ROOT_DIR}/middleware/services/wifi_service/service
 )
 
+if("_PRE_FEATURE_SYSCHANNEL_LITEOS" IN_LIST DEFINES)
+    list(APPEND PRIVATE_HEADER ${ROOT_DIR}/middleware/utils/syschannel/)
+endif()
+
 string(REPLACE "\${ROOT_DIR}" "${ROOT_DIR}" CONFIG_LWIP_COMPILE_PATH "${CONFIG_LWIP_COMPILE_PATH}")
 if (EXISTS ${CONFIG_LWIP_COMPILE_PATH}/src/include)
     list(APPEND PRIVATE_HEADER ${CONFIG_LWIP_COMPILE_PATH}/src/include)

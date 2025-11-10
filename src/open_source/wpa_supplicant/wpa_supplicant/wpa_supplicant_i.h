@@ -1549,7 +1549,8 @@ struct wpa_supplicant {
     u16 sae_timeout:1; /* sae auth timeout? 0:no,1:yes */
     u16 sae_auth_state:1; /* sae auth state,0:receving commit rsp,1:receving confirm rsp */
     u16 auth_stage:1; /* auth stage,0:auth,1:assoc */
-    u16 resv:9;
+    u16 not_found_ssid_scan_cnt:4;
+    u16 resv:5;
 };
 
 

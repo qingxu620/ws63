@@ -53,6 +53,8 @@
 #define NV_ID_LINKLOSS_DISABLE             0x2016 /* Disable linkloss */
 #define NV_ID_SOFTAP_FIX_DSPS              0x2017 /* Set Softap DSPS */
 #define NV_ID_ALG_CROSS_PROT_ENABLE        0x2018 /* alg cross protocol enable */
+#define NV_ID_ER_SU_FAIL_CNT_TH            0x2019 /* er su fail cnt threshold */
+#define NV_ID_POWER_LEVEL                  0x201B /* POWER LEVEL VAL */
 
 #define NV_ID_FE_RX_INSERT_LOSS            0x2050 /* RF RX insert loss */
 #define NV_ID_FE_CALI_MASK                 0x2051 /* RF cali mask */
@@ -79,6 +81,8 @@
 #define NV_ID_BTC_DEMOD_DIFF               0x20A9 /* bsle 1m/2m demod is diff */
 #define NV_ID_BTC_SCHED_PRE_ARG_SWITCH     0x20AA /* Scheduling pre-arrangement switch */
 #define NV_ID_BTC_CHANNEL_SCAN_SWITCH      0x20AB /* channel scan switch */
+#define NV_ID_BTC_BLE_SCAN_CHANNEL_MAP     0x20AC /* ble scan Channel_Map bit[0-2] */
+#define NV_ID_BTC_BLE_CALI_SWITCH          0x20AD /* btc_ble_poweron_cali_switch */
 
 #define NV_ID_RADAR_1M_HOME_STA_PLATSIC    0x2100
 #define NV_ID_RADAR_1M_HALL_STA_PLATSIC    0x2101
@@ -112,6 +116,11 @@
 #define NV_ID_RADAR_RCV6                   0x211D
 #define NV_ID_RADAR_RCV7                   0x211E
 #define NV_ID_RADAR_RCV8                   0x211F
+#define NV_ID_RADAR_MWO_MODE               0x2120
+#define NV_ID_RADAR_THRU_WALL_MODE         0x2124
+#define NV_ID_RADAR_CHN_SWITCH             0x2130
+#define NV_ID_RADAR_SLP_MFG_PARA           0x2138
+#define NV_ID_RADAR_SLP_MFG_STATUS         0x2139
 #define NV_ID_RADAR_CTRL                   0x2140
 
 #define NV_ID_HILINK_ENTRY_MODE            0x2150 /* hilink entry mode */

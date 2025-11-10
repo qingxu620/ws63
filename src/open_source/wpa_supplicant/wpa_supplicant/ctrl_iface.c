@@ -3550,7 +3550,9 @@ static int wpa_supplicant_ctrl_iface_select_network(
 	int id;
 	struct wpa_ssid *ssid;
 	char *pos;
-
+#ifdef LOS_WPA_PATCH
+	wpa_s->not_found_ssid_scan_cnt = 0;
+#endif /* LOS_WPA_PATCH */
 	/* cmd: "<network id>" or "any" */
 	if (os_strncmp(cmd, "any", 3) == 0) {
 		wpa_printf(MSG_DEBUG, "CTRL_IFACE: SELECT_NETWORK any");

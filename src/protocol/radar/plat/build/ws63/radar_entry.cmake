@@ -1,6 +1,6 @@
 #===============================================================================
 # @brief    cmake file
-# Copyright (c) @CompanyNameMagicTag 2024-2024. All rights reserved.
+# Copyright (c) HiSilicon (Shanghai) Technologies Co., Ltd. 2024-2024. All rights reserved.
 #===============================================================================
 set(COMPONENT_NAME "radar_sensing")
 set(MODULE_NAME "wifi")
@@ -23,6 +23,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/spec/ws63/radar_dfx_info.c
     ${CMAKE_CURRENT_SOURCE_DIR}/spec/ws63/radar_tsensor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/spec/ws63/radar_alg_param.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/spec/ws63/radar_chan_switch.c
     ${CMAKE_CURRENT_SOURCE_DIR}/mfg/radar_mfg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../preproc/hal/ws63/hal_radar_sensor_one_rx_ant.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../preproc/hal/ws63/hal_radar_cali.c
@@ -32,10 +33,9 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_ppl_data_cube_mgr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_ppl_data_smooth.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_ppl_preproc_mgr.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_ppl_grad_detector.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_ppl_utils.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/ppl/radar_trx_delay_comp.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/proximity/radar_proximity_detection.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/presence/radar_presence_detection.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/target_track/radar_cfar_detector.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/target_track/radar_clutter.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/target_track/radar_plot_extraction.c
@@ -44,12 +44,15 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_confirmer.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_cluster.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_clean_cluster.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_thru_wall_recognizer.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_kalman_tracker.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_target_mgr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_target_fsm.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_frame_based_fsm_evt_handler.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/radar_frame_based_multi_target_mgr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/radar_fpl_mgr.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/common/radar_thru_wall_thres_statistic.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/common/radar_thru_wall_mgr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/target_track/radar_track_fusion_res.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/target_track/radar_adl_track_fsm.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/radar_adl_mgr.c
@@ -85,6 +88,7 @@ set(PRIVATE_HEADER
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/spl/target_track/
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/target_track/
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/fpl/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/common/
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/proximity/
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/presence/
     ${CMAKE_CURRENT_SOURCE_DIR}/../alg/adl/ws63/target_track/
@@ -97,7 +101,8 @@ set(PRIVATE_DEFINES
     _PRE_FILE_ID_DEFINED
     _PRE_RADAR_PRINTK
     _PRE_RADAR_NEW_WAVE
-    CONFIG_RADAR_DBG
+    _PRE_RADAR_ALG_DROP_SUBFRAME
+    _CONFIG_RADAR_SERVICE_AVOID_THROUGH_WALL
     CONFIG_RADAR_SERVICE_PROXIMITY_PRESENCE
 )
 

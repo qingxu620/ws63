@@ -10,4 +10,12 @@ if(DEFINED CONFIG_SUPPORT_RADAR_SOFTAP_SAMPLE)
     add_subdirectory_if_exist(softap_sample)
 endif()
 
+if(DEFINED CONFIG_SUPPORT_RADAR_WIRELESS_SAMPLE)
+    add_subdirectory_if_exist(wireless_sample)
+endif()
+
+if(DEFINED CONFIG_SUPPORT_RADAR_SLP_SAMPLE)
+    add_subdirectory_if_exist(slp_sample)
+endif()
+
 set(SOURCES "${SOURCES}" PARENT_SCOPE)

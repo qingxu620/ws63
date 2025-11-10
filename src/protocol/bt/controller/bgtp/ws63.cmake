@@ -1,6 +1,6 @@
 #===============================================================================
 # @brief    cmake file
-# Copyright (c) CompanyNameMagicTag 2022-2022. All rights reserved.
+# Copyright (c) HiSilicon (Shanghai) Technologies Co., Ltd. 2022-2022. All rights reserved.
 #===============================================================================
 set(MODULE_NAME "bt")
 
@@ -57,14 +57,6 @@ set(MAIN_COMPONENT
     false
 )
 
-set(GMSSL_PATH ${PROJECT_SOURCE_DIR}/open_source/GmSSL3.0)
-
-set(GMSSL_HEADER_LIST
-    ${GMSSL_PATH}/include/
-    ${GMSSL_PATH}/include/gmssl/
-    ${GMSSL_PATH}/src/
-)
-
 # ram组件，编译BTC_RAM_LIST
 set(COMPONENT_NAME "bgtp")
 
@@ -81,7 +73,6 @@ set(PUBLIC_HEADER
 )
 
 set(PRIVATE_HEADER
-    ${GMSSL_HEADER_LIST}
 )
 
 unset(CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
@@ -101,7 +92,6 @@ set(PUBLIC_HEADER
 )
 
 set(PRIVATE_HEADER
-    ${GMSSL_HEADER_LIST}
 )
 
 unset(CMAKE_ARCHIVE_OUTPUT_DIRECTORY)

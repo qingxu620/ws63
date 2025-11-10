@@ -10,10 +10,6 @@ if(DEFINED CONFIG_SAMPLE_SUPPORT_BLINKY)
     add_subdirectory_if_exist(blinky)
 endif()
 
-if(DEFINED CONFIG_SAMPLE_SUPPORT_HELLOWORLD)
-    add_subdirectory_if_exist(helloworld)
-endif()
-
 if(DEFINED CONFIG_SAMPLE_SUPPORT_BUTTON)
     add_subdirectory_if_exist(button)
 endif()
@@ -121,9 +117,4 @@ endif()
 if(DEFINED CONFIG_SAMPLE_SUPPORT_CLOCKS)
     add_subdirectory_if_exist(clocks)
 endif()
-
-if(DEFINED CONFIG_SAMPLE_SUPPORT_HELLOWORLD_OLED)
-    add_subdirectory_if_exist(helloworld_oled)
-endif()
-
 set(SOURCES "${SOURCES}" PARENT_SCOPE)

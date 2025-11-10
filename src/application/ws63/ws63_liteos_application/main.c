@@ -160,10 +160,9 @@ static int test_fun(int argc, const char *argv[]);
 #ifdef CONFIG_RADAR_SERVICE
 static int radar_driver_task_weakref(void *param) __attribute__ ((weakref("radar_driver_task")));
 static int radar_feature_task_weakref(void *param) __attribute__ ((weakref("radar_feature_task")));
-static int radar_demo_init_weakref(void *param) __attribute__ ((weakref("radar_demo_init")));
 static void at_radar_cmd_register_weakref(void) __attribute__ ((weakref("at_radar_cmd_register")));
-
 #endif
+
 #ifdef WIFI_TASK_EXIST
 static void at_sys_cmd_register_weakref(void) __attribute__ ((weakref("at_sys_cmd_register")));
 #endif
@@ -211,9 +210,10 @@ static const app_task_definition_t g_app_tasks[] = {
     {"wifi", WIFI_STACK_SIZE, TASK_PRIORITY_WF, (osal_kthread_handler)wifi_host_task},
 #endif
 #ifdef CONFIG_RADAR_SERVICE
+#ifndef DISABLE_RADAR
     {"radar_driver", RADAR_STACK_SIZE_D, TASK_PRIORITY_RD_D, (osal_kthread_handler)radar_driver_task_weakref},
     {"radar_feature", RADAR_STACK_SIZE_F, TASK_PRIORITY_RD_F, (osal_kthread_handler)radar_feature_task_weakref},
-    {"radar_demo", RADAR_STACK_SIZE, TASK_PRIORITY_RD_F, (osal_kthread_handler)radar_demo_init_weakref},
+#endif
 #endif
 #endif
 #ifdef CONFIG_SUPPORT_HILINK
@@ -252,10 +252,11 @@ static void app_main(const void *unused)
     while (1) {
         (void)osDelay(APP_MAIN_DELAY_TIME);
         LOS_MemInfoGet(m_aucSysMem0, &status);
+#ifndef DEVICE_ONLY
         PRINT("[SYS INFO] mem: used:%u, free:%u; log: drop/all[%u/%u], at_recv %u.\r\n", status.uwTotalUsedSize,
             status.uwTotalFreeSize, log_get_missed_messages_count(), log_get_all_messages_count(),
             at_uart_get_rcv_cnt());
-
+#endif
 #if defined(CONFIG_UART_SUPPORT_RX_THREAD)
 #if defined(CONFIG_UART_SUPPORT_RX_THREAD_DEBUG)
         uart_rx_thread_debug_print();
@@ -402,7 +403,7 @@ static void hw_init(void)
     sw_debug_uart_init(CONFIG_DEBUG_UART_BAUDRATE);
     PRINT("dbg uart init ok.\n");
 #endif
-    ws63_timer_patch_init();
+    timer_patch_init();
     uapi_timer_init();
     uapi_timer_adapter(1, TIMER_1_IRQN, irq_prio(TIMER_1_IRQN));
     uapi_systick_init();
@@ -545,9 +546,11 @@ static void do_at_cmd_register(void)
     }
 #endif
 #ifdef CONFIG_RADAR_SERVICE
+#ifndef DISABLE_RADAR
     if ((void *)at_radar_cmd_register_weakref != NULL) {
         at_radar_cmd_register_weakref();
     }
+#endif
 #endif
 }
 #endif

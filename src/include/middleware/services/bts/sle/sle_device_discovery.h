@@ -334,10 +334,10 @@ typedef struct sle_seek_params {
                                                        @else   扫描类型，{ @ref sle_seek_type_t }
                                                        @endif */
     uint16_t seek_interval[SLE_SEEK_PHY_NUM_MAX]; /*!< @if Eng scan interval
-                                                       @else   扫描间隔，取值范围[0x0004, 0xFFFF]，time = N * 0.125ms
+                                                       @else   扫描间隔，取值范围[0x0014, 0xFFFF]，time = N * 0.125ms
                                                        @endif */
     uint16_t seek_window[SLE_SEEK_PHY_NUM_MAX];   /*!< @if Eng scan window
-                                                       @else   扫描窗口，取值范围[0x0004, 0xFFFF]，time = N * 0.125ms
+                                                       @else   扫描窗口，取值范围[0x0014, 0xFFFF]，time = N * 0.125ms
                                                        @endif */
 } sle_seek_param_t;
 

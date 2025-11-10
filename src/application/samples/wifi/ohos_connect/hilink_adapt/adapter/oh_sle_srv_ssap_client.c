@@ -1,5 +1,5 @@
 /*
-  * Copyright (c) HiSilicon (Shanghai) Technologies Co., Ltd. 2022-2022. All rights reserved.
+ * Copyright (c) HiSilicon (Shanghai) Technologies Co., Ltd. 2022. All rights reserved.
  */
 #undef THIS_FILE_ID
 #define THIS_FILE_ID BTH_GLE_SRV_SERVICE_ACCESS_PROTOTOL_CLIENT

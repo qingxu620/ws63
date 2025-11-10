@@ -419,11 +419,20 @@ void store_named_data_val_found( int old_len, int new_len )
         ASSERT_COMPARE( found->val.p, found->val.len,
                         new_val, (size_t) new_len );
     if( new_len == 0)
+    {
         TEST_ASSERT( found->val.p == NULL );
+        /* If new_len != 0, then new_val != NULL and the length has been checked
+         * above by ASSERT_COMPARE(). But not here, so we need to check. */
+        TEST_EQUAL(found->val.len, 0);
+    }
     else if( new_len == old_len )
+    {
         TEST_ASSERT( found->val.p == old_val );
+    }
     else
+    {
         TEST_ASSERT( found->val.p != old_val );
+    }
 
 exit:
     mbedtls_free( nd.val.p );
@@ -452,9 +461,15 @@ void store_named_data_val_new( int new_len )
     TEST_ASSERT( found->oid.p != oid );
     ASSERT_COMPARE( found->oid.p, found->oid.len, oid, oid_len );
     if( new_len == 0 )
+    {
         TEST_ASSERT( found->val.p == NULL );
+        TEST_EQUAL(found->val.len, 0);
+    }
     else if( new_val == NULL )
+    {
         TEST_ASSERT( found->val.p != NULL );
+        TEST_EQUAL(found->val.len, new_len);
+    }
     else
     {
         TEST_ASSERT( found->val.p != new_val );

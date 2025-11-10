@@ -1,6 +1,6 @@
 #===============================================================================
 # @brief    cmake file
-# Copyright (c) @CompanyNameMagicTag 2024-2024. All rights reserved.
+# Copyright (c) HiSilicon (Shanghai) Technologies Co., Ltd. 2024-2024. All rights reserved.
 #===============================================================================
 set(COMPONENT_NAME "radar_ai")
 set(MODULE_NAME "wifi")
