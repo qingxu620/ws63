@@ -47,12 +47,7 @@ int16_t begin(void)
 
   uint8_t       set_required_settings;
 
-	/* Set the temperature, pressure and humidity settings */
-	//bme680_sensor.tph_sett.os_hum = BME680_OS_2X;
-	//bme680_sensor.tph_sett.os_pres = BME680_OS_4X;
-	//bme680_sensor.tph_sett.os_temp = BME680_OS_8X;
-	//bme680_sensor.tph_sett.filter = BME680_FILTER_SIZE_3;
-  
+	/* Set the temperature, pressure and humidity settings */  
   bme680_sensor.tph_sett.os_hum = 5;
   bme680_sensor.tph_sett.os_pres = 5;
   bme680_sensor.tph_sett.os_temp = 5;
@@ -125,7 +120,6 @@ float readAltitude(void)
 
 float readCalibratedAltitude(float seaLevel)
 {
-    //data->altitude = 44330.0 * (1.0 - pow((float) data->pressure / 100.0f / BME680_SEALEVEL, 0.1903));
    return (1.0 - pow((float) bme680_data.pressure / seaLevel, 0.190284)) * 287.15 / 0.0065;
 }
 

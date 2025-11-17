@@ -25,6 +25,10 @@
 #define DF9GMS_TASK_PRIO 17
 #define FREQ_TIME 20000
 #define DF9GMS_PULSE_COUNT 10
+#define DELAY_S 1000
+#define ANGLE_0 0
+#define ANGLE_90 90
+#define ANGLE_180 180
 
 // 定时器相关定义
 #define SERVO_TIMER_INDEX 2
@@ -105,8 +109,8 @@ void ServoPWM_Deinit(void)
 // 将角度(0~180)映射为脉宽并启动持续PWM
 void ServoSetPos(unsigned int pos)
 {
-    if (pos > 180) {
-        pos = 180; // 限制最大角度
+    if (pos > ANGLE_180) {
+        pos = ANGLE_180; // 限制最大角度
     }
 
     // 计算对应的脉宽 (us)
@@ -131,27 +135,27 @@ void DF9GMS_Task(void)
    ServoPWM_Init();
    
    // 舵机运动序列 - 每次调用ServoSetPos都会启动持续PWM
-   ServoSetPos(0);    // 转到0度并保持
-   uapi_systick_delay_ms(1000);  
+   ServoSetPos(ANGLE_0);    // 转到0度并保持
+   uapi_systick_delay_ms(DELAY_S);  
    
-   ServoSetPos(90);   // 转到90度并保持
-   uapi_systick_delay_ms(1000);  
+   ServoSetPos(ANGLE_90);   // 转到90度并保持
+   uapi_systick_delay_ms(DELAY_S);  
    
-   ServoSetPos(180);  // 转到180度并保持
-   uapi_systick_delay_ms(1000);  
+   ServoSetPos(ANGLE_180);  // 转到180度并保持
+   uapi_systick_delay_ms(DELAY_S);  
    
-   ServoSetPos(90);   // 转到90度并保持
-   uapi_systick_delay_ms(1000);  
+   ServoSetPos(ANGLE_90);   // 转到90度并保持
+   uapi_systick_delay_ms(DELAY_S);  
    
-   ServoSetPos(0);    // 转到0度并保持
-   uapi_systick_delay_ms(1000);  
+   ServoSetPos(ANGLE_0);    // 转到0度并保持
+   uapi_systick_delay_ms(DELAY_S);  
    
    // 停止PWM
-//    ServoPWM_Stop();
-//    uapi_systick_delay_ms(1000);
+   ServoPWM_Stop();
+   uapi_systick_delay_ms(DELAY_S);
    
    // 清理定时器资源
-//    ServoPWM_Deinit();
+   ServoPWM_Deinit();
 }
  
  void DF9GMSSampleEntry(void)

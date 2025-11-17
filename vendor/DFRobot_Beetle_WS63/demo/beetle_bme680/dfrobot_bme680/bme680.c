@@ -182,7 +182,6 @@ int8_t bme680_init(struct bme680_dev *dev)
 	if (rslt == BME680_OK) {
 		/* Soft reset to restore it to default values*/
 		rslt = bme680_soft_reset(dev);
-		// printf("bme680_init rslt0 = %d\r\n", rslt);
 
 		if (rslt == BME680_OK) {
 			rslt = bme680_get_regs(BME680_CHIP_ID_ADDR, &dev->chip_id, 1, dev);			
@@ -196,9 +195,6 @@ int8_t bme680_init(struct bme680_dev *dev)
 			}
 		}
 	}
-
-	// printf("bme680_init rslt1 = %d\r\n", rslt);
-
 	return rslt;
 }
 
@@ -953,9 +949,7 @@ static int8_t get_mem_page(struct bme680_dev *dev)
 	/* Check for null pointer in the device structure*/
 	rslt = null_ptr_check(dev);
 	if (rslt == BME680_OK) {
-		// printf("get_mem_page rslt0 = %d\r\n", rslt);
 		dev->com_rslt = dev->read(dev->dev_id, BME680_MEM_PAGE_ADDR | BME680_SPI_RD_MSK, &reg, 1);
-		// printf("get_mem_page dev->com_rslt = %d\r\n", dev->com_rslt);
 		if (dev->com_rslt != 0)
 			rslt = BME680_E_COM_FAIL;
 		else

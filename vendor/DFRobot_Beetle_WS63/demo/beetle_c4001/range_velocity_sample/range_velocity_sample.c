@@ -21,6 +21,8 @@
 
 #include "dfrobot_c4001.h"
 
+#define DELAY_MS 1
+
 static void mRangeVelocity_task( void )
 {
 
@@ -67,7 +69,7 @@ static void mRangeVelocity_task( void )
         osal_printk("%s", templine);
         sprintf(templine, "target distance = %.2f m\r\n", getTargetRange());
         osal_printk("%s", templine);
-        uapi_systick_delay_ms(100);
+        uapi_systick_delay_ms(100 * DELAY_MS);
     }
 
 }

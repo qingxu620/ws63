@@ -13,6 +13,8 @@
 
 #define I2C_TASK_PRIO                     24
 #define I2C_TASK_STACK_SIZE               0x1000
+#define DELAY_S 1000
+#define DELAY_MS 1
 
 static void getAcceleration_task( void ){
 
@@ -20,7 +22,7 @@ static void getAcceleration_task( void ){
   while(!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN, CONFIG_I2C_MASTER_BUS_ID)){
     uapi_watchdog_kick();
     osal_printk("Initialization failed, please check the connection and I2C address settings\r\n");
-    uapi_systick_delay_ms(1000);
+    uapi_systick_delay_ms(DELAY_S);
   }
 
   //Get chip id
@@ -48,7 +50,7 @@ static void getAcceleration_task( void ){
   */
   setAcquireRate(/*Rate = */eLowPower_10Hz);
   osal_printk("Acceleration:\r\n");
-  uapi_systick_delay_ms(1000);
+  uapi_systick_delay_ms(DELAY_S);
 
   while (1)
   {
@@ -62,7 +64,7 @@ static void getAcceleration_task( void ){
     //Print acceleration
     osal_printk("x: %d mg\t y: %d mg\t z: %d mg\r\n", ax, ay, az);
 
-    uapi_systick_delay_ms(300);
+    uapi_systick_delay_ms(300 * DELAY_MS);
   }
 
 }

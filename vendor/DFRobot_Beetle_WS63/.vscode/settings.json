@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "Kconfig": "kconfig",
+        "wifi_connect.h": "c"
+    }
+}

@@ -22,6 +22,7 @@
 #define BLE_UART_CHARACTER_CLIENT_UUID_TX                  0xEFEF
 #define BLE_UART_CLIENT_LOG "[ble uart client]"
 #define BLE_UART_CLIENT_ERROR "[ble uart client error]"
+#define DELAY_MS 500
 
 /* client id, invalid client id is "0" */
 static uint8_t g_uart_client_id = 0;
@@ -147,7 +148,7 @@ void ble_uart_client_enable_cbk(errcode_t status)
     errcode_t ret = 0;
     bd_addr_t ble_addr = { 0 };
     ble_addr.type = BLE_PUBLIC_DEVICE_ADDRESS;
-    osal_msleep(500); /* 延时5s，等待SLE初始化完毕 */
+    osal_msleep(DELAY_MS); /* 延时500ms，等待SLE初始化完毕 */
     if (memcpy_s(ble_addr.addr, BD_ADDR_LEN, g_ble_uart_client_addr, sizeof(g_ble_uart_client_addr)) != EOK) {
         osal_printk("%s add server app addr memcpy failed\n", BLE_UART_CLIENT_ERROR);
         return;

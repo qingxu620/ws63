@@ -1,3 +1,6 @@
+#ifndef DFROBOT_LIS2DH12_H
+#define DFROBOT_LIS2DH12_H
+
 /*!
  * @file dfrobot_lis2dh12.h
  * @brief Define the basic structure of DFRobot_LIS2DH12 
@@ -23,9 +26,6 @@
 #include <stdlib.h>
 #include <string.h> 
 #include <stdint.h>
-
-#ifndef DFROBOT_LIS2DH12_H
-#define DFROBOT_LIS2DH12_H
 
 //#define ENABLE_DBG
 

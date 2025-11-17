@@ -14,7 +14,6 @@
 #include "errcode.h"
 #include "uart.h"
 #include "bts_def.h"
-// #include "bts_device_manager.h"
 #include "bts_gatt_stru.h"
 #include "bts_gatt_server.h"
 #include "bts_le_gap.h"
@@ -35,6 +34,7 @@
 #define BLE_UART_SERVER_LOG "[ble uart server]"
 #define BLE_UART_SERVER_ERROR "[ble uart server error]"
 #define BLE_UART_SERVICE_NUM 3
+#define DELAY_MS 5000
 
 static uint16_t g_ble_uart_conn_id;
 static uint8_t g_ble_uart_name_value[] = { 'b', 'l', 'e', '_', 'u', 'a', 'r', 't', '\0' };
@@ -256,58 +256,16 @@ void ble_uart_server_pair_result_cb(uint16_t conn_id, const bd_addr_t *addr, err
                 BLE_UART_SERVER_LOG, conn_id, status, addr[0]);
 }
 
-// void ble_uart_server_power_on_cbk(uint8_t status)
-// {
-//     osal_printk("ble power on: %d\n", status);
-//     enable_ble();
-// }
-
-// void ble_uart_server_enable_cbk(errcode_t status)
-// {
-//     osal_printk("ble enable: %d\n", status);
-//     errcode_t ret = 0;
-//     bt_uuid_t app_uuid = { 0 };
-//     bd_addr_t ble_addr = { 0 };
-//     app_uuid.uuid_len = sizeof(g_uart_server_app_uuid);
-//     if (memcpy_s(app_uuid.uuid, app_uuid.uuid_len, g_uart_server_app_uuid, sizeof(g_uart_server_app_uuid)) != EOK) {
-//         osal_printk("%s add server app uuid memcpy failed\n", BLE_UART_SERVER_ERROR);
-//         return;
-//     }
-//     ble_addr.type = BLE_PUBLIC_DEVICE_ADDRESS;
-//     if (memcpy_s(ble_addr.addr, BD_ADDR_LEN, g_ble_uart_server_addr, sizeof(g_ble_uart_server_addr)) != EOK) {
-//         osal_printk("%s add server app addr memcpy failed\n", BLE_UART_SERVER_ERROR);
-//         return;
-//     }
-//     gap_ble_set_local_name(g_ble_uart_name_value, sizeof(g_ble_uart_name_value));
-//     gap_ble_set_local_addr(&ble_addr);
-//     ret = gatts_register_server(&app_uuid, &g_server_id);
-//     if ((ret != ERRCODE_BT_SUCCESS) || (g_server_id == INVALID_SERVER_ID)) {
-//         osal_printk("%s add server failed\r\n", BLE_UART_SERVER_ERROR);
-//         return;
-//     }
-//     ble_uart_add_service(); /* 添加uart服务 */
-//     osal_printk("%s beginning add service\r\n", BLE_UART_SERVER_LOG);
-//     bth_ota_init();
-// }
-
 static errcode_t ble_uart_server_register_callbacks(void)
 {
-    // bts_dev_manager_callbacks_t dev_mgr_cb = { 0 };
     gap_ble_callbacks_t gap_cb = { 0 };
     gatts_callbacks_t service_cb = { 0 };
 
-    // dev_mgr_cb.power_on_cb = ble_uart_server_power_on_cbk;
-    // gap_cb.ble_enable_cb = ble_uart_server_enable_cbk;
     gap_cb.start_adv_cb = ble_uart_server_adv_enable_cbk;
     gap_cb.conn_state_change_cb = ble_uart_server_connect_change_cbk;
     gap_cb.stop_adv_cb = ble_uart_server_adv_disable_cbk;
     gap_cb.pair_result_cb = ble_uart_server_pair_result_cb;
     errcode_t ret = gap_ble_register_callbacks(&gap_cb);
-    // ret |= bts_dev_manager_register_callbacks(&dev_mgr_cb);
-    // if (ret != ERRCODE_BT_SUCCESS) {
-    //     osal_printk("%s reg gap cbk failed ret = %d\n", BLE_UART_SERVER_ERROR, ret);
-    //     return ret;
-    // }
 
     service_cb.add_service_cb = ble_uart_server_service_add_cbk;
     service_cb.add_characteristic_cb = ble_uart_server_characteristic_add_cbk;
@@ -329,8 +287,7 @@ static errcode_t ble_uart_server_register_callbacks(void)
 
 void ble_uart_server_init(void)
 {
-    (void)osal_msleep(5000); /* 延时5000ms，等待BLE初始化完毕 */
-
+    (void)osal_msleep(DELAY_MS); /* 延时5000ms，等待BLE初始化完毕 */
 
     ble_uart_server_register_callbacks();
     enable_ble();

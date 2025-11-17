@@ -12,14 +12,14 @@
 #ifndef BME680_H_
 #define BME680_H_
 
+/* Header includes */
+#include "bme680_defs.h"
+
 /*! CPP guard */
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-
-/* Header includes */
-#include "bme680_defs.h"
 
 /**
  * @fn bme680_init

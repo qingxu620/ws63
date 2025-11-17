@@ -14,6 +14,7 @@ static sPrivateData_t _buffer;
 
 #define TIME_OUT        0x64     ///< time out
 #define SENSOR_UART_ID  2       // 替换成你初始化时使用的 UART ID
+#define DELAY_MS 1
 
 #define THE_UART_TRANSFER_SIZE 200
 static uint8_t g_app_uart_rx_buff[THE_UART_TRANSFER_SIZE] = { 0 };
@@ -25,9 +26,6 @@ static uart_buffer_config_t g_app_uart_buffer_config = {
 static void writeReg(uint8_t reg, const uint8_t *data, uint8_t len)
 {
     (void)reg;
-
-    // osal_printk("writeReg len = %d\r\n", len);
-
     if (len > sizeof(g_app_uart_rx_buff)) {
         osal_printk("UART write error: len too large\r\n");
         return;
@@ -46,8 +44,6 @@ static void writeReg(uint8_t reg, const uint8_t *data, uint8_t len)
 static int16_t readReg(uint8_t reg, uint8_t *data, uint8_t len)
 {
     (void)reg;
-
-    // osal_printk("readReg len = %d\r\n", len);
 
     if (len > sizeof(g_app_uart_rx_buff)) {
         osal_printk("UART read error: len too large\r\n");
@@ -139,7 +135,6 @@ static sAllData_t anaysisData(uint8_t * data, uint8_t len)
       allData.exist = 0;
     }
   }else if(0 == strncmp((const char *)(data+location), "$DFDMD", strlen("$DFDMD"))){
-    // $DFDMD,par1,par2,par3,par4,par5,par6,par7*
     allData.sta.workMode = eSpeedMode;
     allData.sta.workStatus = 1;
     allData.sta.initStatus = 1;
@@ -168,7 +163,7 @@ static bool sensorStop(void)
   uint8_t len = 0;
   uint8_t temp[200] = {0};
   writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-  uapi_systick_delay_ms(1000);
+  uapi_systick_delay_ms(1000 * DELAY_MS);
   len = readReg(0, temp, 200);
   while(1){
     if(len != 0){
@@ -177,7 +172,7 @@ static bool sensorStop(void)
       }
     }
     memset(temp, 0, 200);
-    uapi_systick_delay_ms(400);
+    uapi_systick_delay_ms(400 * DELAY_MS);
     writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
     len = readReg(0, temp, 200);
     
@@ -191,12 +186,12 @@ static sResponseData_t wRCMD(char* cmd1, uint8_t count)
   sResponseData_t responseData;
   sensorStop();
   writeReg(0, (uint8_t *)cmd1, strlen(cmd1));
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
   len = readReg(0, temp, 200);
   responseData = anaysisResponse(temp, len, count);
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
   writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
   return responseData;
 }
 
@@ -204,16 +199,16 @@ static void writeCMD(char* cmd1 , char* cmd2, uint8_t count)
 {
   sensorStop();
   writeReg(0, (uint8_t *)cmd1, strlen(cmd1));
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
   if(count > 1){
-    uapi_systick_delay_ms(100);
+    uapi_systick_delay_ms(100 * DELAY_MS);
     writeReg(0, (uint8_t *)cmd2, strlen(cmd2));
-    uapi_systick_delay_ms(100);
+    uapi_systick_delay_ms(100 * DELAY_MS);
   }
   writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
   writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-  uapi_systick_delay_ms(100);
+  uapi_systick_delay_ms(100 * DELAY_MS);
 }
 
 void DFRobot_C4001_INIT(uint32_t baud, uint8_t txpin, uint8_t rxpin, uint8_t uart_id)
@@ -258,7 +253,7 @@ sSensorStatus_t getStatus(void)
   readReg(0, temp, 100);
   writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
   while(len == 0){
-    uapi_systick_delay_ms(1000);
+    uapi_systick_delay_ms(1000 * DELAY_MS);
     len = readReg(0, temp, 100);
     allData = anaysisData(temp ,len);
   }
@@ -292,26 +287,26 @@ void setSensor(eSetMode_t mode)
 
   if(mode == eStartSen){
     writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(200);  // must timer
+    uapi_systick_delay_ms(200 * DELAY_MS);  // must timer
   }else if(mode == eStopSen){
     writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-    uapi_systick_delay_ms(200);  // must timer
+    uapi_systick_delay_ms(200 * DELAY_MS);  // must timer
   }else if(mode == eResetSen){
     writeReg(0, (uint8_t *)RESET_SENSOR, strlen(RESET_SENSOR));
-    uapi_systick_delay_ms(1500);  // must timer
+    uapi_systick_delay_ms(1500 * DELAY_MS);  // must timer
   }else if(mode == eSaveParams){
     writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-    uapi_systick_delay_ms(200);  // must timer
+    uapi_systick_delay_ms(200 * DELAY_MS);  // must timer
     writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-    uapi_systick_delay_ms(800);  // must timer
+    uapi_systick_delay_ms(800 * DELAY_MS);  // must timer
     writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
   }else if(mode == eRecoverSen){
     writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-    uapi_systick_delay_ms(200);
+    uapi_systick_delay_ms(200 * DELAY_MS);
     writeReg(0, (uint8_t *)RECOVER_SENSOR, strlen(RECOVER_SENSOR));
-    uapi_systick_delay_ms(800);  // must timer
+    uapi_systick_delay_ms(800 * DELAY_MS);  // must timer
     writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(500);
+    uapi_systick_delay_ms(500 * DELAY_MS);
   }
 
 }
@@ -321,16 +316,16 @@ bool setSensorMode(eMode_t mode)
     sensorStop();
     if(mode == eExitMode){
       writeReg(0, (uint8_t *)EXIST_MODE, strlen(EXIST_MODE));
-      uapi_systick_delay_ms(50);  
+      uapi_systick_delay_ms(50 * DELAY_MS);  
     }else{
       writeReg(0, (uint8_t *)SPEED_MODE, strlen(SPEED_MODE));
-      uapi_systick_delay_ms(50);
+      uapi_systick_delay_ms(50 * DELAY_MS);
     }
-    uapi_systick_delay_ms(50);
+    uapi_systick_delay_ms(50 * DELAY_MS);
     writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-    uapi_systick_delay_ms(500);
+    uapi_systick_delay_ms(500 * DELAY_MS);
     writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(100);
+    uapi_systick_delay_ms(100 * DELAY_MS);
     return true;
 }
 
@@ -647,10 +642,6 @@ uint16_t getThresRange(void)
 
 void setFrettingDetection(eSwitch_t sta)
 {
-    // char* data = "setMicroMotion ";
-    // data += sta;
-    // writeCMD(data, data, (uint8_t)1);
-
     char data[32] = {0};
     snprintf(data, sizeof(data), "setMicroMotion %d", sta);
     writeCMD(data, data, (uint8_t)1);

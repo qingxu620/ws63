@@ -58,7 +58,6 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
         .rx_bytes = BME680_MAX_TRANSFER_LEN
     };
     ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
-    // printf("bme680_spi_read uapi_spi_master_writeread fail %X\r\n", ret);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
         return -1;
@@ -75,7 +74,6 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
             .rx_bytes = BME680_MAX_TRANSFER_LEN
         };
         ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
-        // printf("bme680_spi_read uapi_spi_master_writeread fail %X\r\n", ret);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
             return -1;
@@ -106,7 +104,6 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
         .rx_bytes = BME680_MAX_TRANSFER_LEN
     };
     ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
-    // printf("bme680_spi_write uapi_spi_master_writeread fail %X\r\n", ret);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
         return -1;
@@ -123,7 +120,6 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
             .rx_bytes = BME680_MAX_TRANSFER_LEN
         };
         ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
-        // printf("bme680_spi_write uapi_spi_master_writeread fail %X\r\n", ret);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
             return -1;
@@ -144,7 +140,6 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
     uapi_pin_set_mode(pin_miso, SPI_MASTER_PIN_MODE);
     uapi_pin_set_mode(pin_mosi, SPI_MASTER_PIN_MODE);
     uapi_pin_set_mode(pin_clk, SPI_MASTER_PIN_MODE);
-    // uapi_pin_set_mode(pin_cs, SPI_MASTER_PIN_MODE);
 
     uapi_pin_set_mode(pin_cs, HAL_PIO_FUNC_GPIO);
     uapi_gpio_set_dir(pin_cs, GPIO_DIRECTION_OUTPUT);
@@ -167,7 +162,6 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
 
     ext_config.qspi_param.wait_cycles = SPI_WAIT_CYCLES;
 
-    // printf("before uapi_spi_init\r\n");
     int ret = uapi_spi_init(_spi_bus_id, &config, &ext_config);
     if (ret != 0) {
         printf("spi init fail %0x\r\n", ret);

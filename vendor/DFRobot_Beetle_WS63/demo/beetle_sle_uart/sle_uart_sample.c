@@ -11,7 +11,6 @@
 #include "app_init.h"
 #include "pinctrl.h"
 #include "uart.h"
-// #include "pm_clock.h"
 #include "sle_low_latency.h"
 #if defined(CONFIG_SAMPLE_SUPPORT_SLE_UART_SERVER)
 #include "securec.h"

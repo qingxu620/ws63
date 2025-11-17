@@ -31,6 +31,7 @@
 #define I2C_SET_BANDRATE 400000
 #define I2C_TASK_STACK_SIZE 0x1000
 #define I2C_TASK_PRIO 17
+#define DELAY_S 1000
 
 void app_i2c_init_pin(void)
 {
@@ -78,7 +79,7 @@ void OledTask(void)
         ssd1306_UpdateScreen();
         
         // 延时2秒
-        uapi_systick_delay_ms(2000);
+        uapi_systick_delay_ms(DELAY_S * 2);
         
         // 切换到下一个字体
         current_font = (current_font + 1) % font_count;

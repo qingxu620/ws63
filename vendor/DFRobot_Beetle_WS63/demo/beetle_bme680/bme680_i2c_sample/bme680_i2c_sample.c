@@ -15,6 +15,9 @@
 
 #define I2C_TASK_PRIO                     24
 #define I2C_TASK_STACK_SIZE               0x1000
+#define DELAY_S 1000
+#define TEMP_RAW_TO_CELSIUS       100
+#define HUMIDITY_RAW_TO_PERCENT   1000
 
 float seaLevel;
 
@@ -26,13 +29,13 @@ void BME680_Task(void)
     while(begin() != 0) {
         uapi_watchdog_kick();
         printf("bme begin failure\r\n");
-        uapi_systick_delay_ms(2000);
+        uapi_systick_delay_ms(DELAY_S * 2);
     }
     printf("bme begin successful\r\n");
     static char templine[64] = {0};
 #ifdef CONFIG_CALIBRATE_PRESSURE
     startConvert();
-    uapi_systick_delay_ms(1000);
+    uapi_systick_delay_ms(DELAY_S);
     update();
     /*You can use an accurate altitude to calibrate sea level air pressure. 
     *And then use this calibrated sea level pressure as a reference to obtain the calibrated altitude.
@@ -46,13 +49,13 @@ void BME680_Task(void)
     while (1) {
         uapi_watchdog_kick();      
         startConvert();
-        uapi_systick_delay_ms(1000);
+        uapi_systick_delay_ms(DELAY_S);
         update();
-        sprintf(templine, "temperature(C) : %.2f\r\n", readTemperature() / 100);
+        sprintf(templine, "temperature(C) : %.2f\r\n", readTemperature() / TEMP_RAW_TO_CELSIUS);
         printf(templine);
         sprintf(templine, "pressure(Pa) : %.2f\r\n", readPressure());
         printf(templine);
-        sprintf(templine, "humidity(rh) : %.2f\r\n", readHumidity() / 1000);
+        sprintf(templine, "humidity(rh) : %.2f\r\n", readHumidity() / HUMIDITY_RAW_TO_PERCENT);
         printf(templine);
         sprintf(templine, "gas resistance(ohm) : %.2f\r\n", readGasResistance());
         printf(templine);

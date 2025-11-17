@@ -28,6 +28,7 @@
 #define SLE_UART_SERVER_NAME            "sle_uart_server"
 #endif
 #define SLE_UART_CLIENT_LOG             "[sle uart client]"
+#define DELAY_MS 5000
 
 static ssapc_find_service_result_t g_sle_uart_find_service_result = { 0 };
 static sle_announce_seek_callbacks_t g_sle_uart_seek_cbk = { 0 };
@@ -216,10 +217,9 @@ static void sle_uart_client_sample_ssapc_cbk_register(ssapc_notification_callbac
     ssapc_register_callbacks(&g_sle_uart_ssapc_cbk);
 }
 
-
 void sle_uart_client_init(ssapc_notification_callback notification_cb, ssapc_indication_callback indication_cb)
 {
-    (void)osal_msleep(5000); /* 延时5000ms，等待SLE初始化完毕 */
+    (void)osal_msleep(DELAY_MS); /* 延时5000ms，等待SLE初始化完毕 */
     osal_printk("[SLE Client] try enable.\r\n");
     sle_uart_client_sample_seek_cbk_register();
     sle_uart_client_sample_connect_cbk_register();

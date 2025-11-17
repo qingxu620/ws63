@@ -128,7 +128,6 @@ static void *ble_uart_client_task(const char *arg)
 
 static void ble_uart_entry(void)
 {
-    // char *arg = NULL;
     int msg_ret = osal_msg_queue_create("task_msg", msg_rev_size, &mouse_msg_queue, 0, msg_rev_size);
     if (msg_ret != OSAL_SUCCESS) {
         osal_printk("msg queue create fail.");
@@ -137,11 +136,9 @@ static void ble_uart_entry(void)
     osal_task *task_handle = NULL;
     osal_kthread_lock();
 #if defined(CONFIG_SAMPLE_SUPPORT_BLE_UART_SERVER)
-    // ble_uart_server_task(arg);
     task_handle = osal_kthread_create((osal_kthread_handler)ble_uart_server_task, 0, "BLEUartServerTask",
                                       BLE_UART_TASK_STACK_SIZE);
 #elif defined(CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT)
-    // ble_uart_client_task(arg);
     task_handle = osal_kthread_create((osal_kthread_handler)ble_uart_client_task, 0, "BLEUartClientTask",
                                       BLE_UART_TASK_STACK_SIZE);
 #endif /* CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT */

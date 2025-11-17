@@ -18,6 +18,9 @@
 
 #define DS_TASK_PRIO            24
 #define DS_TASK_STACK_SIZE      0x1000
+#define READITV 10
+#define TASKITV 1000
+
 
 static inline uint32_t get_time_us(void)
 {
@@ -112,7 +115,7 @@ static bool ds18b20_read_temp_raw(int16_t *temp_raw)
     uint32_t start = get_time_us();
     while ((uint32_t)(get_time_us() - start) < 800000) {
         if (ow_read_bit()) { break; }
-        osal_msleep(10);
+        osal_msleep(READITV);
     }
 
     if (!ow_reset()) { return false; }
@@ -150,7 +153,7 @@ static int ds18b20_task(const char *arg)
         } else {
             osal_printk("DS18B20: no presence\r\n");
         }
-        osal_msleep(1000);
+        osal_msleep(TASKITV);
     }
 
     return 0;

@@ -18,6 +18,9 @@
 
 #define I2C_TASK_PRIO                     24
 #define I2C_TASK_STACK_SIZE               0x1000
+#define DELAY_S 1000
+#define DELAY_MS 1
+#define THRESHOLD 6
 
 //Interrupt generation flag
 volatile bool intFlag = false;
@@ -52,7 +55,7 @@ static void interrupt_task( void ){
     while(!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN, CONFIG_I2C_MASTER_BUS_ID)){
         uapi_watchdog_kick();
         osal_printk("Initialization failed, please check the connection and I2C address settings\r\n");
-        uapi_systick_delay_ms(1000);
+        uapi_systick_delay_ms(DELAY_S);
     }
 
     //Get chip id
@@ -86,7 +89,7 @@ static void interrupt_task( void ){
     Set the threshold of interrupt source 1 interrupt
     threshold:Threshold(g)
     */
-    setInt1Th(/*Threshold = */6);//Unit: g
+    setInt1Th(THRESHOLD);//Unit: g
 
     /*!
     Enable interrupt
@@ -103,7 +106,7 @@ static void interrupt_task( void ){
     */
     enableInterruptEvent(/*int pin*/eINT1,/*interrupt event = */eZHigherThanTh);
 
-    uapi_systick_delay_ms(1000);
+    uapi_systick_delay_ms(DELAY_S);
 
     while (1)
     {
@@ -116,7 +119,7 @@ static void interrupt_task( void ){
         az = readAccZ();//Get the acceleration in the z direction
         //Print acceleration
         osal_printk("x: %d mg\t y: %d mg\t z: %d mg\r\n", ax, ay, az);
-        uapi_systick_delay_ms(300);
+        uapi_systick_delay_ms(300 * DELAY_MS);
            //The interrupt flag is set
         if(intFlag == true){
             //Check whether the interrupt event is generated in interrupt 1

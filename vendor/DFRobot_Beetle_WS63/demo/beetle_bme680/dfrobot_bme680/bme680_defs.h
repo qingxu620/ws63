@@ -270,20 +270,20 @@
 #define BME680_REG_HCTRL_INDEX		UINT8_C(0)
 
 /** Macro to combine two 8 bit data's to form a 16 bit data */
-#define BME680_CONCAT_BYTES(msb, lsb)	(((uint16_t)msb << 8) | (uint16_t)lsb)
+#define BME680_CONCAT_BYTES(msb, lsb)	(((uint16_t)(msb) << 8) | (uint16_t)(lsb))
 
 /** Macro to SET and GET BITS of a register */
 #define BME680_SET_BITS(reg_data, bitname, data) \
-		((reg_data & ~(bitname##_MSK)) | \
-		((data << bitname##_POS) & bitname##_MSK))
-#define BME680_GET_BITS(reg_data, bitname)	((reg_data & (bitname##_MSK)) >> \
+		(((reg_data) & ~(bitname##_MSK)) | \
+		(((data) << bitname##_POS) & bitname##_MSK))
+#define BME680_GET_BITS(reg_data, bitname)	(((reg_data) & (bitname##_MSK)) >> \
 	(bitname##_POS))
 
 /** Macro variant to handle the bitname position if it is zero */
 #define BME680_SET_BITS_POS_0(reg_data, bitname, data) \
-				((reg_data & ~(bitname##_MSK)) | \
-				(data & bitname##_MSK))
-#define BME680_GET_BITS_POS_0(reg_data, bitname)  (reg_data & (bitname##_MSK))
+				(((reg_data) & ~(bitname##_MSK)) | \
+				((data) & bitname##_MSK))
+#define BME680_GET_BITS_POS_0(reg_data, bitname)  ((reg_data) & (bitname##_MSK))
 
 /**
  * @fn bme680_com_fptr_t

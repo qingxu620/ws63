@@ -18,8 +18,20 @@
 #include "watchdog.h"
 #include "app_init.h"
 #include "uart.h"
-
 #include "dfrobot_c4001.h"
+
+#define MINRANGE 30
+#define MAXRANGE 1000
+#define TRIGRANGE 1000
+#define TRIG_SENSITIVITY 1
+#define KEEP_SENSITIVITY 2
+#define TRIG_DELAY 100
+#define KEEP_TIME 4
+#define PWM_NO_TARGET_DUTY 50
+#define PWM_TARGET_DUTY 0  
+#define DETECTION_TIMER_MS 10
+#define IOPOLAITY 1
+#define DELAY_MS 1
 
 static void radar_example(void)
 {
@@ -38,35 +50,34 @@ static void radar_example(void)
     osal_printk("init status  = %d\r\n", status.initStatus);   // 0 no init 1 success
 
     // 设置检测范围
-    if (setDetectionRange(30, 1000, 1000)) {
+    if (setDetectionRange(MINRANGE, MAXRANGE, TRIGRANGE)) {
         osal_printk("set detection range successfully!\r\n");
     }
 
-
     // 设置触发灵敏度
-    if (setTrigSensitivity(1)) {
+    if (setTrigSensitivity(TRIG_SENSITIVITY)) {
         osal_printk("set trig sensitivity successfully!\r\n");
     }
 
     // 设置保持灵敏度
-    if (setKeepSensitivity(2)) {
+    if (setKeepSensitivity(KEEP_SENSITIVITY)) {
         osal_printk("set keep sensitivity successfully!\r\n");
     }
 
     // 设置触发延时和保持时间
-    if (setDelay(100, 4)) {
+    if (setDelay(TRIG_DELAY, KEEP_TIME)) {
         osal_printk("set delay successfully!\r\n");
     }
 
     uapi_watchdog_kick();
 
     // 设置 PWM 输出
-    if (setPwm(50, 0, 10)) {
+    if (setPwm(PWM_NO_TARGET_DUTY, PWM_TARGET_DUTY, DETECTION_TIMER_MS)) {
         osal_printk("set pwm period successfully!\r\n");
     }
 
     // 设置 IO 极性
-    if (setIoPolaity(1)) {
+    if (setIoPolaity(IOPOLAITY)) {
         osal_printk("set Io Polaity successfully!\r\n");
     }
 
@@ -92,7 +103,7 @@ static void radar_example(void)
         if (motionDetection()) {
             osal_printk("exist motion\r\n");
         }
-        uapi_systick_delay_ms(100);
+        uapi_systick_delay_ms(100 * DELAY_MS);
     }
 }
 
