@@ -45,7 +45,7 @@ static void m_range_velocity_task(void)
      * is abnormal. max Detection range Maximum distance, unit cm, range 2.4~20m (240~2000) thres Target detection
      * threshold, dimensionless unit 0.1, range 0~6553.5 (0~65535)
      */
-    if (setDetectThres(11 /*min*/, 1200 /*max*/, 10 /*thres*/)) {
+    if (setDetectThres(11 /* min */, 1200 /* max */, 10 /* thres */)) {
         osal_printk("set detect threshold successfully\r\n");
     }
 

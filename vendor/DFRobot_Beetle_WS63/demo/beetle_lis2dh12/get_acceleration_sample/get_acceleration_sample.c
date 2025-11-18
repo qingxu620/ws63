@@ -36,7 +36,7 @@ static void get_acceleration_task(void)
                 eLIS2DH12_8g,/< ±8g>/
                 eLIS2DH12_16g,/< ±16g>/
     */
-    setRange(eLIS2DH12_16g /*Range = */);
+    setRange(eLIS2DH12_16g);
 
     /**
       Set data measurement rate：
@@ -49,7 +49,7 @@ static void get_acceleration_task(void)
         eLowPower_200Hz
         eLowPower_400Hz
     */
-    setAcquireRate(eLowPower_10Hz /*Rate = */);
+    setAcquireRate(eLowPower_10Hz);
     osal_printk("Acceleration:\r\n");
     uapi_systick_delay_ms(DELAY_S);
 

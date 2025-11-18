@@ -73,7 +73,7 @@ static void interrupt_task(void)
                 eLIS2DH12_8g,/< ±8g>/
                 eLIS2DH12_16g,/< ±16g>/
     */
-    setRange(eLIS2DH12_16g /*Range = */);
+    setRange(eLIS2DH12_16g);
 
     /**
         Set data measurement rate：
@@ -86,9 +86,9 @@ static void interrupt_task(void)
         eLowPower_200Hz
         eLowPower_400Hz
     */
-    setAcquireRate(eLowPower_10Hz /*Rate = */);
+    setAcquireRate(eLowPower_10Hz);
 
-    attachInterrupt(CONFIG_INTERRUPT_PIN /*Interrupt No*/, interEvent, CHANGE);
+    attachInterrupt(CONFIG_INTERRUPT_PIN, interEvent, CHANGE);
 
     /**
     Set the threshold of interrupt source 1 interrupt
@@ -109,7 +109,7 @@ static void interrupt_task(void)
       eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
       eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
     */
-    enableInterruptEvent(eINT1 /*int pin*/, eZHigherThanTh /*interrupt event = */);
+    enableInterruptEvent(eINT1 /* int pin */, eZHigherThanTh /* interrupt event */);
 
     uapi_systick_delay_ms(DELAY_S);
 
