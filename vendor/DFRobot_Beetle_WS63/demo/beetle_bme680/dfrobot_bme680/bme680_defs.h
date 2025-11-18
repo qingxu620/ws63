@@ -307,7 +307,6 @@ typedef void (*bme680_delay_fptr_t)(uint32_t period);
  * @brief Interface selection Enumerations
  */
 enum bme680_intf {
-
     BME680_SPI_INTF,
     BME680_I2C_INTF /**< I2C interface */
 };
@@ -331,7 +330,6 @@ struct bme680_field_data {
  * @brief Structure to hold the Calibration data
  */
 struct bme680_calib_data {
-
     uint16_t par_h1;        /**< Variable to store calibrated humidity data */
     uint16_t par_h2;        /**< Variable to store calibrated humidity data */
     int8_t par_h3;          /**< Variable to store calibrated humidity data */

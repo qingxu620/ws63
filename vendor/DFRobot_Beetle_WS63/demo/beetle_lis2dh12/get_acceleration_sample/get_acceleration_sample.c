@@ -16,9 +16,8 @@
 #define DELAY_S 1000
 #define DELAY_MS 1
 
-static void getAcceleration_task(void)
+static void get_acceleration_task(void)
 {
-
     // Chip initialization
     while (!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
                                   CONFIG_I2C_MASTER_BUS_ID)) {
@@ -37,7 +36,7 @@ static void getAcceleration_task(void)
                 eLIS2DH12_8g,/< ±8g>/
                 eLIS2DH12_16g,/< ±16g>/
     */
-    setRange(/*Range = */ eLIS2DH12_16g);
+    setRange(eLIS2DH12_16g /*Range = */);
 
     /**
       Set data measurement rate：
@@ -50,14 +49,16 @@ static void getAcceleration_task(void)
         eLowPower_200Hz
         eLowPower_400Hz
     */
-    setAcquireRate(/*Rate = */ eLowPower_10Hz);
+    setAcquireRate(eLowPower_10Hz /*Rate = */);
     osal_printk("Acceleration:\r\n");
     uapi_systick_delay_ms(DELAY_S);
 
     while (1) {
         uapi_watchdog_kick();
         // Get the acceleration in the three directions of xyz
-        long ax, ay, az;
+        long ax;
+        long ay;
+        long az;
         // The measurement range can be ±100g or ±200g set by the setRange() function
         ax = readAccX(); // Get the acceleration in the x direction
         ay = readAccY(); // Get the acceleration in the y direction
@@ -69,12 +70,12 @@ static void getAcceleration_task(void)
     }
 }
 
-static void getAcceleration_entry(void)
+static void get_acceleration_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
     task_handle =
-        osal_kthread_create((osal_kthread_handler)getAcceleration_task, 0, "getAccelerationTask", I2C_TASK_STACK_SIZE);
+        osal_kthread_create((osal_kthread_handler)get_acceleration_task, 0, "getAccelerationTask", I2C_TASK_STACK_SIZE);
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, I2C_TASK_PRIO);
         osal_kfree(task_handle);
@@ -82,4 +83,4 @@ static void getAcceleration_entry(void)
     osal_kthread_unlock();
 }
 
-app_run(getAcceleration_entry);
+app_run(get_acceleration_entry);

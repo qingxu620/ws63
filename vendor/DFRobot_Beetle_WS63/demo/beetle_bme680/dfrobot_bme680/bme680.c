@@ -177,12 +177,11 @@ int8_t bme680_init(struct bme680_dev *dev)
 {
     int8_t rslt;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
-        /* Soft reset to restore it to default values*/
+        /* Soft reset to restore it to default values */
         rslt = bme680_soft_reset(dev);
-
         if (rslt == BME680_OK) {
             rslt = bme680_get_regs(BME680_CHIP_ID_ADDR, &dev->chip_id, 1, dev);
             if (rslt == BME680_OK) {
@@ -202,7 +201,7 @@ int8_t bme680_get_regs(uint8_t reg_addr, uint8_t *reg_data, uint16_t len, struct
 {
     int8_t rslt;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if (dev->intf == BME680_SPI_INTF) {
@@ -222,11 +221,11 @@ int8_t bme680_get_regs(uint8_t reg_addr, uint8_t *reg_data, uint16_t len, struct
 int8_t bme680_set_regs(const uint8_t *reg_addr, const uint8_t *reg_data, uint8_t len, struct bme680_dev *dev)
 {
     int8_t rslt;
-    /* Length of the temporary buffer is 2*(length of register)*/
+    /* Length of the temporary buffer is 2*(length of register) */
     uint8_t tmp_buff[BME680_TMP_BUFFER_LENGTH] = {0};
     uint16_t index;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if ((len > 0) && (len < BME680_TMP_BUFFER_LENGTH / 2)) {
@@ -262,7 +261,7 @@ int8_t bme680_soft_reset(struct bme680_dev *dev)
     /* 0xb6 is the soft reset command */
     uint8_t soft_rst_cmd = BME680_SOFT_RESET_CMD;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if (dev->intf == BME680_SPI_INTF)
@@ -295,7 +294,7 @@ int8_t bme680_set_sensor_settings(uint16_t desired_settings, struct bme680_dev *
     uint8_t data_array[BME680_REG_BUFFER_LENGTH] = {0};
     uint8_t intended_power_mode = dev->power_mode; /* Save intended power mode */
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if (desired_settings & BME680_GAS_MEAS_SEL)
@@ -405,15 +404,14 @@ int8_t bme680_set_sensor_settings(uint16_t desired_settings, struct bme680_dev *
 int8_t bme680_get_sensor_settings(uint16_t desired_settings, struct bme680_dev *dev)
 {
     int8_t rslt;
-    /* starting address of the register array for burst read*/
+    /* starting address of the register array for burst read */
     uint8_t reg_addr = BME680_CONF_HEAT_CTRL_ADDR;
     uint8_t data_array[BME680_REG_BUFFER_LENGTH] = {0};
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         rslt = bme680_get_regs(reg_addr, data_array, BME680_REG_BUFFER_LENGTH, dev);
-
         if (rslt == BME680_OK) {
             if (desired_settings & BME680_GAS_MEAS_SEL)
                 rslt = get_gas_config(dev);
@@ -453,7 +451,7 @@ int8_t bme680_set_sensor_mode(struct bme680_dev *dev)
     uint8_t pow_mode = 0;
     uint8_t reg_addr = BME680_CONF_T_P_MODE_ADDR;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         /* Call recursively until in sleep */
@@ -487,11 +485,11 @@ int8_t bme680_get_sensor_mode(struct bme680_dev *dev)
     int8_t rslt;
     uint8_t mode;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         rslt = bme680_get_regs(BME680_CONF_T_P_MODE_ADDR, &mode, 1, dev);
-        /* Masking the other register bit info*/
+        /* Masking the other register bit info */
         dev->power_mode = mode & BME680_MODE_MSK;
     }
 
@@ -506,7 +504,7 @@ void bme680_set_profile_dur(uint16_t duration, struct bme680_dev *dev)
     tph_dur = ((uint32_t)(dev->tph_sett.os_temp + dev->tph_sett.os_pres + dev->tph_sett.os_hum) * UINT32_C(1963));
     tph_dur += UINT32_C(477 * 4); /* TPH switching duration */
     tph_dur += UINT32_C(477 * 5); /* Gas measurement duration */
-    tph_dur += UINT32_C(500);     /* Get it to the closest whole number.*/
+    tph_dur += UINT32_C(500);     /* Get it to the closest whole number. */
     tph_dur /= UINT32_C(1000);    /* Convert to ms */
 
     tph_dur += UINT32_C(1); /* Wake up duration of 1ms */
@@ -522,7 +520,7 @@ void bme680_get_profile_dur(uint16_t *duration, const struct bme680_dev *dev)
     tph_dur = ((uint32_t)(dev->tph_sett.os_temp + dev->tph_sett.os_pres + dev->tph_sett.os_hum) * UINT32_C(1963));
     tph_dur += UINT32_C(477 * 4); /* TPH switching duration */
     tph_dur += UINT32_C(477 * 5); /* Gas measurement duration */
-    tph_dur += UINT32_C(500);     /* Get it to the closest whole number.*/
+    tph_dur += UINT32_C(500);     /* Get it to the closest whole number. */
     tph_dur /= UINT32_C(1000);    /* Convert to ms */
 
     tph_dur += UINT32_C(1); /* Wake up duration of 1ms */
@@ -540,7 +538,7 @@ int8_t bme680_get_sensor_data(struct bme680_field_data *data, struct bme680_dev 
 {
     int8_t rslt;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         /* Reading the sensor data in forced mode only */
@@ -562,7 +560,7 @@ static int8_t get_calib_data(struct bme680_dev *dev)
     uint8_t coeff_array[BME680_COEFF_SIZE] = {0};
     uint8_t temp_var = 0; /* Temporary variable */
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         rslt = bme680_get_regs(BME680_COEFF_ADDR1, coeff_array, BME680_COEFF_ADDR1_LEN, dev);
@@ -636,10 +634,9 @@ static int8_t set_gas_config(struct bme680_dev *dev)
 {
     int8_t rslt;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
-
         uint8_t reg_addr[2] = {0};
         uint8_t reg_data[2] = {0};
 
@@ -662,17 +659,17 @@ static int8_t set_gas_config(struct bme680_dev *dev)
 static int8_t get_gas_config(struct bme680_dev *dev)
 {
     int8_t rslt;
-    /* starting address of the register array for burst read*/
+    /* starting address of the register array for burst read */
     uint8_t reg_addr1 = BME680_ADDR_SENS_CONF_START;
     uint8_t reg_addr2 = BME680_ADDR_GAS_CONF_START;
     uint8_t data_array[BME680_GAS_HEATER_PROF_LEN_MAX] = {0};
     uint8_t index;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if (BME680_SPI_INTF == dev->intf) {
-            /* Memory page switch the SPI address*/
+            /* Memory page switch the SPI address */
             rslt = set_mem_page(reg_addr1, dev);
         }
 
@@ -826,7 +823,7 @@ static uint8_t calc_heater_dur(uint16_t dur)
     uint8_t durval;
 
     if (dur >= 0xfc0) {
-        durval = 0xff; /* Max duration*/
+        durval = 0xff; /* Max duration */
     } else {
         while (dur > 0x3F) {
             dur = dur / 4;
@@ -849,7 +846,7 @@ static int8_t read_field_data(struct bme680_field_data *data, struct bme680_dev 
     uint16_t adc_gas_res;
     uint8_t tries = 10;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     do {
         if (rslt == BME680_OK) {
@@ -863,7 +860,7 @@ static int8_t read_field_data(struct bme680_field_data *data, struct bme680_dev 
             adc_pres = (uint32_t)(((uint32_t)buff[2] * 4096) | ((uint32_t)buff[3] * 16) | ((uint32_t)buff[4] / 16));
             adc_temp = (uint32_t)(((uint32_t)buff[5] * 4096) | ((uint32_t)buff[6] * 16) | ((uint32_t)buff[7] / 16));
             adc_hum = (uint16_t)(((uint32_t)buff[8] * 256) | (uint32_t)buff[9]);
-            adc_gas_res = (uint16_t)((uint32_t)buff[13] * 4 | (((uint32_t)buff[14]) / 64));
+            adc_gas_res = (uint16_t)(((uint32_t)buff[13] * 4) | (((uint32_t)buff[14]) / 64));
             gas_range = buff[14] & BME680_GAS_RANGE_MSK;
 
             data->status |= buff[14] & BME680_GASM_VALID_MSK;
@@ -894,7 +891,7 @@ static int8_t set_mem_page(uint8_t reg_addr, struct bme680_dev *dev)
     uint8_t reg;
     uint8_t mem_page;
 
-    /* Check for null pointers in the device structure*/
+    /* Check for null pointers in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         if (reg_addr > 0x7f)
@@ -928,7 +925,7 @@ static int8_t get_mem_page(struct bme680_dev *dev)
     int8_t rslt;
     uint8_t reg;
 
-    /* Check for null pointer in the device structure*/
+    /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
     if (rslt == BME680_OK) {
         dev->com_rslt = dev->read(dev->dev_id, BME680_MEM_PAGE_ADDR | BME680_SPI_RD_MSK, &reg, 1);

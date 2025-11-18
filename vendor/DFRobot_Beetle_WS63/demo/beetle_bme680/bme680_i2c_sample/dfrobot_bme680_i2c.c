@@ -77,7 +77,7 @@ void DFRobot_BME680_I2C_INIT(uint8_t I2CAddr_,
                              uint8_t iic_sda_master_pin,
                              uint8_t iic_bus_id)
 {
-    DFRobot_BME680(bme680_i2c_read, bme680_i2c_write, bme680_delay_ms, eBME680_INTERFACE_I2C);
+    DFRobot_BME680(bme680_i2c_read, bme680_i2c_write, bme680_delay_ms, BME680_INTERFACE_I2C);
     bme680_I2CAddr = I2CAddr_;
     _iic_bus_id = iic_bus_id;
     uapi_pin_set_mode(iic_scl_master_pin, I2C_MASTER_PIN_MODE);

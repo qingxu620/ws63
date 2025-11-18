@@ -275,7 +275,9 @@ void ssd1306_DrawPixel(uint8_t x, uint8_t y, SSD1306_COLOR color)
 // color    => Black or White
 char ssd1306_DrawChar(char ch, FontDef Font, SSD1306_COLOR color)
 {
-    uint32_t i, b, j;
+    uint32_t i;
+    uint32_t b;
+    uint32_t j;
 
     // Check if character is valid
     uint32_t ch_min = 32;  // 32

@@ -42,7 +42,7 @@ static void radar_example(void)
     osal_printk("Radar connected!\r\n");
 
     // exist Mode
-    setSensorMode(eExitMode);
+    setSensorMode(EXITMODE);
 
     sSensorStatus_t status = getStatus();
     osal_printk("work status  = %d\r\n", status.workStatus); // 0 stop 1 start

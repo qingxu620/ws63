@@ -19,11 +19,10 @@
 #define TEMP_RAW_TO_CELSIUS 100
 #define HUMIDITY_RAW_TO_PERCENT 1000
 
-float seaLevel;
+float g_sea_level;
 
-void BME680_Task(void)
+void bme680_task(void)
 {
-
     DFRobot_BME680_SPI_INIT(CONFIG_SPI_CS_MASTER_PIN, CONFIG_SPI_DI_MASTER_PIN, CONFIG_SPI_DO_MASTER_PIN,
                             CONFIG_SPI_CLK_MASTER_PIN, CONFIG_SPI_MASTER_BUS_ID);
 
@@ -40,12 +39,12 @@ void BME680_Task(void)
     startConvert();
     uapi_systick_delay_ms(DELAY_S);
     update();
-    /*You can use an accurate altitude to calibrate sea level air pressure.
-     *And then use this calibrated sea level pressure as a reference to obtain the calibrated altitude.
-     *In this case,525.0m is chendu accurate altitude.
+    /* You can use an accurate altitude to calibrate sea level air pressure.
+     * And then use this calibrated sea level pressure as a reference to obtain the calibrated altitude.
+     * In this case,525.0m is chendu accurate altitude.
      */
-    seaLevel = readSeaLevel(525.0);
-    sprintf(templine, "seaLevel: %.2f\r\n", seaLevel);
+    g_sea_level = readSeaLevel(525.0);
+    sprintf(templine, "seaLevel: %.2f\r\n", g_sea_level);
     printf(templine);
 #endif
 
@@ -65,24 +64,24 @@ void BME680_Task(void)
         sprintf(templine, "altitude(m) : %.2f\r\n", readAltitude());
         printf(templine);
 #ifdef CONFIG_CALIBRATE_PRESSURE
-        sprintf(templine, "calibrated altitude(m) : %.2f\r\n", readCalibratedAltitude(seaLevel));
+        sprintf(templine, "calibrated altitude(m) : %.2f\r\n", readCalibratedAltitude(g_sea_level));
         printf(templine);
 #endif
     }
 }
 
-void BME680_Entry(void)
+void bme680_entry(void)
 {
     uint32_t ret;
     osal_task *taskid;
     // 创建任务调度
     osal_kthread_lock();
     // 创建任务1
-    taskid = osal_kthread_create((osal_kthread_handler)BME680_Task, NULL, "BME680_Task", SPI_TASK_STACK_SIZE);
+    taskid = osal_kthread_create((osal_kthread_handler)bme680_task, NULL, "bme680_task", SPI_TASK_STACK_SIZE);
     ret = osal_kthread_set_priority(taskid, SPI_TASK_PRIO);
     if (ret != OSAL_SUCCESS) {
         printf("create task1 failed .\n");
     }
     osal_kthread_unlock();
 }
-app_run(BME680_Entry);
+app_run(bme680_entry);

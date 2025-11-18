@@ -31,10 +31,10 @@ void DFRobot_BME680(bme680_com_fptr_t readReg,
     bme680_sensor.write = writeReg;
     bme680_sensor.delay_ms = delayMS;
     switch (interface) {
-        case eBME680_INTERFACE_I2C:
+        case BME680_INTERFACE_I2C:
             bme680_sensor.intf = BME680_I2C_INTF;
             break;
-        case eBME680_INTERFACE_SPI:
+        case BME680_INTERFACE_SPI:
             bme680_sensor.intf = BME680_SPI_INTF;
             break;
     }
@@ -132,19 +132,21 @@ float readSeaLevel(float altitude)
 
 void setParam(eBME680_param_t eParam, uint8_t dat)
 {
-    if (dat > 0x05)
+    if (dat > 0x05) {
         return;
+    }
+
     switch (eParam) {
-        case eBME680_PARAM_TEMPSAMP:
+        case BME680_PARAM_TEMPSAMP:
             writeParamHelper(0x74, dat, 0x07 << 5);
             break;
-        case eBME680_PARAM_PREESAMP:
+        case BME680_PARAM_PREESAMP:
             writeParamHelper(0x74, dat, 0x07 << 2);
             break;
-        case eBME680_PARAM_HUMISAMP:
+        case BME680_PARAM_HUMISAMP:
             writeParamHelper(0x72, dat, 0x07);
             break;
-        case eBME680_PARAM_IIRSIZE:
+        case BME680_PARAM_IIRSIZE:
             writeParamHelper(0x75, dat, 0x07 << 2);
             break;
     }
@@ -164,8 +166,9 @@ void writeParamHelper(uint8_t reg, uint8_t dat, uint8_t addr)
 {
     uint8_t var1 = 0;
     uint8_t addrCount = 0;
-    if (bme680_sensor.intf == BME680_SPI_INTF)
+    if (bme680_sensor.intf == BME680_SPI_INTF) {
         bme680_sensor.write(bme680_sensor.dev_id, 0x73, 0x00, 1);
+    }
     bme680_sensor.read(bme680_sensor.dev_id, reg, &var1, 1);
     var1 &= ~addr;
     while (!(addr & 0x01)) {

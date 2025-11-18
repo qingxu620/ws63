@@ -23,9 +23,8 @@
 
 #define DELAY_MS 1
 
-static void mRangeVelocity_task(void)
+static void m_range_velocity_task(void)
 {
-
     osal_printk("Radar example start!\r\n");
 
     DFRobot_C4001_INIT(CONFIG_RADAR_UART_BAUD, CONFIG_RADAR_UART_TX_PIN, CONFIG_RADAR_UART_RX_PIN, CONFIG_UART_BUS_ID);
@@ -33,7 +32,7 @@ static void mRangeVelocity_task(void)
     osal_printk("Radar connected!\r\n");
 
     // speed Mode
-    setSensorMode(eSpeedMode);
+    setSensorMode(SPEEDMODE);
 
     sSensorStatus_t status = getStatus();
     osal_printk("work status  = %d\r\n", status.workStatus); // 0 stop 1 start
@@ -46,12 +45,12 @@ static void mRangeVelocity_task(void)
      * is abnormal. max Detection range Maximum distance, unit cm, range 2.4~20m (240~2000) thres Target detection
      * threshold, dimensionless unit 0.1, range 0~6553.5 (0~65535)
      */
-    if (setDetectThres(/*min*/ 11, /*max*/ 1200, /*thres*/ 10)) {
+    if (setDetectThres(11 /*min*/, 1200 /*max*/, 10 /*thres*/)) {
         osal_printk("set detect threshold successfully\r\n");
     }
 
     // set Fretting Detection
-    setFrettingDetection(eON);
+    setFrettingDetection(ON);
 
     uapi_watchdog_kick();
 
@@ -73,15 +72,15 @@ static void mRangeVelocity_task(void)
 }
 
 // 示例入口
-static void mRangeVelocity_entry(void)
+static void m_range_velocity_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
-    task_handle = osal_kthread_create((osal_kthread_handler)mRangeVelocity_task, NULL, "RadarTask", 0x2000);
+    task_handle = osal_kthread_create((osal_kthread_handler)m_range_velocity_task, NULL, "RadarTask", 0x2000);
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, 25);
     }
     osal_kthread_unlock();
 }
 
-app_run(mRangeVelocity_entry);
+app_run(m_range_velocity_entry);

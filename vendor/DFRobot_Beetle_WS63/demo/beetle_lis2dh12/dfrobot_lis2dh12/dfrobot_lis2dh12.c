@@ -104,25 +104,29 @@ static int32_t limitAccelerationData(int32_t data)
 {
     // Set appropriate limit values based on measurement range
     if (_mgScaleVel == 16) { // 2g range
-        if (data > 2000)
+        if (data > 2000) {
             data = 2000;
-        else if (data < -2000)
+        } else if (data < -2000) {
             data = -2000;
+        }
     } else if (_mgScaleVel == 32) { // 4g range
-        if (data > 4000)
+        if (data > 4000) {
             data = 4000;
-        else if (data < -4000)
+        } else if (data < -4000) {
             data = -4000;
+        }
     } else if (_mgScaleVel == 64) { // 8g range
-        if (data > 8000)
+        if (data > 8000) {
             data = 8000;
-        else if (data < -8000)
+        } else if (data < -8000) {
             data = -8000;
+        }
     } else if (_mgScaleVel == 192) { // 16g range
-        if (data > 16000)
+        if (data > 16000) {
             data = 16000;
-        else if (data < -16000)
+        } else if (data < -16000) {
             data = -16000;
+        }
     }
     return data;
 }
@@ -234,11 +238,11 @@ void enableInterruptEvent(eInterruptSource_t source, eInterruptEvent_t event)
     uint8_t data = 0;
     data = 0x80 | event;
     DBG(data);
-    if (source == eINT1)
+    if (source == eINT1) {
         writeReg(REG_INT1_CFG, &data, 1);
-    else
+    } else {
         writeReg(REG_INT2_CFG, &data, 1);
-
+    }
     readReg(REG_INT1_CFG, &data, 1);
     DBG(data);
 }

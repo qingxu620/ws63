@@ -22,13 +22,13 @@
 #define BUTTON_TASK_STACK_SIZE 0x1000
 #define BUTTON_TASK_PRIO 17
 
-static int g_ledState = 0;
+static int g_led_state = 0;
 
 static void gpio_callback_func(pin_t pin, uintptr_t param)
 {
     UNUSED(pin);
     UNUSED(param);
-    g_ledState = !g_ledState;
+    g_led_state = !g_led_state;
     printf("Button pressed.\r\n");
 }
 
@@ -47,7 +47,7 @@ static void *button_task(const char *arg)
     }
     while (1) {
         uapi_watchdog_kick(); // 喂狗，防止程序出现异常系统挂死
-        if (g_ledState) {
+        if (g_led_state) {
             uapi_gpio_set_val(BSP_LED, GPIO_LEVEL_HIGH);
         } else {
             uapi_gpio_set_val(BSP_LED, GPIO_LEVEL_LOW);

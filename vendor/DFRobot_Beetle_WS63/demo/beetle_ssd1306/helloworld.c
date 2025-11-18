@@ -39,7 +39,7 @@ void app_i2c_init_pin(void)
     uapi_pin_set_mode(CONFIG_I2C_SDA_MASTER_PIN, CONFIG_I2C_MASTER_PIN_MODE);
 }
 
-void OledTask(void)
+void oled_task(void)
 {
     uint32_t baudrate = I2C_SET_BANDRATE;
     uint32_t hscode = I2C_MASTER_ADDR;
@@ -93,7 +93,7 @@ void oled_entry(void)
     // 创建任务调度
     osal_kthread_lock();
     // 创建任务1
-    taskid = osal_kthread_create((osal_kthread_handler)OledTask, NULL, "OledTask", I2C_TASK_STACK_SIZE);
+    taskid = osal_kthread_create((osal_kthread_handler)oled_task, NULL, "oled_task", I2C_TASK_STACK_SIZE);
     ret = osal_kthread_set_priority(taskid, I2C_TASK_PRIO);
     if (ret != OSAL_SUCCESS) {
         printf("create task1 failed .\n");

@@ -46,12 +46,12 @@
    * @fn setSensor
    * @brief 设置传感器模式
    * @param mode
-   * @n  eStartSen        开始采集
-   * @n  eStopSen         停止采集
-   * @n  eResetSen        复位传感器
-   * @n  eRecoverSen      恢复默认设置
-   * @n  eSaveParams      保存配置
-   * @n  eChangeMode      切换模式
+   * @n  STARTSEN        开始采集
+   * @n  STOPSEN         停止采集
+   * @n  RESETSEN        复位传感器
+   * @n  RECOVERSEN      恢复默认设置
+   * @n  SAVEPARAMS      保存配置
+   * @n  CHANGEMODE      切换模式
    */
   void setSensor(eSetMode_t mode);
   

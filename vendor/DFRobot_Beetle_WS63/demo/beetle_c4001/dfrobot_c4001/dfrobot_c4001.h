@@ -84,8 +84,8 @@ typedef struct {
  * @brief sensor work mode
  */
 typedef enum {
-    eExitMode = 0x00,
-    eSpeedMode = 0x01,
+    EXITMODE = 0x00,
+    SPEEDMODE = 0x01,
 } eMode_t;
 
 /**
@@ -93,8 +93,8 @@ typedef enum {
  * @brief Micromotion detection switch
  */
 typedef enum {
-    eON = 0x01,
-    eOFF = 0x00,
+    ON = 0x01,
+    OFF = 0x00,
 } eSwitch_t;
 
 /**
@@ -102,12 +102,12 @@ typedef enum {
  * @brief Set parameters for the sensor working status
  */
 typedef enum {
-    eStartSen = 0x55,
-    eStopSen = 0x33,
-    eResetSen = 0xCC,
-    eRecoverSen = 0xAA,
-    eSaveParams = 0x5C,
-    eChangeMode = 0x3B,
+    STARTSEN = 0x55,
+    STOPSEN = 0x33,
+    RESETSEN = 0xCC,
+    RECOVERSEN = 0xAA,
+    SAVEPARAMS = 0x5C,
+    CHANGEMODE = 0x3B,
 } eSetMode_t;
 
 #define START_SENSOR "sensorStart"
@@ -139,12 +139,12 @@ bool motionDetection(void);
  * @fn setSensor
  * @brief Set the Sensor object
  * @param mode
- * @n  eStartSen        start collect
- * @n  eStopSen         stop collect
- * @n  eResetSen        reset sensor
- * @n  eRecoverSen      recover params
- * @n  eSaveParams      save config
- * @n  eChangeMode      chagne mode
+ * @n  STARTSEN        start collect
+ * @n  STOPSEN         stop collect
+ * @n  RESETSEN        reset sensor
+ * @n  RECOVERSEN      recover params
+ * @n  SAVEPARAMS      save config
+ * @n  CHANGEMODE      chagne mode
  */
 void setSensor(eSetMode_t mode);
 

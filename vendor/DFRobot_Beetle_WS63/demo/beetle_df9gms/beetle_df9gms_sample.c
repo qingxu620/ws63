@@ -66,7 +66,7 @@ static void servo_timer_callback(uintptr_t data)
     }
 }
 
-void DF9GMS_Init(void)
+void df9gms_init(void)
 {
     uapi_pin_set_mode(CONFIG_DF9GMS_PIN, HAL_PIO_FUNC_GPIO);
     uapi_gpio_set_dir(CONFIG_DF9GMS_PIN, GPIO_DIRECTION_OUTPUT);
@@ -74,7 +74,7 @@ void DF9GMS_Init(void)
 }
 
 // 初始化定时器PWM
-void ServoPWM_Init(void)
+void servo_pwm_init(void)
 {
     // 初始化定时器
     uapi_timer_init();
@@ -87,7 +87,7 @@ void ServoPWM_Init(void)
 }
 
 // 停止PWM输出
-void ServoPWM_Stop(void)
+void servo_pwm_stop(void)
 {
     if (g_servo_timer != NULL) {
         uapi_timer_stop(g_servo_timer);
@@ -96,7 +96,7 @@ void ServoPWM_Stop(void)
 }
 
 // 销毁定时器
-void ServoPWM_Deinit(void)
+void servo_pwm_deinit(void)
 {
     if (g_servo_timer != NULL) {
         uapi_timer_stop(g_servo_timer);
@@ -106,7 +106,7 @@ void ServoPWM_Deinit(void)
 }
 
 // 将角度(0~180)映射为脉宽并启动持续PWM
-void ServoSetPos(unsigned int pos)
+void servo_set_pos(unsigned int pos)
 {
     if (pos > ANGLE_180) {
         pos = ANGLE_180; // 限制最大角度
@@ -125,50 +125,50 @@ void ServoSetPos(unsigned int pos)
     }
 }
 
-void DF9GMS_Task(void)
+void df9gms_task(void)
 {
     // 初始化GPIO
-    DF9GMS_Init();
+    df9gms_init();
 
     // 初始化定时器PWM
-    ServoPWM_Init();
+    servo_pwm_init();
 
     // 舵机运动序列 - 每次调用ServoSetPos都会启动持续PWM
-    ServoSetPos(ANGLE_0); // 转到0度并保持
+    servo_set_pos(ANGLE_0); // 转到0度并保持
     uapi_systick_delay_ms(DELAY_S);
 
-    ServoSetPos(ANGLE_90); // 转到90度并保持
+    servo_set_pos(ANGLE_90); // 转到90度并保持
     uapi_systick_delay_ms(DELAY_S);
 
-    ServoSetPos(ANGLE_180); // 转到180度并保持
+    servo_set_pos(ANGLE_180); // 转到180度并保持
     uapi_systick_delay_ms(DELAY_S);
 
-    ServoSetPos(ANGLE_90); // 转到90度并保持
+    servo_set_pos(ANGLE_90); // 转到90度并保持
     uapi_systick_delay_ms(DELAY_S);
 
-    ServoSetPos(ANGLE_0); // 转到0度并保持
+    servo_set_pos(ANGLE_0); // 转到0度并保持
     uapi_systick_delay_ms(DELAY_S);
 
     // 停止PWM
-    ServoPWM_Stop();
+    servo_pwm_stop();
     uapi_systick_delay_ms(DELAY_S);
 
     // 清理定时器资源
-    ServoPWM_Deinit();
+    servo_pwm_deinit();
 }
 
-void DF9GMSSampleEntry(void)
+void df9gms_entry(void)
 {
     uint32_t ret;
     osal_task *taskid;
     // 创建任务调度
     osal_kthread_lock();
     // 创建任务1
-    taskid = osal_kthread_create((osal_kthread_handler)DF9GMS_Task, NULL, "DF9GMS_Task", DF9GMS_TASK_STACK_SIZE);
+    taskid = osal_kthread_create((osal_kthread_handler)df9gms_task, NULL, "df9gms_task", DF9GMS_TASK_STACK_SIZE);
     ret = osal_kthread_set_priority(taskid, DF9GMS_TASK_PRIO);
     if (ret != OSAL_SUCCESS) {
         printf("create task1 failed .\n");
     }
     osal_kthread_unlock();
 }
-app_run(DF9GMSSampleEntry);
+app_run(df9gms_entry);

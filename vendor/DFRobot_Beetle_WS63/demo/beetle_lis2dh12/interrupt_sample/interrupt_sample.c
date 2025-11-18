@@ -45,7 +45,6 @@ void interEvent(pin_t pin, uintptr_t param)
 
 void attachInterrupt(uint8_t pin, gpio_callback_t callback, uint32_t mode)
 {
-
     uapi_pin_set_mode(pin, HAL_PIO_FUNC_GPIO);
     uapi_gpio_set_dir(pin, GPIO_DIRECTION_INPUT);
     errcode_t ret = uapi_gpio_register_isr_func(pin, mode, callback);
@@ -56,7 +55,6 @@ void attachInterrupt(uint8_t pin, gpio_callback_t callback, uint32_t mode)
 
 static void interrupt_task(void)
 {
-
     // Chip initialization
     while (!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
                                   CONFIG_I2C_MASTER_BUS_ID)) {
@@ -75,7 +73,7 @@ static void interrupt_task(void)
                 eLIS2DH12_8g,/< ±8g>/
                 eLIS2DH12_16g,/< ±16g>/
     */
-    setRange(/*Range = */ eLIS2DH12_16g);
+    setRange(eLIS2DH12_16g /*Range = */);
 
     /**
         Set data measurement rate：
@@ -88,9 +86,9 @@ static void interrupt_task(void)
         eLowPower_200Hz
         eLowPower_400Hz
     */
-    setAcquireRate(/*Rate = */ eLowPower_10Hz);
+    setAcquireRate(eLowPower_10Hz /*Rate = */);
 
-    attachInterrupt(/*Interrupt No*/ CONFIG_INTERRUPT_PIN, interEvent, CHANGE);
+    attachInterrupt(CONFIG_INTERRUPT_PIN /*Interrupt No*/, interEvent, CHANGE);
 
     /**
     Set the threshold of interrupt source 1 interrupt
@@ -111,14 +109,16 @@ static void interrupt_task(void)
       eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
       eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
     */
-    enableInterruptEvent(/*int pin*/ eINT1, /*interrupt event = */ eZHigherThanTh);
+    enableInterruptEvent(eINT1 /*int pin*/, eZHigherThanTh /*interrupt event = */);
 
     uapi_systick_delay_ms(DELAY_S);
 
     while (1) {
         uapi_watchdog_kick();
         // Get the acceleration in the three directions of xyz
-        long ax, ay, az;
+        long ax;
+        long ay;
+        long az;
         // The measurement range can be ±100g or ±200g set by the setRange() function
         ax = readAccX(); // Get the acceleration in the x direction
         ay = readAccY(); // Get the acceleration in the y direction

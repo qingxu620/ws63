@@ -29,14 +29,14 @@
 
 #ifdef ENABLE_DBG
 #define DBG(...)                     \
-    {                                \
+    do {                             \
         Serial.print("[");           \
         Serial.print(__FUNCTION__);  \
         Serial.print("(): ");        \
         Serial.print(__LINE__);      \
         Serial.print(" ] ");         \
         Serial.println(__VA_ARGS__); \
-    }
+    } while (0)
 #else
 #define DBG(...)
 #endif

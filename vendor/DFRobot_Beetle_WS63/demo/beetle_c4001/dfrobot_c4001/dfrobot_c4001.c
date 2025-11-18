@@ -121,7 +121,7 @@ static sAllData_t anaysisData(uint8_t *data, uint8_t len)
         return allData;
     }
     if (0 == strncmp((const char *)(data + location), "$DFHPD", strlen("$DFHPD"))) {
-        allData.sta.workMode = eExitMode;
+        allData.sta.workMode = EXITMODE;
         allData.sta.workStatus = 1;
         allData.sta.initStatus = 1;
         if (data[location + 7] == '1') {
@@ -130,7 +130,7 @@ static sAllData_t anaysisData(uint8_t *data, uint8_t len)
             allData.exist = 0;
         }
     } else if (0 == strncmp((const char *)(data + location), "$DFDMD", strlen("$DFDMD"))) {
-        allData.sta.workMode = eSpeedMode;
+        allData.sta.workMode = SPEEDMODE;
         allData.sta.workStatus = 1;
         allData.sta.initStatus = 1;
         char *token;
@@ -207,7 +207,6 @@ static void writeCMD(char *cmd1, char *cmd2, uint8_t count)
 
 void DFRobot_C4001_INIT(uint32_t baud, uint8_t txpin, uint8_t rxpin, uint8_t uart_id)
 {
-
     // 1. 配置引脚
 #if defined(CONFIG_PINCTRL_SUPPORT_IE)
     uapi_pin_set_ie(rxpin, PIN_IE_1);
@@ -248,7 +247,6 @@ sSensorStatus_t getStatus(void)
 
 bool motionDetection(void)
 {
-
     static bool old = false;
     uint8_t status = 0;
     uint8_t len = 0;
@@ -266,23 +264,22 @@ bool motionDetection(void)
 
 void setSensor(eSetMode_t mode)
 {
-
-    if (mode == eStartSen) {
+    if (mode == STARTSEN) {
         writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
         uapi_systick_delay_ms(200 * DELAY_MS); // must timer
-    } else if (mode == eStopSen) {
+    } else if (mode == STOPSEN) {
         writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
         uapi_systick_delay_ms(200 * DELAY_MS); // must timer
-    } else if (mode == eResetSen) {
+    } else if (mode == RESETSEN) {
         writeReg(0, (uint8_t *)RESET_SENSOR, strlen(RESET_SENSOR));
         uapi_systick_delay_ms(1500 * DELAY_MS); // must timer
-    } else if (mode == eSaveParams) {
+    } else if (mode == SAVEPARAMS) {
         writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
         uapi_systick_delay_ms(200 * DELAY_MS); // must timer
         writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
         uapi_systick_delay_ms(800 * DELAY_MS); // must timer
         writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    } else if (mode == eRecoverSen) {
+    } else if (mode == RECOVERSEN) {
         writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
         uapi_systick_delay_ms(200 * DELAY_MS);
         writeReg(0, (uint8_t *)RECOVER_SENSOR, strlen(RECOVER_SENSOR));
@@ -295,7 +292,7 @@ void setSensor(eSetMode_t mode)
 bool setSensorMode(eMode_t mode)
 {
     sensorStop();
-    if (mode == eExitMode) {
+    if (mode == EXITMODE) {
         writeReg(0, (uint8_t *)EXIST_MODE, strlen(EXIST_MODE));
         uapi_systick_delay_ms(50 * DELAY_MS);
     } else {
@@ -397,7 +394,6 @@ uint8_t getTrigDelay(void)
 
 uint16_t getKeepTimerout(void)
 {
-
     sResponseData_t responseData;
     char *data = "getLatency";
     responseData = wRCMD(data, (uint8_t)2);

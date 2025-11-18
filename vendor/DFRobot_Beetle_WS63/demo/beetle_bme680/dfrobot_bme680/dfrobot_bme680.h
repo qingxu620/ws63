@@ -34,7 +34,7 @@
 #endif
 #endif
 
-typedef enum { eBME680_INTERFACE_SPI, eBME680_INTERFACE_I2C } eBME680_INTERFACE;
+typedef enum { BME680_INTERFACE_SPI, BME680_INTERFACE_I2C } eBME680_INTERFACE;
 
 typedef void (*pfStartConvert_t)(void);
 typedef void (*pfUpdate_t)(void);
@@ -42,10 +42,10 @@ typedef void (*pfUpdate_t)(void);
 void bme680_delay_ms(uint32_t period);
 
 typedef enum {
-    eBME680_PARAM_TEMPSAMP,
-    eBME680_PARAM_HUMISAMP,
-    eBME680_PARAM_PREESAMP,
-    eBME680_PARAM_IIRSIZE
+    BME680_PARAM_TEMPSAMP,
+    BME680_PARAM_HUMISAMP,
+    BME680_PARAM_PREESAMP,
+    BME680_PARAM_IIRSIZE
 } eBME680_param_t;
 
 void DFRobot_BME680(bme680_com_fptr_t readReg,

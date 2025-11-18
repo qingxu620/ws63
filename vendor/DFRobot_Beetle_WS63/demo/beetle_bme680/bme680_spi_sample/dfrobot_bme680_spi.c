@@ -39,10 +39,10 @@ static void bme680_cs_high(void)
 
 static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
 {
-
     UNUSED(dev_id);
     errcode_t ret;
-    uint8_t tx, rx;
+    uint8_t tx;
+    uint8_t rx;
 
     /* 相当于 SPI.beginTransaction */
     bme680_cs_low();
@@ -81,7 +81,8 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
 {
     UNUSED(dev_id);
     errcode_t ret;
-    uint8_t tx, rx;
+    uint8_t tx;
+    uint8_t rx;
 
     bme680_cs_low();
 
@@ -150,5 +151,5 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
         printf("spi init fail %0x\r\n", ret);
     }
 
-    DFRobot_BME680(bme680_spi_read, bme680_spi_write, bme680_delay_ms, eBME680_INTERFACE_SPI);
+    DFRobot_BME680(bme680_spi_read, bme680_spi_write, bme680_delay_ms, BME680_INTERFACE_SPI);
 }

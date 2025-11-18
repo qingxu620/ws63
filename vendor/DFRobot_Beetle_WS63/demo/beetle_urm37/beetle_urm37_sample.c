@@ -23,9 +23,8 @@
 #define URM37_TASK_STACK_SIZE 0x1000
 #define URM37_TASK_PRIO 24
 
-void URM37_Init(void)
+void urm37_init(void)
 {
-
     uapi_pin_set_mode(CONFIG_URTRIG_PIN, HAL_PIO_FUNC_GPIO);
     uapi_gpio_set_dir(CONFIG_URTRIG_PIN, GPIO_DIRECTION_OUTPUT);
     uapi_gpio_set_val(CONFIG_URTRIG_PIN, GPIO_LEVEL_HIGH);
@@ -34,12 +33,12 @@ void URM37_Init(void)
     uapi_gpio_set_dir(CONFIG_URECHO_PIN, GPIO_DIRECTION_INPUT);
 }
 
-unsigned int GetDistance(void)
+unsigned int get_distance(void)
 {
-
     unsigned int flag = 0;
-    static uint64_t start_time = 0, time = 0;
-    unsigned int DistanceMeasured = 0;
+    static uint64_t start_time = 0;
+    static uint64_t time = 0;
+    unsigned int distance_measured = 0;
     gpio_level_t value = 0;
 
     uapi_gpio_set_val(CONFIG_URTRIG_PIN, GPIO_LEVEL_LOW);
@@ -47,11 +46,9 @@ unsigned int GetDistance(void)
     uapi_gpio_set_val(CONFIG_URTRIG_PIN, GPIO_LEVEL_HIGH);
 
     while (1) {
-
         uapi_watchdog_kick();
 
         value = uapi_gpio_get_output_val(CONFIG_URECHO_PIN);
-
         if (value == GPIO_LEVEL_LOW && flag == 0) {
             /*
              * 获取系统时间
@@ -71,41 +68,39 @@ unsigned int GetDistance(void)
         }
     }
 
-    if (time >= 50000) // the reading is invalid.
-    {
+    if (time >= 50000) {
         printf("Invalid");
     } else {
-        DistanceMeasured = time / 50; // every 50us low level stands for 1cm
-        printf("distance = %ucm\n", DistanceMeasured);
+        distance_measured = time / 50; // every 50us low level stands for 1cm
+        printf("distance = %ucm\n", distance_measured);
     }
 
-    return DistanceMeasured;
+    return distance_measured;
 }
 
-void URM37Task(void)
+void urm37_task(void)
 {
-    URM37_Init();
-    printf("URM37Task init\r\n");
+    urm37_init();
+    printf("urm37_task init\r\n");
 
     while (1) {
-
-        GetDistance();
+        get_distance();
         osal_mdelay(DELAY_MS);
     }
 }
 
-void URM37Entry(void)
+void urm37_entry(void)
 {
     uint32_t ret;
     osal_task *taskid;
     // 创建任务调度
     osal_kthread_lock();
     // 创建任务1
-    taskid = osal_kthread_create((osal_kthread_handler)URM37Task, NULL, "URM37Task", URM37_TASK_STACK_SIZE);
+    taskid = osal_kthread_create((osal_kthread_handler)urm37_task, NULL, "urm37_task", URM37_TASK_STACK_SIZE);
     ret = osal_kthread_set_priority(taskid, URM37_TASK_PRIO);
     if (ret != OSAL_SUCCESS) {
         printf("create task1 failed .\n");
     }
     osal_kthread_unlock();
 }
-app_run(URM37Entry);
+app_run(urm37_entry);

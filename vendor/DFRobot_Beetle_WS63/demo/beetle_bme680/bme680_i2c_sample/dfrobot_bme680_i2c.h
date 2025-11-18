@@ -9,8 +9,8 @@
  * @url https://github.com/DFRobot/DFRobot_BME680
  */
 
-#ifndef DFRobot_BME680_I2C_H
-#define DFRobot_BME680_I2C_H
+#ifndef DFROBOT_BME680_I2C_H
+#define DFROBOT_BME680_I2C_H
 
 #include "dfrobot_bme680.h"
 #include "i2c.h"
