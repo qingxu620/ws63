@@ -19,7 +19,7 @@
 #include "MQTTClient.h"
 #include "errcode.h"
 #include "wifi/wifi_connect.h"
-osThreadId_t mqtt_init_task_id;     // mqtt订阅数据任务
+osThreadId_t mqtt_init_task_id; // mqtt订阅数据任务
 
 #define CLIENT_ID "ADMIN"
 

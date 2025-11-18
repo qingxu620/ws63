@@ -23,23 +23,18 @@
 #include "watchdog.h"
 #include "app_init.h"
 
-
-
 #define BME680_SEALEVEL 1015
 
 /**\name C standard macros */
 #ifndef NULL
 #ifdef __cplusplus
-#define NULL   0
+#define NULL 0
 #else
-#define NULL   ((void *) 0)
+#define NULL ((void *)0)
 #endif
 #endif
 
-typedef enum {
-  eBME680_INTERFACE_SPI,
-  eBME680_INTERFACE_I2C
-} eBME680_INTERFACE;
+typedef enum { eBME680_INTERFACE_SPI, eBME680_INTERFACE_I2C } eBME680_INTERFACE;
 
 typedef void (*pfStartConvert_t)(void);
 typedef void (*pfUpdate_t)(void);
@@ -47,14 +42,16 @@ typedef void (*pfUpdate_t)(void);
 void bme680_delay_ms(uint32_t period);
 
 typedef enum {
-  eBME680_PARAM_TEMPSAMP,
-  eBME680_PARAM_HUMISAMP,
-  eBME680_PARAM_PREESAMP,
-  eBME680_PARAM_IIRSIZE
+    eBME680_PARAM_TEMPSAMP,
+    eBME680_PARAM_HUMISAMP,
+    eBME680_PARAM_PREESAMP,
+    eBME680_PARAM_IIRSIZE
 } eBME680_param_t;
 
-
-void DFRobot_BME680(bme680_com_fptr_t readReg, bme680_com_fptr_t writeReg, bme680_delay_fptr_t delayMS, eBME680_INTERFACE interface);
+void DFRobot_BME680(bme680_com_fptr_t readReg,
+                    bme680_com_fptr_t writeReg,
+                    bme680_delay_fptr_t delayMS,
+                    eBME680_INTERFACE interface);
 
 extern uint8_t bme680_I2CAddr;
 /**
@@ -69,13 +66,13 @@ int16_t begin(void);
  * @fn update
  * @brief update all data to MCU ram
  */
-void    update(void);
+void update(void);
 
 /**
  * @fn startConvert
  * @brief start convert to get a accurate values
  */
-void  startConvert(void);
+void startConvert(void);
 /**
  * @fn readTemperature
  * @brief read the temperature value (unit C)
@@ -130,7 +127,7 @@ float readSeaLevel(float altitude);
  *
  * @param eParam        :which param you want to change
  *        dat           :object data, can't more than 5
- */  
+ */
 void setParam(eBME680_param_t eParam, uint8_t dat);
 /**
  * @fn setGasHeater
@@ -140,9 +137,6 @@ void setParam(eBME680_param_t eParam, uint8_t dat);
  */
 void setGasHeater(uint16_t temp, uint16_t t);
 
-
 void writeParamHelper(uint8_t reg, uint8_t dat, uint8_t addr);
 
 #endif
-
-

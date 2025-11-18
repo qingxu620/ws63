@@ -4,12 +4,12 @@
 #===============================================================================
 choice
     prompt "Select BME680_I2C or BME680_SPI Sample"
-	default SAMPLE_SUPPORT_BME680_I2C_SAMPLE
-	config SAMPLE_SUPPORT_BME680_I2C_SAMPLE
-		bool "Support BME680_I2C Sample."
+    default SAMPLE_SUPPORT_BME680_I2C_SAMPLE
+    config SAMPLE_SUPPORT_BME680_I2C_SAMPLE
+        bool "Support BME680_I2C Sample."
 
-	config SAMPLE_SUPPORT_BME680_SPI_SAMPLE
-		bool "Support BME680_SPI Sample."
+    config SAMPLE_SUPPORT_BME680_SPI_SAMPLE
+        bool "Support BME680_SPI Sample."
 
 endchoice
 

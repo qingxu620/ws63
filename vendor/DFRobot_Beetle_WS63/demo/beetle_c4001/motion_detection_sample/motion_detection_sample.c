@@ -1,13 +1,13 @@
- /*!
-  * @file  motion_detection_sample.c
-  * @brief  Example of radar detecting whether an object is moving
-  * @copyright Copyright (c) 2025 DFRobot Co.Ltd (http://www.dfrobot.com)
-  * @license The MIT License (MIT)
-  * @author [Martin](Martin@dfrobot.com)
-  * @version V1.0
-  * @date 2025-09-29
-  * @url https://github.com/dfrobot/DFRobot_C4001
-  */
+/*!
+ * @file  motion_detection_sample.c
+ * @brief  Example of radar detecting whether an object is moving
+ * @copyright Copyright (c) 2025 DFRobot Co.Ltd (http://www.dfrobot.com)
+ * @license The MIT License (MIT)
+ * @author [Martin](Martin@dfrobot.com)
+ * @version V1.0
+ * @date 2025-09-29
+ * @url https://github.com/dfrobot/DFRobot_C4001
+ */
 
 #include "pinctrl.h"
 #include "common_def.h"
@@ -28,7 +28,7 @@
 #define TRIG_DELAY 100
 #define KEEP_TIME 4
 #define PWM_NO_TARGET_DUTY 50
-#define PWM_TARGET_DUTY 0  
+#define PWM_TARGET_DUTY 0
 #define DETECTION_TIMER_MS 10
 #define IOPOLAITY 1
 #define DELAY_MS 1
@@ -42,12 +42,12 @@ static void radar_example(void)
     osal_printk("Radar connected!\r\n");
 
     // exist Mode
-    setSensorMode(eExitMode);    
+    setSensorMode(eExitMode);
 
     sSensorStatus_t status = getStatus();
-    osal_printk("work status  = %d\r\n", status.workStatus);   // 0 stop 1 start
-    osal_printk("work mode    = %d\r\n", status.workMode);     // 0 exist 1 speed
-    osal_printk("init status  = %d\r\n", status.initStatus);   // 0 no init 1 success
+    osal_printk("work status  = %d\r\n", status.workStatus); // 0 stop 1 start
+    osal_printk("work mode    = %d\r\n", status.workMode);   // 0 exist 1 speed
+    osal_printk("init status  = %d\r\n", status.initStatus); // 0 no init 1 success
 
     // 设置检测范围
     if (setDetectionRange(MINRANGE, MAXRANGE, TRIGRANGE)) {
@@ -112,8 +112,7 @@ static void radar_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
-    task_handle = osal_kthread_create((osal_kthread_handler)radar_example,
-                                      NULL, "RadarTask", 0x2000);
+    task_handle = osal_kthread_create((osal_kthread_handler)radar_example, NULL, "RadarTask", 0x2000);
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, 25);
     }

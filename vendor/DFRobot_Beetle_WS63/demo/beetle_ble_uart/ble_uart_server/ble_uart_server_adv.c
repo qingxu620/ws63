@@ -14,7 +14,6 @@
 #include "bts_le_gap.h"
 #include "ble_uart_server_adv.h"
 
-
 /* Ble Adv type Flag length */
 #define BLE_ADV_FLAG_LEN 0x03
 /* Ble Adv data length */
@@ -32,7 +31,7 @@
 /* Ble name adv name type */
 #define BLE_ADV_LOCAL_NAME_DATA_TYPE 0x09
 /* Ble name adv tx power type */
-#define BLE_ADV_TX_POWER_LEVEL       0x0A
+#define BLE_ADV_TX_POWER_LEVEL 0x0A
 /* Ble name adv tx power response type */
 #define BLE_SCAN_RSP_TX_POWER_LEVEL_LEN 0x03
 /* Ble adv flag data */
@@ -54,56 +53,56 @@
 #define BLE_UART_ADV_LOG "[ble uart adv]"
 
 typedef enum ble_adv_filter_policy {
-    BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_ANY =                     0x00,
-    BLE_ADV_FILTER_POLICY_SCAN_WHITE_LIST_CONNECT_ANY =              0x01,
-    BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_WHITE_LIST =              0x02,
-    BLE_ADV_FILTER_POLICY_SCAN_WHITE_LIST_CONNECT_WHITE_LIST =       0x03
+    BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_ANY = 0x00,
+    BLE_ADV_FILTER_POLICY_SCAN_WHITE_LIST_CONNECT_ANY = 0x01,
+    BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_WHITE_LIST = 0x02,
+    BLE_ADV_FILTER_POLICY_SCAN_WHITE_LIST_CONNECT_WHITE_LIST = 0x03
 } ble_adv_filter_policy_t;
 
 typedef enum ble_adverting_type {
-    BLE_ADV_TYPE_CONNECTABLE_UNDIRECTED =                            0x00,
-    BLE_ADV_TYPE_CONNECTABLE_HIGH_DUTY_CYCLE_DIRECTED =              0x01,
-    BLE_ADV_TYPE_SCANNABLE_UNDIRECTED =                              0x02,
-    BLE_ADV_TYPE_NON_CONNECTABLE_UNDIRECTED =                        0x03,
-    BLE_ADV_TYPE_CONNECTABLE_LOW_DUTY_CYCLE_DIRECTED =               0x04
+    BLE_ADV_TYPE_CONNECTABLE_UNDIRECTED = 0x00,
+    BLE_ADV_TYPE_CONNECTABLE_HIGH_DUTY_CYCLE_DIRECTED = 0x01,
+    BLE_ADV_TYPE_SCANNABLE_UNDIRECTED = 0x02,
+    BLE_ADV_TYPE_NON_CONNECTABLE_UNDIRECTED = 0x03,
+    BLE_ADV_TYPE_CONNECTABLE_LOW_DUTY_CYCLE_DIRECTED = 0x04
 } ble_adverting_type_t;
 
 typedef enum ble_adv_channel_map {
-    BLE_ADV_CHANNEL_MAP_CH_37 =                      0x01,
-    BLE_ADV_CHANNEL_MAP_CH_38 =                      0x02,
-    BLE_ADV_CHANNEL_MAP_CH_39 =                      0x04,
-    BLE_ADV_CHANNEL_MAP_CH_37_CH_38 =                0x03,
-    BLE_ADV_CHANNEL_MAP_CH_37_CH_39 =                0x05,
-    BLE_ADV_CHANNEL_MAP_CH_38_CH_39 =                0x06,
-    BLE_ADV_CHANNEL_MAP_CH_DEFAULT =                 0x07
+    BLE_ADV_CHANNEL_MAP_CH_37 = 0x01,
+    BLE_ADV_CHANNEL_MAP_CH_38 = 0x02,
+    BLE_ADV_CHANNEL_MAP_CH_39 = 0x04,
+    BLE_ADV_CHANNEL_MAP_CH_37_CH_38 = 0x03,
+    BLE_ADV_CHANNEL_MAP_CH_37_CH_39 = 0x05,
+    BLE_ADV_CHANNEL_MAP_CH_38_CH_39 = 0x06,
+    BLE_ADV_CHANNEL_MAP_CH_DEFAULT = 0x07
 } ble_adv_channel_map_t;
 
 typedef struct {
-    uint8_t length;             /* 广播数据类型长度 */
-    uint8_t adv_data_type;      /* 广播数据类型 */
-    uint8_t flags;              /* 广播数据标志 */
+    uint8_t length;        /* 广播数据类型长度 */
+    uint8_t adv_data_type; /* 广播数据类型 */
+    uint8_t flags;         /* 广播数据标志 */
 } ble_adv_flag;
 
 typedef struct {
-    uint8_t length;                             /* 设备外观数据类型长度 */
-    uint8_t adv_data_type;                      /* 设备外观数据类型 */
-    uint8_t catogory_id[BLE_ADV_CATEGORY_LEN];  /* 设备外观数据 */
+    uint8_t length;                            /* 设备外观数据类型长度 */
+    uint8_t adv_data_type;                     /* 设备外观数据类型 */
+    uint8_t catogory_id[BLE_ADV_CATEGORY_LEN]; /* 设备外观数据 */
 } ble_appearance_t;
 
 typedef struct {
-    uint8_t length;             /* 广播设备名称类型长度 */
-    uint8_t adv_data_type;      /* 设备名称类型 */
-    int8_t *name;               /* 设备名称数据指针 */
+    uint8_t length;        /* 广播设备名称类型长度 */
+    uint8_t adv_data_type; /* 设备名称类型 */
+    int8_t *name;          /* 设备名称数据指针 */
 } ble_local_name_t;
 
 typedef struct {
-    uint8_t length;             /* 广播发送功率长度 */
-    uint8_t adv_data_type;      /* 广播发送数据类型 */
-    uint8_t tx_power_value;     /* 广播发送数据 */
+    uint8_t length;         /* 广播发送功率长度 */
+    uint8_t adv_data_type;  /* 广播发送数据类型 */
+    uint8_t tx_power_value; /* 广播发送数据 */
 } ble_tx_power_level_t;
 
-uint8_t g_uart_local_name[ MAX_NAME_LENGTH] = { 'b', 'l', 'e', '_', 'u', 'a', 'r', 't', '_', 's',
-    'e', 'r', 'v', 'e', 'r' };
+uint8_t g_uart_local_name[MAX_NAME_LENGTH] = {'b', 'l', 'e', '_', 'u', 'a', 'r', 't',
+                                              '_', 's', 'e', 'r', 'v', 'e', 'r'};
 
 static inline uint8_t u16_low_u8(uint16_t val)
 {
@@ -118,10 +117,7 @@ static inline uint8_t u16_high_u8(uint16_t val)
 static uint8_t ble_set_adv_flag_data(uint8_t *set_adv_data_position, uint8_t max_len)
 {
     ble_adv_flag adv_flags = {
-        .length = BLE_ADV_FLAG_LEN - BLE_GENERAL_BYTE_1,
-        .adv_data_type = 1,
-        .flags = BLE_ADV_FLAG_DATA
-    };
+        .length = BLE_ADV_FLAG_LEN - BLE_GENERAL_BYTE_1, .adv_data_type = 1, .flags = BLE_ADV_FLAG_DATA};
     if (memcpy_s(set_adv_data_position, max_len, &adv_flags, BLE_ADV_FLAG_LEN) != EOK) {
         return 0;
     }
@@ -133,8 +129,7 @@ static uint8_t ble_set_adv_appearance(uint8_t *set_adv_data_position, uint8_t ma
     ble_appearance_t adv_appearance_data = {
         .length = BLE_ADV_APPEARANCE_LENGTH - BLE_GENERAL_BYTE_1,
         .adv_data_type = BLE_ADV_APPEARANCE_DATA_TYPE,
-        .catogory_id = { u16_low_u8(BLE_ADV_CATEGORY_UART_VALUE), u16_high_u8(BLE_ADV_CATEGORY_UART_VALUE) }
-    };
+        .catogory_id = {u16_low_u8(BLE_ADV_CATEGORY_UART_VALUE), u16_high_u8(BLE_ADV_CATEGORY_UART_VALUE)}};
     if (memcpy_s(set_adv_data_position, max_len, &adv_appearance_data, BLE_ADV_APPEARANCE_LENGTH) != EOK) {
         return 0;
     }
@@ -144,16 +139,15 @@ static uint8_t ble_set_adv_appearance(uint8_t *set_adv_data_position, uint8_t ma
 static uint8_t ble_set_adv_name(uint8_t *set_adv_data_position, uint8_t max_len)
 {
     uint8_t len = BLE_ADV_PARAM_DATATYPE_LENGTH + BLE_ADV_PARAM_DATATYPE_LENGTH;
-    ble_local_name_t adv_local_name_data = {
-        .length = (uint8_t)(BLE_ADV_PARAM_DATATYPE_LENGTH + sizeof(g_uart_local_name)),
-        .adv_data_type = BLE_ADV_LOCAL_NAME_DATA_TYPE
-    };
+    ble_local_name_t adv_local_name_data = {.length =
+                                                (uint8_t)(BLE_ADV_PARAM_DATATYPE_LENGTH + sizeof(g_uart_local_name)),
+                                            .adv_data_type = BLE_ADV_LOCAL_NAME_DATA_TYPE};
 
     if (memcpy_s(set_adv_data_position, max_len, &adv_local_name_data, len) != EOK) {
         return 0;
     }
-    if (memcpy_s((set_adv_data_position+len), (size_t)(max_len-len),
-                 g_uart_local_name, sizeof(g_uart_local_name)) != EOK) {
+    if (memcpy_s((set_adv_data_position + len), (size_t)(max_len - len), g_uart_local_name,
+                 sizeof(g_uart_local_name)) != EOK) {
         return 0;
     }
     len = (uint8_t)(len + sizeof(g_uart_local_name));
@@ -191,11 +185,9 @@ static uint16_t ble_set_scan_response_data(uint8_t *scan_rsp_data, uint8_t scan_
     }
 
     /* tx power level */
-    ble_tx_power_level_t tx_power_level = {
-        .length = BLE_SCAN_RSP_TX_POWER_LEVEL_LEN - BLE_GENERAL_BYTE_1,
-        .adv_data_type = BLE_ADV_TX_POWER_LEVEL,
-        .tx_power_value = 0
-    };
+    ble_tx_power_level_t tx_power_level = {.length = BLE_SCAN_RSP_TX_POWER_LEVEL_LEN - BLE_GENERAL_BYTE_1,
+                                           .adv_data_type = BLE_ADV_TX_POWER_LEVEL,
+                                           .tx_power_value = 0};
 
     if (memcpy_s(scan_rsp_data, scan_rsp_data_max_len, &tx_power_level, sizeof(ble_tx_power_level_t)) != EOK) {
         return 0;
@@ -209,8 +201,8 @@ static uint16_t ble_set_scan_response_data(uint8_t *scan_rsp_data, uint8_t scan_
     if ((idx + sizeof(g_uart_local_name)) > scan_rsp_data_max_len) {
         return 0;
     }
-    if (memcpy_s(&scan_rsp_data[idx], scan_rsp_data_max_len - idx, g_uart_local_name,
-                 sizeof(g_uart_local_name)) != EOK) {
+    if (memcpy_s(&scan_rsp_data[idx], scan_rsp_data_max_len - idx, g_uart_local_name, sizeof(g_uart_local_name)) !=
+        EOK) {
         return 0;
     }
     idx += sizeof(g_uart_local_name);
@@ -219,8 +211,8 @@ static uint16_t ble_set_scan_response_data(uint8_t *scan_rsp_data, uint8_t scan_
 
 uint8_t ble_uart_set_adv_data(void)
 {
-    uint8_t set_adv_data[EXT_ADV_OR_SCAN_RSP_DATA_LEN] = { 0 };
-    uint8_t set_scan_rsp_data[EXT_ADV_OR_SCAN_RSP_DATA_LEN] = { 0 };
+    uint8_t set_adv_data[EXT_ADV_OR_SCAN_RSP_DATA_LEN] = {0};
+    uint8_t set_scan_rsp_data[EXT_ADV_OR_SCAN_RSP_DATA_LEN] = {0};
     gap_ble_config_adv_data_t cfg_adv_data;
 
     /* set adv data */
@@ -238,8 +230,8 @@ uint8_t ble_uart_set_adv_data(void)
 
     cfg_adv_data.scan_rsp_data = set_scan_rsp_data;
     cfg_adv_data.scan_rsp_length = scan_rsp_data_len;
-    osal_printk("%s ble_uart_set_adv_data adv_handle %d, len:%d, data:%s\n",
-                BLE_UART_ADV_LOG, BTH_GAP_BLE_ADV_HANDLE_DEFAULT, adv_data_len, set_adv_data);
+    osal_printk("%s ble_uart_set_adv_data adv_handle %d, len:%d, data:%s\n", BLE_UART_ADV_LOG,
+                BTH_GAP_BLE_ADV_HANDLE_DEFAULT, adv_data_len, set_adv_data);
     return gap_ble_set_adv_data(BTH_GAP_BLE_ADV_HANDLE_DEFAULT, &cfg_adv_data);
 }
 
@@ -248,16 +240,14 @@ uint8_t ble_uart_start_adv(void)
     errcode_t ret = ERRCODE_BT_SUCCESS;
     int adv_id = BTH_GAP_BLE_ADV_HANDLE_DEFAULT;
 
-    gap_ble_adv_params_t adv_para = {
-        .min_interval = BLE_ADV_MIN_INTERVAL,
-        .max_interval = BLE_ADV_MAX_INTERVAL,
-        .duration = BTH_GAP_BLE_ADV_FOREVER_DURATION,
-        .peer_addr.type = BLE_PUBLIC_DEVICE_ADDRESS,
-        /* 广播通道选择bitMap, 可参考BleAdvChannelMap */
-        .channel_map = BLE_ADV_CHANNEL_MAP_CH_DEFAULT,
-        .adv_type = BLE_ADV_TYPE_CONNECTABLE_UNDIRECTED,
-        .adv_filter_policy = BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_ANY
-    };
+    gap_ble_adv_params_t adv_para = {.min_interval = BLE_ADV_MIN_INTERVAL,
+                                     .max_interval = BLE_ADV_MAX_INTERVAL,
+                                     .duration = BTH_GAP_BLE_ADV_FOREVER_DURATION,
+                                     .peer_addr.type = BLE_PUBLIC_DEVICE_ADDRESS,
+                                     /* 广播通道选择bitMap, 可参考BleAdvChannelMap */
+                                     .channel_map = BLE_ADV_CHANNEL_MAP_CH_DEFAULT,
+                                     .adv_type = BLE_ADV_TYPE_CONNECTABLE_UNDIRECTED,
+                                     .adv_filter_policy = BLE_ADV_FILTER_POLICY_SCAN_ANY_CONNECT_ANY};
 
     (void)memset_s(&adv_para.peer_addr.addr, BD_ADDR_LEN, 0, BD_ADDR_LEN);
     osal_printk("%s ble_uart_start_adv adv_id %d\n", BLE_UART_ADV_LOG, adv_id);

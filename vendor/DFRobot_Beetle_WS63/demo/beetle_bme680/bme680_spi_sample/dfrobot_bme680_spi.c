@@ -10,27 +10,26 @@
  */
 #include "dfrobot_bme680_spi.h"
 
+#define SPI_SLAVE_NUM 1
+#define SPI_FREQUENCY 1
+#define SPI_CLK_POLARITY 0
+#define SPI_CLK_PHASE 0
+#define SPI_FRAME_FORMAT 0
+#define SPI_FRAME_FORMAT_STANDARD 0
+#define SPI_FRAME_SIZE_8 HAL_SPI_FRAME_SIZE_8
+#define SPI_TMOD 0
+#define SPI_WAIT_CYCLES 0x10
 
-#define SPI_SLAVE_NUM                   1
-#define SPI_FREQUENCY                   1
-#define SPI_CLK_POLARITY                0
-#define SPI_CLK_PHASE                   0
-#define SPI_FRAME_FORMAT                0
-#define SPI_FRAME_FORMAT_STANDARD       0
-#define SPI_FRAME_SIZE_8                HAL_SPI_FRAME_SIZE_8
-#define SPI_TMOD                        0
-#define SPI_WAIT_CYCLES                 0x10
-
-#define BME680_SPI_TIMEOUT              0xFFFFFFFF
-#define BME680_MAX_TRANSFER_LEN         1
-#define SPI_MASTER_PIN_MODE             3
+#define BME680_SPI_TIMEOUT 0xFFFFFFFF
+#define BME680_MAX_TRANSFER_LEN 1
+#define SPI_MASTER_PIN_MODE 3
 
 uint8_t _spi_bus_id;
 static uint8_t bme680_cs_pin;
 
 static void bme680_cs_low(void)
 {
-    uapi_gpio_set_val(bme680_cs_pin, GPIO_LEVEL_LOW);  // CS低电平有效
+    uapi_gpio_set_val(bme680_cs_pin, GPIO_LEVEL_LOW); // CS低电平有效
 }
 
 static void bme680_cs_high(void)
@@ -52,11 +51,7 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
     tx = reg_addr | 0x80;
     rx = 0;
     spi_xfer_data_t xfer_addr = {
-        .tx_buff = &tx,
-        .tx_bytes = BME680_MAX_TRANSFER_LEN,
-        .rx_buff = &rx,
-        .rx_bytes = BME680_MAX_TRANSFER_LEN
-    };
+        .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
     ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
@@ -65,14 +60,10 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
 
     /* 循环逐字节读取数据 */
     while (len--) {
-        tx = 0x00;   /* dummy data */
+        tx = 0x00; /* dummy data */
         rx = 0;
         spi_xfer_data_t xfer_data = {
-            .tx_buff = &tx,
-            .tx_bytes = BME680_MAX_TRANSFER_LEN,
-            .rx_buff = &rx,
-            .rx_bytes = BME680_MAX_TRANSFER_LEN
-        };
+            .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
         ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
@@ -98,11 +89,7 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
     tx = reg_addr & 0x7F;
     rx = 0;
     spi_xfer_data_t xfer_addr = {
-        .tx_buff = &tx,
-        .tx_bytes = BME680_MAX_TRANSFER_LEN,
-        .rx_buff = &rx,
-        .rx_bytes = BME680_MAX_TRANSFER_LEN
-    };
+        .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
     ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
@@ -114,11 +101,7 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
         tx = *data++;
         rx = 0;
         spi_xfer_data_t xfer_data = {
-            .tx_buff = &tx,
-            .tx_bytes = BME680_MAX_TRANSFER_LEN,
-            .rx_buff = &rx,
-            .rx_bytes = BME680_MAX_TRANSFER_LEN
-        };
+            .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
         ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
@@ -145,8 +128,8 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
     uapi_gpio_set_dir(pin_cs, GPIO_DIRECTION_OUTPUT);
     uapi_gpio_set_val(pin_cs, GPIO_LEVEL_HIGH);
 
-    spi_attr_t config = { 0 };
-    spi_extra_attr_t ext_config = { 0 };
+    spi_attr_t config = {0};
+    spi_extra_attr_t ext_config = {0};
 
     config.is_slave = false;
     config.slave_num = SPI_SLAVE_NUM;
@@ -168,5 +151,4 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
     }
 
     DFRobot_BME680(bme680_spi_read, bme680_spi_write, bme680_delay_ms, eBME680_INTERFACE_SPI);
-
 }

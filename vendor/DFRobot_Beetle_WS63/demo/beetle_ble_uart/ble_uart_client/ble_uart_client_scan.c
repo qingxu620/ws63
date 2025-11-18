@@ -21,7 +21,7 @@ static uint8_t g_uart_scan_filter_policy = 0x00;
 errcode_t ble_uart_set_scan_parameters(void)
 {
     errcode_t ret = ERRCODE_BT_SUCCESS;
-    gap_ble_scan_params_t ble_uart_scan_params = { 0 };
+    gap_ble_scan_params_t ble_uart_scan_params = {0};
     ble_uart_scan_params.scan_interval = g_uart_scan_interval;
     ble_uart_scan_params.scan_window = g_uart_scan_window;
     ble_uart_scan_params.scan_type = g_uart_scan_type;

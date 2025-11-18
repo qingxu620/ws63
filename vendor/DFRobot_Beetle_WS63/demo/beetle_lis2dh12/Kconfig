@@ -4,12 +4,12 @@
 #===============================================================================
 choice
     prompt "Select getAcceleration or interrupt Sample"
-	default SAMPLE_SUPPORT_ACCELERATION_SAMPLE
-	config SAMPLE_SUPPORT_ACCELERATION_SAMPLE
-		bool "Support getAcceleration Sample."
+    default SAMPLE_SUPPORT_ACCELERATION_SAMPLE
+    config SAMPLE_SUPPORT_ACCELERATION_SAMPLE
+        bool "Support getAcceleration Sample."
 
-	config SAMPLE_SUPPORT_INTERRUPT_SAMPLE
-		bool "Support interrupt Sample."
+    config SAMPLE_SUPPORT_INTERRUPT_SAMPLE
+        bool "Support interrupt Sample."
 
 endchoice
 
@@ -32,4 +32,4 @@ config I2C_SLAVE_ADDR
 config INTERRUPT_PIN
     int "Choose INTERRUPT pin"
     default 2
-	depends on SAMPLE_SUPPORT_INTERRUPT_SAMPLE
+    depends on SAMPLE_SUPPORT_INTERRUPT_SAMPLE

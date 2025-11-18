@@ -23,7 +23,6 @@
 #define URM37_TASK_STACK_SIZE 0x1000
 #define URM37_TASK_PRIO 24
 
-
 void URM37_Init(void)
 {
 
@@ -36,7 +35,7 @@ void URM37_Init(void)
 }
 
 unsigned int GetDistance(void)
-{    
+{
 
     unsigned int flag = 0;
     static uint64_t start_time = 0, time = 0;
@@ -60,7 +59,6 @@ unsigned int GetDistance(void)
              */
             start_time = uapi_systick_get_us();
             flag = 1;
-
         }
 
         if (value == GPIO_LEVEL_HIGH && flag == 1) {
@@ -73,13 +71,11 @@ unsigned int GetDistance(void)
         }
     }
 
-    if (time >= 50000)              // the reading is invalid.
+    if (time >= 50000) // the reading is invalid.
     {
         printf("Invalid");
-    }
-    else
-    {
-        DistanceMeasured = time / 50;  // every 50us low level stands for 1cm
+    } else {
+        DistanceMeasured = time / 50; // every 50us low level stands for 1cm
         printf("distance = %ucm\n", DistanceMeasured);
     }
 
@@ -92,10 +88,9 @@ void URM37Task(void)
     printf("URM37Task init\r\n");
 
     while (1) {
-        
+
         GetDistance();
         osal_mdelay(DELAY_MS);
-        
     }
 }
 

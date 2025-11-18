@@ -34,9 +34,9 @@
 #define SERVO_TIMER_INDEX 2
 #define SERVO_TIMER_PRIO 2
 #define SERVO_TIMER_IRQ TIMER_2_IRQN
-#define SERVO_PWM_PERIOD_US 20000  // 20ms周期
-#define SERVO_MIN_PULSE_US 500     // 0.5ms脉宽
-#define SERVO_MAX_PULSE_US 2500    // 2.5ms脉宽
+#define SERVO_PWM_PERIOD_US 20000 // 20ms周期
+#define SERVO_MIN_PULSE_US 500    // 0.5ms脉宽
+#define SERVO_MAX_PULSE_US 2500   // 2.5ms脉宽
 
 // 全局变量
 static timer_handle_t g_servo_timer = NULL;
@@ -48,8 +48,8 @@ static uint32_t g_pulse_start_time = 0;
 static void servo_timer_callback(uintptr_t data)
 {
     unused(data);
-    static uint32_t pulse_phase = 0;  // 0: 高电平阶段, 1: 低电平阶段
-    
+    static uint32_t pulse_phase = 0; // 0: 高电平阶段, 1: 低电平阶段
+
     if (pulse_phase == 0) {
         // 高电平阶段开始
         uapi_gpio_set_val(CONFIG_DF9GMS_PIN, GPIO_LEVEL_HIGH);
@@ -65,7 +65,7 @@ static void servo_timer_callback(uintptr_t data)
         uapi_timer_start(g_servo_timer, SERVO_PWM_PERIOD_US - g_current_pulse_width, servo_timer_callback, 0);
     }
 }
- 
+
 void DF9GMS_Init(void)
 {
     uapi_pin_set_mode(CONFIG_DF9GMS_PIN, HAL_PIO_FUNC_GPIO);
@@ -80,7 +80,7 @@ void ServoPWM_Init(void)
     uapi_timer_init();
     uapi_timer_adapter(SERVO_TIMER_INDEX, SERVO_TIMER_IRQ, SERVO_TIMER_PRIO);
     uapi_timer_create(SERVO_TIMER_INDEX, &g_servo_timer);
-    
+
     // 设置初始角度为0度
     g_current_angle = 0;
     g_current_pulse_width = SERVO_MIN_PULSE_US;
@@ -104,8 +104,7 @@ void ServoPWM_Deinit(void)
         g_servo_timer = NULL;
     }
 }
- 
- 
+
 // 将角度(0~180)映射为脉宽并启动持续PWM
 void ServoSetPos(unsigned int pos)
 {
@@ -115,61 +114,61 @@ void ServoSetPos(unsigned int pos)
 
     // 计算对应的脉宽 (us)
     unsigned int duty = SERVO_MIN_PULSE_US + (pos * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US)) / 180;
-    
+
     // 更新全局变量
     g_current_angle = pos;
     g_current_pulse_width = duty;
-    
+
     // 启动定时器开始持续发波
     if (g_servo_timer != NULL) {
         uapi_timer_start(g_servo_timer, g_current_pulse_width, servo_timer_callback, 0);
     }
 }
- 
+
 void DF9GMS_Task(void)
 {
-   // 初始化GPIO
-   DF9GMS_Init();
-   
-   // 初始化定时器PWM
-   ServoPWM_Init();
-   
-   // 舵机运动序列 - 每次调用ServoSetPos都会启动持续PWM
-   ServoSetPos(ANGLE_0);    // 转到0度并保持
-   uapi_systick_delay_ms(DELAY_S);  
-   
-   ServoSetPos(ANGLE_90);   // 转到90度并保持
-   uapi_systick_delay_ms(DELAY_S);  
-   
-   ServoSetPos(ANGLE_180);  // 转到180度并保持
-   uapi_systick_delay_ms(DELAY_S);  
-   
-   ServoSetPos(ANGLE_90);   // 转到90度并保持
-   uapi_systick_delay_ms(DELAY_S);  
-   
-   ServoSetPos(ANGLE_0);    // 转到0度并保持
-   uapi_systick_delay_ms(DELAY_S);  
-   
-   // 停止PWM
-   ServoPWM_Stop();
-   uapi_systick_delay_ms(DELAY_S);
-   
-   // 清理定时器资源
-   ServoPWM_Deinit();
+    // 初始化GPIO
+    DF9GMS_Init();
+
+    // 初始化定时器PWM
+    ServoPWM_Init();
+
+    // 舵机运动序列 - 每次调用ServoSetPos都会启动持续PWM
+    ServoSetPos(ANGLE_0); // 转到0度并保持
+    uapi_systick_delay_ms(DELAY_S);
+
+    ServoSetPos(ANGLE_90); // 转到90度并保持
+    uapi_systick_delay_ms(DELAY_S);
+
+    ServoSetPos(ANGLE_180); // 转到180度并保持
+    uapi_systick_delay_ms(DELAY_S);
+
+    ServoSetPos(ANGLE_90); // 转到90度并保持
+    uapi_systick_delay_ms(DELAY_S);
+
+    ServoSetPos(ANGLE_0); // 转到0度并保持
+    uapi_systick_delay_ms(DELAY_S);
+
+    // 停止PWM
+    ServoPWM_Stop();
+    uapi_systick_delay_ms(DELAY_S);
+
+    // 清理定时器资源
+    ServoPWM_Deinit();
 }
- 
- void DF9GMSSampleEntry(void)
- {
-     uint32_t ret;
-     osal_task *taskid;
-     // 创建任务调度
-     osal_kthread_lock();
-     // 创建任务1
-     taskid = osal_kthread_create((osal_kthread_handler)DF9GMS_Task, NULL, "DF9GMS_Task", DF9GMS_TASK_STACK_SIZE);
-     ret = osal_kthread_set_priority(taskid, DF9GMS_TASK_PRIO);
-     if (ret != OSAL_SUCCESS) {
-         printf("create task1 failed .\n");
-     }
-     osal_kthread_unlock();
- }
- app_run(DF9GMSSampleEntry);
+
+void DF9GMSSampleEntry(void)
+{
+    uint32_t ret;
+    osal_task *taskid;
+    // 创建任务调度
+    osal_kthread_lock();
+    // 创建任务1
+    taskid = osal_kthread_create((osal_kthread_handler)DF9GMS_Task, NULL, "DF9GMS_Task", DF9GMS_TASK_STACK_SIZE);
+    ret = osal_kthread_set_priority(taskid, DF9GMS_TASK_PRIO);
+    if (ret != OSAL_SUCCESS) {
+        printf("create task1 failed .\n");
+    }
+    osal_kthread_unlock();
+}
+app_run(DF9GMSSampleEntry);

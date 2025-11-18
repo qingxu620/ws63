@@ -23,6 +23,6 @@ errcode_t ble_uart_set_scan_parameters(void);
 #ifdef __cplusplus
 #if __cplusplus
 }
-#endif  /* __cplusplus */
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
+#endif /* __cplusplus */
 #endif

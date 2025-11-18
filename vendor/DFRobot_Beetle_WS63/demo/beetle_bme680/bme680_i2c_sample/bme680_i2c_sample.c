@@ -13,20 +13,21 @@
 
 #include "dfrobot_bme680_i2c.h"
 
-#define I2C_TASK_PRIO                     24
-#define I2C_TASK_STACK_SIZE               0x1000
+#define I2C_TASK_PRIO 24
+#define I2C_TASK_STACK_SIZE 0x1000
 #define DELAY_S 1000
-#define TEMP_RAW_TO_CELSIUS       100
-#define HUMIDITY_RAW_TO_PERCENT   1000
+#define TEMP_RAW_TO_CELSIUS 100
+#define HUMIDITY_RAW_TO_PERCENT 1000
 
 float seaLevel;
 
 void BME680_Task(void)
 {
 
-    DFRobot_BME680_I2C_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN, CONFIG_I2C_MASTER_BUS_ID);
+    DFRobot_BME680_I2C_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
+                            CONFIG_I2C_MASTER_BUS_ID);
 
-    while(begin() != 0) {
+    while (begin() != 0) {
         uapi_watchdog_kick();
         printf("bme begin failure\r\n");
         uapi_systick_delay_ms(DELAY_S * 2);
@@ -37,17 +38,17 @@ void BME680_Task(void)
     startConvert();
     uapi_systick_delay_ms(DELAY_S);
     update();
-    /*You can use an accurate altitude to calibrate sea level air pressure. 
-    *And then use this calibrated sea level pressure as a reference to obtain the calibrated altitude.
-    *In this case,525.0m is chendu accurate altitude.
-    */    
+    /*You can use an accurate altitude to calibrate sea level air pressure.
+     *And then use this calibrated sea level pressure as a reference to obtain the calibrated altitude.
+     *In this case,525.0m is chendu accurate altitude.
+     */
     seaLevel = readSeaLevel(525.0);
     sprintf(templine, "seaLevel: %.2f\r\n", seaLevel);
     printf(templine);
 #endif
 
     while (1) {
-        uapi_watchdog_kick();      
+        uapi_watchdog_kick();
         startConvert();
         uapi_systick_delay_ms(DELAY_S);
         update();
@@ -65,7 +66,6 @@ void BME680_Task(void)
         sprintf(templine, "calibrated altitude(m) : %.2f\r\n", readCalibratedAltitude(seaLevel));
         printf(templine);
 #endif
-        
     }
 }
 

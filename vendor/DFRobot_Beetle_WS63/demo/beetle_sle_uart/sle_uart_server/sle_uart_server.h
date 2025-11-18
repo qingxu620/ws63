@@ -21,22 +21,22 @@ extern "C" {
 #endif /* __cplusplus */
 
 /* Service UUID */
-#define SLE_UUID_SERVER_SERVICE        0x2222
+#define SLE_UUID_SERVER_SERVICE 0x2222
 
 /* Property UUID */
-#define SLE_UUID_SERVER_NTF_REPORT     0x2323
+#define SLE_UUID_SERVER_NTF_REPORT 0x2323
 
 /* Property Property */
-#define SLE_UUID_TEST_PROPERTIES  (SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE)
+#define SLE_UUID_TEST_PROPERTIES (SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE)
 
 /* Operation indication */
-#define SLE_UUID_TEST_OPERATION_INDICATION  (SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_WRITE)
+#define SLE_UUID_TEST_OPERATION_INDICATION (SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_WRITE)
 
 /* Descriptor Property */
-#define SLE_UUID_TEST_DESCRIPTOR   (SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE)
+#define SLE_UUID_TEST_DESCRIPTOR (SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE)
 
-errcode_t sle_uart_server_init(ssaps_read_request_callback ssaps_read_callback, ssaps_write_request_callback
-    ssaps_write_callback);
+errcode_t sle_uart_server_init(ssaps_read_request_callback ssaps_read_callback,
+                               ssaps_write_request_callback ssaps_write_callback);
 
 errcode_t sle_uart_server_send_report_by_uuid(const uint8_t *data, uint8_t len);
 
@@ -47,7 +47,6 @@ uint16_t sle_uart_client_is_connected(void);
 typedef void (*sle_uart_server_msg_queue)(uint8_t *buffer_addr, uint16_t buffer_size);
 
 void sle_uart_server_register_msg(sle_uart_server_msg_queue sle_uart_server_msg);
-
 
 uint16_t get_connect_id(void);
 

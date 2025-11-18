@@ -15,8 +15,9 @@
 #include "dfrobot_bme680.h"
 #include "i2c.h"
 
-
-void DFRobot_BME680_I2C_INIT(uint8_t I2CAddr, uint8_t iic_scl_master_pin, uint8_t iic_sda_master_pin, uint8_t iic_bus_id);
-
+void DFRobot_BME680_I2C_INIT(uint8_t I2CAddr,
+                             uint8_t iic_scl_master_pin,
+                             uint8_t iic_sda_master_pin,
+                             uint8_t iic_bus_id);
 
 #endif

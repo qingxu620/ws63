@@ -2,5 +2,8 @@
     "files.associations": {
         "Kconfig": "kconfig",
         "wifi_connect.h": "c"
-    }
+    },
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false
 }

@@ -36,6 +36,6 @@ uint8_t ble_uart_get_connection_state(void);
 #ifdef __cplusplus
 #if __cplusplus
 }
-#endif  /* __cplusplus */
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
+#endif /* __cplusplus */
 #endif

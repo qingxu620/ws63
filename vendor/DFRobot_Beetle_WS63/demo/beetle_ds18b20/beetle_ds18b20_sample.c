@@ -16,11 +16,10 @@
 
 #include "tcxo.h"
 
-#define DS_TASK_PRIO            24
-#define DS_TASK_STACK_SIZE      0x1000
+#define DS_TASK_PRIO 24
+#define DS_TASK_STACK_SIZE 0x1000
 #define READITV 10
 #define TASKITV 1000
-
 
 static inline uint32_t get_time_us(void)
 {
@@ -108,17 +107,23 @@ static uint8_t ow_read_byte(void)
 
 static bool ds18b20_read_temp_raw(int16_t *temp_raw)
 {
-    if (!ow_reset()) { return false; }
+    if (!ow_reset()) {
+        return false;
+    }
     ow_write_byte(0xCC); // SKIP ROM
     ow_write_byte(0x44); // CONVERT T
 
     uint32_t start = get_time_us();
     while ((uint32_t)(get_time_us() - start) < 800000) {
-        if (ow_read_bit()) { break; }
+        if (ow_read_bit()) {
+            break;
+        }
         osal_msleep(READITV);
     }
 
-    if (!ow_reset()) { return false; }
+    if (!ow_reset()) {
+        return false;
+    }
     ow_write_byte(0xCC);
     ow_write_byte(0xBE); // READ SCRATCHPAD
 

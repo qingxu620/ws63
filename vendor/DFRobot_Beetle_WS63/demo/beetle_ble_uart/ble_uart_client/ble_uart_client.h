@@ -21,10 +21,10 @@ extern "C" {
 #endif /* __cplusplus */
 
 typedef enum {
-BLE_PUBLIC_DEVICE_ADDRESS,
-BLE_RANDOM_DEVICE_ADDRESS,
-BLE_PUBLIC_IDENTITY_ADDRESS,
-BLE_RANDOM_STATIC_IDENTITY_ADDRESS
+    BLE_PUBLIC_DEVICE_ADDRESS,
+    BLE_RANDOM_DEVICE_ADDRESS,
+    BLE_PUBLIC_IDENTITY_ADDRESS,
+    BLE_RANDOM_STATIC_IDENTITY_ADDRESS
 } ble_address_t;
 
 errcode_t ble_uart_client_discover_all_service(uint16_t conn_id);

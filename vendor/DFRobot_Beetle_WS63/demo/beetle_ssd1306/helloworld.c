@@ -49,38 +49,38 @@ void OledTask(void)
         printf("i2c init failed, ret = %0x\r\n", ret);
     }
     ssd1306_Init();
-    
+
     // 定义不同字号的字体数组
     FontDef fonts[] = {Font_6x8, Font_7x10, Font_11x18, Font_16x26};
-    char* font_names[] = {"6x8", "7x10", "11x18", "16x26"};
+    char *font_names[] = {"6x8", "7x10", "11x18", "16x26"};
     int font_count = sizeof(fonts) / sizeof(fonts[0]);
     int current_font = 0;
-    
+
     while (1) {
         // 清屏
         ssd1306_Fill(Black);
-        
+
         // 显示当前使用的字体信息
         ssd1306_SetCursor(0, 0);
         ssd1306_DrawString("Font:", Font_6x8, White);
         ssd1306_DrawString(font_names[current_font], Font_6x8, White);
-        
+
         // 根据字体大小调整显示位置
         int y_pos = 20;
         if (fonts[current_font].FontHeight > 15) {
             y_pos = 15; // 大字体需要更靠上的位置
         }
-        
+
         // 显示主要文本
         ssd1306_SetCursor(0, y_pos);
         ssd1306_DrawString("Hello,DFRobot!", fonts[current_font], White);
-        
+
         // 更新屏幕
         ssd1306_UpdateScreen();
-        
+
         // 延时2秒
         uapi_systick_delay_ms(DELAY_S * 2);
-        
+
         // 切换到下一个字体
         current_font = (current_font + 1) % font_count;
     }

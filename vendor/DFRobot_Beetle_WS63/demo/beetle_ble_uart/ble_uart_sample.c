@@ -13,17 +13,17 @@
 #include "uart.h"
 
 #if defined(CONFIG_SAMPLE_SUPPORT_BLE_UART_SERVER)
-#define BLE_UART_TASK_STACK_SIZE            0x1200
+#define BLE_UART_TASK_STACK_SIZE 0x1200
 #include "bts_gatt_server.h"
 #include "ble_uart_server.h"
 #elif defined(CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT)
-#define BLE_UART_TASK_STACK_SIZE            0x1200
+#define BLE_UART_TASK_STACK_SIZE 0x1200
 #include "bts_gatt_client.h"
 #include "ble_uart_client.h"
 #endif /* CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT */
 
-#define BLE_UART_TASK_PRIO                  28
-#define BLE_UART_BT_STACK_POWER_MS      10000
+#define BLE_UART_TASK_PRIO 28
+#define BLE_UART_BT_STACK_POWER_MS 10000
 
 typedef struct {
     uint8_t *value;
@@ -38,8 +38,8 @@ static void ble_uart_read_int_handler(const void *buffer, uint16_t length, bool 
     osal_printk("ble_uart_read_int_handler server.\r\n");
     unused(error);
     if (ble_uart_get_connection_state() != 0) {
-        msg_data_t msg_data = { 0 };
-        void* buffer_cpy = osal_vmalloc(length);
+        msg_data_t msg_data = {0};
+        void *buffer_cpy = osal_vmalloc(length);
         if (memcpy_s(buffer_cpy, length, buffer, length) != EOK) {
             osal_vfree(buffer_cpy);
             return;
@@ -54,15 +54,14 @@ static void *ble_uart_server_task(const char *arg)
 {
     unused(arg);
     ble_uart_server_init();
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_BLE_UART_BUS,
-                                                   UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE,
-                                                   1, ble_uart_read_int_handler);
+    errcode_t ret = uapi_uart_register_rx_callback(
+        CONFIG_BLE_UART_BUS, UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, ble_uart_read_int_handler);
     if (ret != ERRCODE_SUCC) {
         osal_printk("Register uart callback fail.");
         return NULL;
     }
     while (1) {
-        msg_data_t msg_data = { 0 };
+        msg_data_t msg_data = {0};
         int msg_ret = osal_msg_queue_read_copy(mouse_msg_queue, &msg_data, &msg_rev_size, OSAL_WAIT_FOREVER);
         if (msg_ret != OSAL_SUCCESS) {
             osal_printk("msg queue read copy fail.");
@@ -83,8 +82,8 @@ static void ble_uart_read_int_handler(const void *buffer, uint16_t length, bool 
 {
     osal_printk("ble_uart_read_int_handler client.\r\n");
     unused(error);
-    msg_data_t msg_data = { 0 };
-    void* buffer_cpy = osal_vmalloc(length);
+    msg_data_t msg_data = {0};
+    void *buffer_cpy = osal_vmalloc(length);
     if (memcpy_s(buffer_cpy, length, buffer, length) != EOK) {
         osal_vfree(buffer_cpy);
         return;
@@ -99,15 +98,14 @@ static void *ble_uart_client_task(const char *arg)
     unused(arg);
     osal_printk("ble_uart_client_task entry.");
     ble_uart_client_init();
-    errcode_t ret = uapi_uart_register_rx_callback(CONFIG_BLE_UART_BUS,
-                                                   UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE,
-                                                   1, ble_uart_read_int_handler);
+    errcode_t ret = uapi_uart_register_rx_callback(
+        CONFIG_BLE_UART_BUS, UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE, 1, ble_uart_read_int_handler);
     if (ret != ERRCODE_SUCC) {
         osal_printk("Register uart callback fail.");
         return NULL;
     }
     while (1) {
-        msg_data_t msg_data = { 0 };
+        msg_data_t msg_data = {0};
         int msg_ret = osal_msg_queue_read_copy(mouse_msg_queue, &msg_data, &msg_rev_size, OSAL_WAIT_FOREVER);
         if (msg_ret != OSAL_SUCCESS) {
             osal_printk("msg queue read copy fail.");
@@ -124,7 +122,7 @@ static void *ble_uart_client_task(const char *arg)
     }
     return NULL;
 }
-#endif  /* CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT */
+#endif /* CONFIG_SAMPLE_SUPPORT_BLE_UART_CLIENT */
 
 static void ble_uart_entry(void)
 {
