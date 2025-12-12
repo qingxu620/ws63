@@ -104,6 +104,7 @@
     "relativePath": "demo/radar_led",
     "chip": "WS63",
     "buildDef": "CONFIG_SAMPLE_SUPPORT_RADAR_SOFTAP = y",
+	"name":"radar_led_softap",
     "needSmoke": "false"
   },
   {
