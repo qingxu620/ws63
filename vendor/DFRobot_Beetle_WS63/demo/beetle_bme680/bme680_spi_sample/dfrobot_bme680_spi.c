@@ -6,7 +6,7 @@
  * @author Martin(Martin@dfrobot.com)
  * @version  V1.0
  * @date  2025-9-29
- * @url https://github.com/DFRobot/DFRobot_BME680
+ * @url https://github.com/DFRobot/dfrobot_bme680
  */
 #include "dfrobot_bme680_spi.h"
 
@@ -24,17 +24,17 @@
 #define BME680_MAX_TRANSFER_LEN 1
 #define SPI_MASTER_PIN_MODE 3
 
-uint8_t _spi_bus_id;
-static uint8_t bme680_cs_pin;
+uint8_t g_spi_bus_id;
+static uint8_t g_bme680_cs_pin;
 
 static void bme680_cs_low(void)
 {
-    uapi_gpio_set_val(bme680_cs_pin, GPIO_LEVEL_LOW); // CS低电平有效
+    uapi_gpio_set_val(g_bme680_cs_pin, GPIO_LEVEL_LOW); // CS低电平有效
 }
 
 static void bme680_cs_high(void)
 {
-    uapi_gpio_set_val(bme680_cs_pin, GPIO_LEVEL_HIGH);
+    uapi_gpio_set_val(g_bme680_cs_pin, GPIO_LEVEL_HIGH);
 }
 
 static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
@@ -52,7 +52,7 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
     rx = 0;
     spi_xfer_data_t xfer_addr = {
         .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
-    ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
+    ret = uapi_spi_master_writeread(g_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
         return -1;
@@ -64,7 +64,7 @@ static int8_t bme680_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
         rx = 0;
         spi_xfer_data_t xfer_data = {
             .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
-        ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
+        ret = uapi_spi_master_writeread(g_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
             return -1;
@@ -91,7 +91,7 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
     rx = 0;
     spi_xfer_data_t xfer_addr = {
         .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
-    ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
+    ret = uapi_spi_master_writeread(g_spi_bus_id, &xfer_addr, BME680_SPI_TIMEOUT);
     if (ret != ERRCODE_SUCC) {
         bme680_cs_high();
         return -1;
@@ -103,7 +103,7 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
         rx = 0;
         spi_xfer_data_t xfer_data = {
             .tx_buff = &tx, .tx_bytes = BME680_MAX_TRANSFER_LEN, .rx_buff = &rx, .rx_bytes = BME680_MAX_TRANSFER_LEN};
-        ret = uapi_spi_master_writeread(_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
+        ret = uapi_spi_master_writeread(g_spi_bus_id, &xfer_data, BME680_SPI_TIMEOUT);
         if (ret != ERRCODE_SUCC) {
             bme680_cs_high();
             return -1;
@@ -115,11 +115,11 @@ static int8_t bme680_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
 }
 
 /* ---------------- BME680 SPI 初始化 ---------------- */
-void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi, uint8_t pin_clk, uint8_t spi_bus_id)
+void dfrobot_bme680_spi_init(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi, uint8_t pin_clk, uint8_t spi_bus_id)
 {
-    bme680_cs_pin = pin_cs;
+    g_bme680_cs_pin = pin_cs;
 
-    _spi_bus_id = spi_bus_id;
+    g_spi_bus_id = spi_bus_id;
 
     uapi_pin_set_mode(pin_miso, SPI_MASTER_PIN_MODE);
     uapi_pin_set_mode(pin_mosi, SPI_MASTER_PIN_MODE);
@@ -146,10 +146,10 @@ void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi,
 
     ext_config.qspi_param.wait_cycles = SPI_WAIT_CYCLES;
 
-    int ret = uapi_spi_init(_spi_bus_id, &config, &ext_config);
+    int ret = uapi_spi_init(g_spi_bus_id, &config, &ext_config);
     if (ret != 0) {
         printf("spi init fail %0x\r\n", ret);
     }
 
-    DFRobot_BME680(bme680_spi_read, bme680_spi_write, bme680_delay_ms, BME680_INTERFACE_SPI);
+    dfrobot_bme680(bme680_spi_read, bme680_spi_write, bme680_delay_ms, BME680_INTERFACE_SPI);
 }

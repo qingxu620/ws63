@@ -1,15 +1,15 @@
 /**！
  * @file interrupt_sample.c
  * @brief Interrupt detection
- * @n In this example, the enable eZHigherThanTh interrupt event means when the acceleration in the Z direction exceeds
+ * @n In this example, the enable e_z_higher_than_th interrupt event means when the acceleration in the Z direction exceeds
  * the
  * @n threshold set by the program, the interrupt level can be detected on the interrupt pin int1/int2 we set, and the
  * level change on the
  * @n interrupt pin can be used to determine whether the interrupt occurs. The following are the 6 settable interrupt
- * events：eXHigherThanTh,
- * @n eXLowerThanTh, eYHigherThanTh, eYLowerThanTh, eZHigherThanTh, eZLowerThanTh. For a detailed explanation of each of
+ * events：e_x_higher_than_th,
+ * @n e_x_lower_than_th, e_y_higher_than_th, e_y_lower_than_th, e_z_higher_than_th, e_z_lower_than_th. For a detailed explanation of each of
  * them,
- * @n please look up the comments of the enableInterruptEvent() function.
+ * @n please look up the comments of the enable_interrupt_event() function.
  * @n This example needs to connect the int2/int1 pin of the module to the interrupt pin of the motherboard.
  * @copyright  Copyright (c) 2025 DFRobot Co.Ltd (http://www.dfrobot.com)
  * @license     The MIT License (MIT)
@@ -25,15 +25,16 @@
 #define DELAY_S 1000
 #define DELAY_MS 1
 #define THRESHOLD 6
+#define INTERRUPT_DELAY_MS (300 * DELAY_MS)
 
 // Interrupt generation flag
-volatile bool intFlag = false;
+volatile bool int_flag = false;
 
-void interEvent(pin_t pin, uintptr_t param)
+void inter_event(pin_t pin, uintptr_t param)
 {
     UNUSED(pin);
     UNUSED(param);
-    intFlag = true;
+    int_flag = true;
 }
 
 // from Arduino
@@ -43,7 +44,7 @@ void interEvent(pin_t pin, uintptr_t param)
 #define ONLOW 0x00000004
 #define ONHIGH 0x00000005
 
-void attachInterrupt(uint8_t pin, gpio_callback_t callback, uint32_t mode)
+void attach_interrupt(uint8_t pin, gpio_callback_t callback, uint32_t mode)
 {
     uapi_pin_set_mode(pin, HAL_PIO_FUNC_GPIO);
     uapi_gpio_set_dir(pin, GPIO_DIRECTION_INPUT);
@@ -56,7 +57,7 @@ void attachInterrupt(uint8_t pin, gpio_callback_t callback, uint32_t mode)
 static void interrupt_task(void)
 {
     // Chip initialization
-    while (!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
+    while (!dfrobot_lis2dh12_init(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
                                   CONFIG_I2C_MASTER_BUS_ID)) {
         uapi_watchdog_kick();
         osal_printk("Initialization failed, please check the connection and I2C address settings\r\n");
@@ -64,52 +65,52 @@ static void interrupt_task(void)
     }
 
     // Get chip id
-    osal_printk("chip id : %X\r\n", getID());
+    osal_printk("chip id : %X\r\n", get_id());
 
     /**
         set range:Range(g)
-                eLIS2DH12_2g,/< ±2g>/
-                eLIS2DH12_4g,/< ±4g>/
-                eLIS2DH12_8g,/< ±8g>/
-                eLIS2DH12_16g,/< ±16g>/
+                e_lis2dh12_2g,/< ±2g>/
+                e_lis2dh12_4g,/< ±4g>/
+                e_lis2dh12_8g,/< ±8g>/
+                e_lis2dh12_16g,/< ±16g>/
     */
-    setRange(eLIS2DH12_16g);
+    set_range(e_lis2dh12_16g);
 
     /**
         Set data measurement rate：
-        ePowerDown_0Hz
-        eLowPower_1Hz
-        eLowPower_10Hz
-        eLowPower_25Hz
-        eLowPower_50Hz
-        eLowPower_100Hz
-        eLowPower_200Hz
-        eLowPower_400Hz
+        e_power_down_0hz
+        e_low_power_1hz
+        e_low_power_10hz
+        e_low_power_25hz
+        e_low_power_50hz
+        e_low_power_100hz
+        e_low_power_200hz
+        e_low_power_400hz
     */
-    setAcquireRate(eLowPower_10Hz);
+    set_acquire_rate(e_low_power_10hz);
 
-    attachInterrupt(CONFIG_INTERRUPT_PIN, interEvent, CHANGE);
+    attach_interrupt(CONFIG_INTERRUPT_PIN, inter_event, CHANGE);
 
     /**
     Set the threshold of interrupt source 1 interrupt
     threshold:Threshold(g)
     */
-    setInt1Th(THRESHOLD); // Unit: g
+    set_int1_th(THRESHOLD); // Unit: g
 
     /*!
     Enable interrupt
     Interrupt pin selection:
-      eINT1 = 0,/<int1 >/
-      eINT2,/<int2>/
+      e_int1 = 0,/<int1 >/
+      e_int2,/<int2>/
     Interrupt event selection:
-      eXLowerThanTh ,/<The acceleration in the x direction is less than the threshold>/
-      eXHigherThanTh ,/<The acceleration in the x direction is greater than the threshold>/
-      eYLowerThanTh,/<The acceleration in the y direction is less than the threshold>/
-      eYHigherThanTh,/<The acceleration in the y direction is greater than the threshold>/
-      eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
-      eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
+      e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
+      e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
+      e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
+      e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
+      e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
+      e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
     */
-    enableInterruptEvent(eINT1 /* int pin */, eZHigherThanTh /* interrupt event */);
+    enable_interrupt_event(e_int1 /* int pin */, e_z_higher_than_th /* interrupt event */);
 
     uapi_systick_delay_ms(DELAY_S);
 
@@ -119,20 +120,20 @@ static void interrupt_task(void)
         long ax;
         long ay;
         long az;
-        // The measurement range can be ±100g or ±200g set by the setRange() function
-        ax = readAccX(); // Get the acceleration in the x direction
-        ay = readAccY(); // Get the acceleration in the y direction
-        az = readAccZ(); // Get the acceleration in the z direction
+        // The measurement range can be ±100g or ±200g set by the set_range() function
+        ax = read_acc_x(); // Get the acceleration in the x direction
+        ay = read_acc_y(); // Get the acceleration in the y direction
+        az = read_acc_z(); // Get the acceleration in the z direction
         // Print acceleration
         osal_printk("x: %d mg\t y: %d mg\t z: %d mg\r\n", ax, ay, az);
-        uapi_systick_delay_ms(300 * DELAY_MS);
+        uapi_systick_delay_ms(INTERRUPT_DELAY_MS);
         // The interrupt flag is set
-        if (intFlag == true) {
+        if (int_flag == true) {
             // Check whether the interrupt event is generated in interrupt 1
-            if (getInt1Event(eZHigherThanTh)) {
+            if (get_int1_event(e_z_higher_than_th)) {
                 osal_printk("The acceleration in the z direction is greater than the threshold\r\n");
             }
-            intFlag = false;
+            int_flag = false;
         }
     }
 }

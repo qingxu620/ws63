@@ -34,13 +34,13 @@
 /* 超时时间4990ms，单位10ms */
 #define SLE_CONN_MAX_LATENCY 0x1F3
 /* 广播发送功率 */
-#define SLE_ADV_TX_POWER 10
+#define SLE_ADV_TX_POWER 18
 /* 广播ID */
 #define SLE_ADV_HANDLE_DEFAULT 1
 /* 最大广播数据长度 */
 #define SLE_ADV_DATA_LEN_MAX 251
 /* 广播名称 */
-static uint8_t sle_local_name[NAME_MAX_LENGTH] = "sle_uart_server";
+static uint8_t g_sle_local_name[NAME_MAX_LENGTH] = "sle_uart_server";
 #define SLE_SERVER_INIT_DELAY_MS 1000
 #define sample_at_log_print(fmt, args...) osal_printk(fmt, ##args)
 #define SLE_UART_SERVER_LOG "[sle uart server]"
@@ -50,8 +50,8 @@ static uint16_t sle_set_adv_local_name(uint8_t *adv_data, uint16_t max_len)
     errno_t ret;
     uint8_t index = 0;
 
-    uint8_t *local_name = sle_local_name;
-    uint8_t local_name_len = sizeof(sle_local_name) - 1;
+    uint8_t *local_name = g_sle_local_name;
+    uint8_t local_name_len = sizeof(g_sle_local_name) - 1;
     sample_at_log_print("%s local_name_len = %d\r\n", SLE_UART_SERVER_LOG, local_name_len);
     sample_at_log_print("%s local_name: ", SLE_UART_SERVER_LOG);
     for (uint8_t i = 0; i < local_name_len; i++) {
@@ -143,7 +143,7 @@ static int sle_set_default_announce_param(void)
     param.conn_interval_max = SLE_CONN_INTV_MAX_DEFAULT;
     param.conn_max_latency = SLE_CONN_MAX_LATENCY;
     param.conn_supervision_timeout = SLE_CONN_SUPERVISION_TIMEOUT_DEFAULT;
-    param.announce_tx_power = 18;
+    param.announce_tx_power = SLE_ADV_TX_POWER;
     param.own_addr.type = 0;
     ret = memcpy_s(param.own_addr.addr, SLE_ADDR_LEN, local_addr, SLE_ADDR_LEN);
     if (ret != EOK) {

@@ -15,11 +15,12 @@
 #define I2C_TASK_STACK_SIZE 0x1000
 #define DELAY_S 1000
 #define DELAY_MS 1
+#define ACCELERATION_DELAY_MS (300 * DELAY_MS)
 
 static void get_acceleration_task(void)
 {
     // Chip initialization
-    while (!DFRobot_LIS2DH12_INIT(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
+    while (!dfrobot_lis2dh12_init(CONFIG_I2C_SLAVE_ADDR, CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_SDA_MASTER_PIN,
                                   CONFIG_I2C_MASTER_BUS_ID)) {
         uapi_watchdog_kick();
         osal_printk("Initialization failed, please check the connection and I2C address settings\r\n");
@@ -27,29 +28,29 @@ static void get_acceleration_task(void)
     }
 
     // Get chip id
-    osal_printk("chip id : %X\r\n", getID());
+    osal_printk("chip id : %X\r\n", get_id());
 
     /**
       set range:Range(g)
-                eLIS2DH12_2g,/< ±2g>/
-                eLIS2DH12_4g,/< ±4g>/
-                eLIS2DH12_8g,/< ±8g>/
-                eLIS2DH12_16g,/< ±16g>/
+                e_lis2dh12_2g,/< ±2g>/
+                e_lis2dh12_4g,/< ±4g>/
+                e_lis2dh12_8g,/< ±8g>/
+                e_lis2dh12_16g,/< ±16g>/
     */
-    setRange(eLIS2DH12_16g);
+    set_range(e_lis2dh12_16g);
 
     /**
       Set data measurement rate：
-        ePowerDown_0Hz
-        eLowPower_1Hz
-        eLowPower_10Hz
-        eLowPower_25Hz
-        eLowPower_50Hz
-        eLowPower_100Hz
-        eLowPower_200Hz
-        eLowPower_400Hz
+        e_power_down_0hz
+        e_low_power_1hz
+        e_low_power_10hz
+        e_low_power_25hz
+        e_low_power_50hz
+        e_low_power_100hz
+        e_low_power_200hz
+        e_low_power_400hz
     */
-    setAcquireRate(eLowPower_10Hz);
+    set_acquire_rate(e_low_power_10hz);
     osal_printk("Acceleration:\r\n");
     uapi_systick_delay_ms(DELAY_S);
 
@@ -59,14 +60,14 @@ static void get_acceleration_task(void)
         long ax;
         long ay;
         long az;
-        // The measurement range can be ±100g or ±200g set by the setRange() function
-        ax = readAccX(); // Get the acceleration in the x direction
-        ay = readAccY(); // Get the acceleration in the y direction
-        az = readAccZ(); // Get the acceleration in the z direction
+        // The measurement range can be ±100g or ±200g set by the set_range() function
+        ax = read_acc_x(); // Get the acceleration in the x direction
+        ay = read_acc_y(); // Get the acceleration in the y direction
+        az = read_acc_z(); // Get the acceleration in the z direction
         // Print acceleration
         osal_printk("x: %d mg\t y: %d mg\t z: %d mg\r\n", ax, ay, az);
 
-        uapi_systick_delay_ms(300 * DELAY_MS);
+        uapi_systick_delay_ms(ACCELERATION_DELAY_MS);
     }
 }
 

@@ -27,10 +27,11 @@ char *g_msg = CONFIG_MQTT_PUB_MSG;
 MQTTClient client;
 volatile MQTTClient_deliveryToken deliveredToken;
 extern int MQTTClient_init(void);
+
 /* 回调函数，处理消息到达 */
 void delivered(void *context, MQTTClient_deliveryToken dt)
 {
-    unused(context);
+    (void)context;
     printf("Message with token value %d delivery confirmed\n", dt);
     deliveredToken = dt;
 }
@@ -38,8 +39,8 @@ void delivered(void *context, MQTTClient_deliveryToken dt)
 /* 回调函数，处理接收到的消息 */
 int messageArrived(void *context, char *topicname, int topiclen, MQTTClient_message *message)
 {
-    unused(context);
-    unused(topiclen);
+    (void)context;
+    (void)topiclen;
     printf("Message arrived on topic: %s\n", topicname);
     printf("Message: %.*s\n", message->payloadlen, (char *)message->payload);
     return 1; // 表示消息已被处理
@@ -48,7 +49,7 @@ int messageArrived(void *context, char *topicname, int topiclen, MQTTClient_mess
 /* 回调函数，处理连接丢失 */
 void connlost(void *context, char *cause)
 {
-    unused(context);
+    (void)context;
     printf("Connection lost: %s\n", cause);
 }
 /* 消息订阅 */

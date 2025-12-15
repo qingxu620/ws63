@@ -7,7 +7,7 @@
  * @author Martin(Martin@dfrobot.com)
  * @version  V1.0
  * @date  2025-9-29
- * @url https://github.com/DFRobot/DFRobot_BME680
+ * @url https://github.com/DFRobot/dfrobot_bme680
  */
 
 #ifndef BME680_DEFS_H_
@@ -180,6 +180,150 @@
 #define BME680_GAS_REG_BUF_LENGTH UINT8_C(20)
 #define BME680_GAS_HEATER_PROF_LEN_MAX UINT8_C(10)
 
+/** Register pair and buffer calculation macros */
+#define BME680_REG_PAIR_MULTIPLIER UINT8_C(2)
+#define BME680_TMP_BUFFER_HALF (BME680_TMP_BUFFER_LENGTH / BME680_REG_PAIR_MULTIPLIER)
+#define BME680_GAS_CONFIG_REG_COUNT UINT8_C(2)
+
+/** Duration calculation constants */
+#define BME680_TPH_DUR_COEFF UINT32_C(1963)
+#define BME680_TPH_SWITCH_DUR_BASE UINT32_C(477)
+#define BME680_TPH_SWITCH_MULTIPLIER UINT8_C(4)
+#define BME680_GAS_MEAS_DUR_MULTIPLIER UINT8_C(5)
+#define BME680_DUR_ROUNDING_FACTOR UINT32_C(500)
+#define BME680_MS_PER_SEC UINT32_C(1000)
+#define BME680_WAKE_UP_DUR_MS UINT32_C(1)
+
+/** Bit shift and mask constants */
+#define BME680_RHRANGE_SHIFT UINT8_C(4)
+#define BME680_RHRANGE_DIVISOR UINT8_C(16)
+#define BME680_RSERROR_DIVISOR UINT8_C(16)
+
+/** ADC data parsing constants */
+#define BME680_ADC_PRES_MULTIPLIER_MSB UINT32_C(4096)
+#define BME680_ADC_PRES_MULTIPLIER_MID UINT8_C(16)
+#define BME680_ADC_PRES_DIVISOR UINT8_C(16)
+#define BME680_ADC_TEMP_MULTIPLIER_MSB UINT32_C(4096)
+#define BME680_ADC_TEMP_MULTIPLIER_MID UINT8_C(16)
+#define BME680_ADC_TEMP_DIVISOR UINT8_C(16)
+#define BME680_ADC_HUM_MULTIPLIER UINT16_C(256)
+#define BME680_ADC_GAS_MULTIPLIER UINT8_C(4)
+#define BME680_ADC_GAS_DIVISOR UINT8_C(64)
+
+/** Temperature calculation constants */
+#define BME680_TEMP_CALC_MULTIPLIER UINT8_C(5)
+#define BME680_TEMP_CALC_OFFSET UINT8_C(128)
+#define BME680_TEMP_SHIFT_RIGHT UINT8_C(8)
+#define BME680_TEMP_ADC_SHIFT_RIGHT UINT8_C(3)
+#define BME680_TEMP_PAR_T1_SHIFT_LEFT UINT8_C(1)
+#define BME680_TEMP_VAR2_SHIFT_RIGHT UINT8_C(11)
+#define BME680_TEMP_VAR3_SHIFT_RIGHT UINT8_C(12)
+#define BME680_TEMP_VAR3_SHIFT_RIGHT_2 UINT8_C(14)
+#define BME680_TEMP_PAR_T3_SHIFT_LEFT UINT8_C(4)
+
+/** Pressure calculation constants */
+#define BME680_PRES_VAR1_SHIFT_RIGHT UINT8_C(1)
+#define BME680_PRES_VAR1_SUBTRACT UINT32_C(64000)
+#define BME680_PRES_VAR2_SHIFT_RIGHT UINT8_C(2)
+#define BME680_PRES_VAR2_SHIFT_RIGHT_2 UINT8_C(11)
+#define BME680_PRES_VAR2_SHIFT_RIGHT_3 UINT8_C(2)
+#define BME680_PRES_VAR2_SHIFT_RIGHT_4 UINT8_C(12)
+#define BME680_PRES_VAR1_SHIFT_RIGHT_2 UINT8_C(13)
+#define BME680_PRES_VAR1_SHIFT_RIGHT_3 UINT8_C(3)
+#define BME680_PRES_VAR1_SHIFT_RIGHT_4 UINT8_C(18)
+#define BME680_PRES_VAR1_SHIFT_RIGHT_5 UINT8_C(15)
+#define BME680_PRES_VAR1_ADD UINT32_C(32768)
+#define BME680_PRES_COMP_SUBTRACT UINT32_C(1048576)
+#define BME680_PRES_COMP_MULTIPLIER UINT32_C(3125)
+#define BME680_PRES_VAR4_SHIFT_LEFT UINT8_C(31)
+#define BME680_PRES_COMP_SHIFT_LEFT UINT8_C(1)
+#define BME680_PRES_COMP_SHIFT_RIGHT UINT8_C(3)
+#define BME680_PRES_COMP_SHIFT_RIGHT_2 UINT8_C(13)
+#define BME680_PRES_COMP_SHIFT_RIGHT_3 UINT8_C(12)
+#define BME680_PRES_COMP_SHIFT_RIGHT_4 UINT8_C(2)
+#define BME680_PRES_COMP_SHIFT_RIGHT_5 UINT8_C(8)
+#define BME680_PRES_COMP_SHIFT_RIGHT_6 UINT8_C(17)
+#define BME680_PRES_COMP_SHIFT_RIGHT_7 UINT8_C(4)
+#define BME680_PRES_PAR_P3_SHIFT_LEFT UINT8_C(5)
+#define BME680_PRES_PAR_P4_SHIFT_LEFT UINT8_C(16)
+#define BME680_PRES_PAR_P7_SHIFT_LEFT UINT8_C(7)
+#define BME680_PRES_PAR_P8_SHIFT_RIGHT UINT8_C(13)
+
+/** Humidity calculation constants */
+#define BME680_HUM_PAR_H1_MULTIPLIER UINT8_C(16)
+#define BME680_HUM_PERCENT_DIVISOR UINT8_C(100)
+#define BME680_HUM_VAR1_SHIFT_RIGHT UINT8_C(1)
+#define BME680_HUM_VAR2_SHIFT_RIGHT UINT8_C(6)
+#define BME680_HUM_VAR2_SHIFT_LEFT UINT8_C(14)
+#define BME680_HUM_VAR2_SHIFT_RIGHT_2 UINT8_C(10)
+#define BME680_HUM_VAR4_SHIFT_LEFT UINT8_C(7)
+#define BME680_HUM_VAR4_SHIFT_RIGHT UINT8_C(4)
+#define BME680_HUM_VAR5_SHIFT_RIGHT UINT8_C(14)
+#define BME680_HUM_VAR5_SHIFT_RIGHT_2 UINT8_C(10)
+#define BME680_HUM_VAR6_SHIFT_RIGHT UINT8_C(1)
+#define BME680_HUM_CALC_SHIFT_RIGHT UINT8_C(10)
+#define BME680_HUM_CALC_MULTIPLIER UINT32_C(1000)
+#define BME680_HUM_CALC_SHIFT_RIGHT_2 UINT8_C(12)
+#define BME680_HUM_MAX_VALUE INT32_C(100000)
+#define BME680_HUM_MIN_VALUE INT32_C(0)
+
+/** Gas resistance calculation constants */
+#define BME680_GAS_VAR1_BASE UINT32_C(1340)
+#define BME680_GAS_VAR1_MULTIPLIER UINT8_C(5)
+#define BME680_GAS_VAR1_SHIFT_RIGHT UINT8_C(16)
+#define BME680_GAS_VAR2_SHIFT_LEFT UINT8_C(15)
+#define BME680_GAS_VAR2_SUBTRACT UINT32_C(16777216)
+#define BME680_GAS_VAR2_SHIFT_RIGHT UINT8_C(1)
+#define BME680_GAS_VAR3_SHIFT_RIGHT UINT8_C(9)
+
+/** Heater resistance calculation constants */
+#define BME680_HEATR_TEMP_MIN UINT16_C(200)
+#define BME680_HEATR_TEMP_MAX UINT16_C(400)
+#define BME680_HEATR_AMBIENT_DIVISOR UINT16_C(1000)
+#define BME680_HEATR_AMBIENT_MULTIPLIER UINT16_C(256)
+#define BME680_HEATR_PAR_GH1_ADD UINT16_C(784)
+#define BME680_HEATR_PAR_GH2_ADD UINT32_C(154009)
+#define BME680_HEATR_TEMP_MULTIPLIER UINT8_C(5)
+#define BME680_HEATR_TEMP_DIVISOR UINT8_C(100)
+#define BME680_HEATR_TEMP_ADD UINT32_C(3276800)
+#define BME680_HEATR_TEMP_DIVISOR_2 UINT8_C(10)
+#define BME680_HEATR_VAR3_SHIFT_RIGHT UINT8_C(2)
+#define BME680_HEATR_RES_RANGE_ADD UINT8_C(4)
+#define BME680_HEATR_VAR5_MULTIPLIER UINT8_C(131)
+#define BME680_HEATR_VAR5_ADD UINT32_C(65536)
+#define BME680_HEATR_VAR5_SUBTRACT UINT16_C(250)
+#define BME680_HEATR_VAR5_MULTIPLIER_2 UINT8_C(34)
+#define BME680_HEATR_ROUNDING_ADD UINT8_C(50)
+#define BME680_HEATR_ROUNDING_DIVISOR UINT8_C(100)
+
+/** Heater duration calculation constants */
+#define BME680_HEATR_DUR_MAX_THRESHOLD UINT16_C(0xfc0)
+#define BME680_HEATR_DUR_MAX_VALUE UINT8_C(0xff)
+#define BME680_HEATR_DUR_DIVISOR UINT8_C(4)
+#define BME680_HEATR_DUR_FACTOR_MULTIPLIER UINT8_C(64)
+#define BME680_HEATR_DUR_THRESHOLD UINT8_C(0x3F)
+
+/** Field data reading constants */
+#define BME680_FIELD_READ_TRIES UINT8_C(10)
+
+/** Field data buffer index definitions */
+#define BME680_FIELD_STATUS_INDEX UINT8_C(0)
+#define BME680_FIELD_MEAS_INDEX UINT8_C(1)
+#define BME680_FIELD_PRES_MSB_INDEX UINT8_C(2)
+#define BME680_FIELD_PRES_LSB_INDEX UINT8_C(3)
+#define BME680_FIELD_PRES_XLSB_INDEX UINT8_C(4)
+#define BME680_FIELD_TEMP_MSB_INDEX UINT8_C(5)
+#define BME680_FIELD_TEMP_LSB_INDEX UINT8_C(6)
+#define BME680_FIELD_TEMP_XLSB_INDEX UINT8_C(7)
+#define BME680_FIELD_HUM_MSB_INDEX UINT8_C(8)
+#define BME680_FIELD_HUM_LSB_INDEX UINT8_C(9)
+#define BME680_FIELD_GAS_RES_MSB_INDEX UINT8_C(13)
+#define BME680_FIELD_GAS_RES_LSB_INDEX UINT8_C(14)
+
+/** Temporary buffer index definitions */
+#define BME680_TMP_BUFF_REG_ADDR_INDEX UINT8_C(0)
+#define BME680_TMP_BUFF_REG_DATA_INDEX UINT8_C(1)
+
 /** Settings selector */
 #define BME680_OST_SEL UINT16_C(1)
 #define BME680_OSP_SEL UINT16_C(2)
@@ -269,17 +413,35 @@
 #define BME680_REG_RUN_GAS_INDEX UINT8_C(1)
 #define BME680_REG_HCTRL_INDEX UINT8_C(0)
 
-/** Macro to combine two 8 bit data's to form a 16 bit data */
-#define BME680_CONCAT_BYTES(msb, lsb) (((uint16_t)(msb) << 8) | (uint16_t)(lsb))
+/** Inline function to combine two 8 bit data's to form a 16 bit data */
+static inline uint16_t bme680_concat_bytes(uint8_t msb, uint8_t lsb)
+{
+    return ((uint16_t)msb << 8) | (uint16_t)lsb;
+}
 
-/** Macro to SET and GET BITS of a register */
-#define BME680_SET_BITS(reg_data, bitname, data) \
-    (((reg_data) & ~(bitname##_MSK)) | (((data) << bitname##_POS) & bitname##_MSK))
-#define BME680_GET_BITS(reg_data, bitname) (((reg_data) & (bitname##_MSK)) >> (bitname##_POS))
+/** Inline function to SET BITS of a register */
+static inline uint8_t bme680_set_bits(uint8_t reg_data, uint8_t mask, uint8_t pos, uint8_t data)
+{
+    return (reg_data & ~mask) | ((data << pos) & mask);
+}
 
-/** Macro variant to handle the bitname position if it is zero */
-#define BME680_SET_BITS_POS_0(reg_data, bitname, data) (((reg_data) & ~(bitname##_MSK)) | ((data) & bitname##_MSK))
-#define BME680_GET_BITS_POS_0(reg_data, bitname) ((reg_data) & (bitname##_MSK))
+/** Inline function to GET BITS of a register */
+static inline uint8_t bme680_get_bits(uint8_t reg_data, uint8_t mask, uint8_t pos)
+{
+    return (reg_data & mask) >> pos;
+}
+
+/** Inline function variant to handle the bitname position if it is zero */
+static inline uint8_t bme680_set_bits_pos_0(uint8_t reg_data, uint8_t mask, uint8_t data)
+{
+    return (reg_data & ~mask) | (data & mask);
+}
+
+/** Inline function variant to GET BITS when position is zero */
+static inline uint8_t bme680_get_bits_pos_0(uint8_t reg_data, uint8_t mask)
+{
+    return reg_data & mask;
+}
 
 /**
  * @fn bme680_com_fptr_t

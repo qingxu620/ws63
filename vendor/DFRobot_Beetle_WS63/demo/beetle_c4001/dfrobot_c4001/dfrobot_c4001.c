@@ -10,18 +10,18 @@
  */
 #include "dfrobot_c4001.h"
 
-static sPrivateData_t _buffer;
+static s_private_data_t g_buffer;
 
-#define TIME_OUT 0x64    ///< time out
+#define TIME_OUT C4001_TIME_OUT_MS    ///< time out
 #define SENSOR_UART_ID 2 // 替换成你初始化时使用的 UART ID
-#define DELAY_MS 1
+#define DELAY_MS C4001_DELAY_MS_BASE
 
-#define THE_UART_TRANSFER_SIZE 200
+#define THE_UART_TRANSFER_SIZE C4001_UART_TRANSFER_SIZE
 static uint8_t g_app_uart_rx_buff[THE_UART_TRANSFER_SIZE] = {0};
 static uart_buffer_config_t g_app_uart_buffer_config = {.rx_buffer = g_app_uart_rx_buff,
                                                         .rx_buffer_size = THE_UART_TRANSFER_SIZE};
 
-static void writeReg(uint8_t reg, const uint8_t *data, uint8_t len)
+static void write_reg(uint8_t reg, const uint8_t *data, uint8_t len)
 {
     (void)reg;
     if (len > sizeof(g_app_uart_rx_buff)) {
@@ -39,7 +39,7 @@ static void writeReg(uint8_t reg, const uint8_t *data, uint8_t len)
     }
 }
 
-static int16_t readReg(uint8_t reg, uint8_t *data, uint8_t len)
+static int16_t read_reg(uint8_t reg, uint8_t *data, uint8_t len)
 {
     (void)reg;
 
@@ -70,142 +70,142 @@ static int16_t readReg(uint8_t reg, uint8_t *data, uint8_t len)
     return received;
 }
 
-static sResponseData_t anaysisResponse(uint8_t *data, uint8_t len, uint8_t count)
+static s_response_data_t analysis_response(uint8_t *data, uint8_t len, uint8_t count)
 {
-    sResponseData_t responseData;
-    uint8_t space[5] = {0};
+    s_response_data_t response_data;
+    uint8_t space[C4001_SPACE_ARRAY_SIZE] = {0};
     uint8_t i = 0;
     uint8_t j = 0;
     for (i = 0; i < len; i++) {
-        if (data[i] == 'R' && data[i + 1] == 'e' && data[i + 2] == 's') {
+        if (data[i] == C4001_STR_CHAR_R && data[i + C4001_ARRAY_INDEX_1] == C4001_STR_CHAR_E && data[i + C4001_ARRAY_INDEX_2] == C4001_STR_CHAR_S) {
             break;
         }
     }
-    if (i == len || i == 0) {
-        responseData.status = false;
+    if (i == len || i == C4001_ARRAY_INDEX_0) {
+        response_data.status = false;
     } else {
-        responseData.status = true;
+        response_data.status = true;
         for (j = 0; i < len; i++) {
-            if (data[i] == ' ') {
-                space[j++] = i + 1;
+            if (data[i] == C4001_STR_CHAR_SPACE) {
+                space[j++] = i + C4001_ARRAY_INDEX_1;
             }
         }
-        if (j != 0) {
-            responseData.response1 = atof((const char *)(data + space[0]));
-            if (j >= 2) {
-                responseData.response2 = atof((const char *)(data + space[1]));
+        if (j != C4001_ARRAY_INDEX_0) {
+            response_data.response1 = atof((const char *)(data + space[C4001_ARRAY_INDEX_0]));
+            if (j >= C4001_ARRAY_INDEX_2) {
+                response_data.response2 = atof((const char *)(data + space[C4001_ARRAY_INDEX_1]));
             }
-            if (count == 3) {
-                responseData.response3 = atof((const char *)(data + space[2]));
+            if (count == C4001_ARRAY_INDEX_3) {
+                response_data.response3 = atof((const char *)(data + space[C4001_ARRAY_INDEX_2]));
             }
         } else {
-            responseData.response1 = 0.0;
-            responseData.response2 = 0.0;
+            response_data.response1 = 0.0;
+            response_data.response2 = 0.0;
         }
     }
-    return responseData;
+    return response_data;
 }
 
-static sAllData_t anaysisData(uint8_t *data, uint8_t len)
+static s_all_data_t analysis_data(uint8_t *data, uint8_t len)
 {
-    sAllData_t allData;
+    s_all_data_t all_data;
     uint8_t location = 0;
-    memset(&allData, 0, sizeof(sAllData_t));
+    memset(&all_data, 0, sizeof(s_all_data_t));
     for (uint8_t i = 0; i < len; i++) {
-        if (data[i] == '$') {
+        if (data[i] == C4001_STR_CHAR_DOLLAR) {
             location = i;
             break;
         }
     }
     if (location == len) {
-        return allData;
+        return all_data;
     }
-    if (0 == strncmp((const char *)(data + location), "$DFHPD", strlen("$DFHPD"))) {
-        allData.sta.workMode = EXITMODE;
-        allData.sta.workStatus = 1;
-        allData.sta.initStatus = 1;
-        if (data[location + 7] == '1') {
-            allData.exist = 1;
+    if (strncmp((const char *)(data + location), "$DFHPD", C4001_STR_DFHPD_LEN) == 0) {
+        all_data.sta.work_mode = EXITMODE;
+        all_data.sta.work_status = C4001_ARRAY_INDEX_1;
+        all_data.sta.init_status = C4001_ARRAY_INDEX_1;
+        if (data[location + C4001_STR_POS_DFHPD_EXIST_OFFSET] == '1') {
+            all_data.exist = C4001_ARRAY_INDEX_1;
         } else {
-            allData.exist = 0;
+            all_data.exist = C4001_ARRAY_INDEX_0;
         }
-    } else if (0 == strncmp((const char *)(data + location), "$DFDMD", strlen("$DFDMD"))) {
-        allData.sta.workMode = SPEEDMODE;
-        allData.sta.workStatus = 1;
-        allData.sta.initStatus = 1;
+    } else if (strncmp((const char *)(data + location), "$DFDMD", C4001_STR_DFDMD_LEN) == 0) {
+        all_data.sta.work_mode = SPEEDMODE;
+        all_data.sta.work_status = C4001_ARRAY_INDEX_1;
+        all_data.sta.init_status = C4001_ARRAY_INDEX_1;
         char *token;
-        char *parts[10]; // Let's say there are at most 10 parts
+        char *parts[C4001_PARTS_ARRAY_SIZE]; // Let's say there are at most 10 parts
         int index = 0;   // Used to track the number of parts stored
         token = strtok((char *)(data + location), ",");
         while (token != NULL) {
             parts[index] = token; // Stores partial Pointers in an array
-            if (index++ > 8) {
+            if (index++ > C4001_STR_POS_PARTS_INDEX_MAX) {
                 break;
             }
             token = strtok(NULL, ","); // Continue to extract the next section
         }
-        allData.target.number = atoi(parts[1]);
-        allData.target.range = atof(parts[3]) * 100;
-        allData.target.speed = atof(parts[4]) * 100;
-        allData.target.energy = atof(parts[5]);
+        all_data.target.number = atoi(parts[C4001_ARRAY_INDEX_1]);
+        all_data.target.range = atof(parts[C4001_ARRAY_INDEX_3]) * C4001_RANGE_FROM_METER_MULTIPLIER;
+        all_data.target.speed = atof(parts[C4001_ARRAY_INDEX_4]) * C4001_RANGE_FROM_METER_MULTIPLIER;
+        all_data.target.energy = atof(parts[C4001_ARRAY_INDEX_5]);
     } else {
     }
-    return allData;
+    return all_data;
 }
 
-static bool sensorStop(void)
+static bool sensor_stop(void)
 {
     uint8_t len = 0;
-    uint8_t temp[200] = {0};
-    writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-    uapi_systick_delay_ms(1000 * DELAY_MS);
-    len = readReg(0, temp, 200);
-    while (1) {
-        if (len != 0) {
+    uint8_t temp[C4001_TEMP_BUFFER_SIZE] = {0};
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
+    uapi_systick_delay_ms(C4001_DELAY_1000_MS);
+    len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_TEMP_BUFFER_SIZE);
+    while (C4001_ARRAY_INDEX_1) {
+        if (len != C4001_ARRAY_INDEX_0) {
             if (strstr((const char *)temp, "sensorStop") != NULL) {
                 return true;
             }
         }
-        memset(temp, 0, 200);
-        uapi_systick_delay_ms(400 * DELAY_MS);
-        writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-        len = readReg(0, temp, 200);
+        memset(temp, 0, C4001_TEMP_BUFFER_SIZE);
+        uapi_systick_delay_ms(C4001_DELAY_400_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
+        len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_TEMP_BUFFER_SIZE);
     }
 }
 
-static sResponseData_t wRCMD(char *cmd1, uint8_t count)
+static s_response_data_t write_read_cmd(char *cmd1, uint8_t count)
 {
     uint8_t len = 0;
-    uint8_t temp[200] = {0};
-    sResponseData_t responseData;
-    sensorStop();
-    writeReg(0, (uint8_t *)cmd1, strlen(cmd1));
-    uapi_systick_delay_ms(100 * DELAY_MS);
-    len = readReg(0, temp, 200);
-    responseData = anaysisResponse(temp, len, count);
-    uapi_systick_delay_ms(100 * DELAY_MS);
-    writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(100 * DELAY_MS);
-    return responseData;
+    uint8_t temp[C4001_TEMP_BUFFER_SIZE] = {0};
+    s_response_data_t response_data;
+    sensor_stop();
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)cmd1, strlen(cmd1));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
+    len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_TEMP_BUFFER_SIZE);
+    response_data = analysis_response(temp, len, count);
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
+    return response_data;
 }
 
-static void writeCMD(char *cmd1, char *cmd2, uint8_t count)
+static void write_cmd(char *cmd1, char *cmd2, uint8_t count)
 {
-    sensorStop();
-    writeReg(0, (uint8_t *)cmd1, strlen(cmd1));
-    uapi_systick_delay_ms(100 * DELAY_MS);
-    if (count > 1) {
-        uapi_systick_delay_ms(100 * DELAY_MS);
-        writeReg(0, (uint8_t *)cmd2, strlen(cmd2));
-        uapi_systick_delay_ms(100 * DELAY_MS);
+    sensor_stop();
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)cmd1, strlen(cmd1));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
+    if (count > C4001_ARRAY_INDEX_1) {
+        uapi_systick_delay_ms(C4001_DELAY_100_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)cmd2, strlen(cmd2));
+        uapi_systick_delay_ms(C4001_DELAY_100_MS);
     }
-    writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-    uapi_systick_delay_ms(100 * DELAY_MS);
-    writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(100 * DELAY_MS);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
 }
 
-void DFRobot_C4001_INIT(uint32_t baud, uint8_t txpin, uint8_t rxpin, uint8_t uart_id)
+void dfrobot_c4001_init(uint32_t baud, uint8_t txpin, uint8_t rxpin, uint8_t uart_id)
 {
     // 1. 配置引脚
 #if defined(CONFIG_PINCTRL_SUPPORT_IE)
@@ -224,36 +224,36 @@ void DFRobot_C4001_INIT(uint32_t baud, uint8_t txpin, uint8_t rxpin, uint8_t uar
     uapi_uart_init(uart_id, &pin_config, &attr, NULL, &g_app_uart_buffer_config);
 }
 
-sSensorStatus_t getStatus(void)
+s_sensor_status_t get_status(void)
 {
-    sSensorStatus_t data;
-    uint8_t temp[100] = {0};
+    s_sensor_status_t data;
+    uint8_t temp[C4001_STATUS_BUFFER_SIZE] = {0};
     uint8_t len = 0;
 
-    sAllData_t allData;
-    readReg(0, temp, 100);
-    writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    while (len == 0) {
-        uapi_systick_delay_ms(1000 * DELAY_MS);
-        len = readReg(0, temp, 100);
-        allData = anaysisData(temp, len);
+    s_all_data_t all_data;
+    read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+    while (len == C4001_ARRAY_INDEX_0) {
+        uapi_systick_delay_ms(C4001_DELAY_1000_MS);
+        len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
+        all_data = analysis_data(temp, len);
     }
-    data.workStatus = allData.sta.workStatus;
-    data.workMode = allData.sta.workMode;
-    data.initStatus = allData.sta.initStatus;
+    data.work_status = all_data.sta.work_status;
+    data.work_mode = all_data.sta.work_mode;
+    data.init_status = all_data.sta.init_status;
 
     return data;
 }
 
-bool motionDetection(void)
+bool motion_detection(void)
 {
     static bool old = false;
-    uint8_t status = 0;
+    uint8_t status = C4001_ARRAY_INDEX_0;
     uint8_t len = 0;
-    uint8_t temp[100] = {0};
-    sAllData_t data;
-    len = readReg(0, temp, 100);
-    data = anaysisData(temp, len);
+    uint8_t temp[C4001_STATUS_BUFFER_SIZE] = {0};
+    s_all_data_t data;
+    len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
+    data = analysis_data(temp, len);
     if (data.exist) {
         old = (bool)status;
         return (bool)data.exist;
@@ -262,375 +262,375 @@ bool motionDetection(void)
     }
 }
 
-void setSensor(eSetMode_t mode)
+void set_sensor(e_set_mode_t mode)
 {
     if (mode == STARTSEN) {
-        writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-        uapi_systick_delay_ms(200 * DELAY_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_200_MS); // must timer
     } else if (mode == STOPSEN) {
-        writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-        uapi_systick_delay_ms(200 * DELAY_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_200_MS); // must timer
     } else if (mode == RESETSEN) {
-        writeReg(0, (uint8_t *)RESET_SENSOR, strlen(RESET_SENSOR));
-        uapi_systick_delay_ms(1500 * DELAY_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)RESET_SENSOR, strlen(RESET_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_1500_MS); // must timer
     } else if (mode == SAVEPARAMS) {
-        writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-        uapi_systick_delay_ms(200 * DELAY_MS); // must timer
-        writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-        uapi_systick_delay_ms(800 * DELAY_MS); // must timer
-        writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_200_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
+        uapi_systick_delay_ms(C4001_DELAY_800_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
     } else if (mode == RECOVERSEN) {
-        writeReg(0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
-        uapi_systick_delay_ms(200 * DELAY_MS);
-        writeReg(0, (uint8_t *)RECOVER_SENSOR, strlen(RECOVER_SENSOR));
-        uapi_systick_delay_ms(800 * DELAY_MS); // must timer
-        writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-        uapi_systick_delay_ms(500 * DELAY_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)STOP_SENSOR, strlen(STOP_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_200_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)RECOVER_SENSOR, strlen(RECOVER_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_800_MS); // must timer
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+        uapi_systick_delay_ms(C4001_DELAY_500_MS);
     }
 }
 
-bool setSensorMode(eMode_t mode)
+bool set_sensor_mode(e_mode_t mode)
 {
-    sensorStop();
+    sensor_stop();
     if (mode == EXITMODE) {
-        writeReg(0, (uint8_t *)EXIST_MODE, strlen(EXIST_MODE));
-        uapi_systick_delay_ms(50 * DELAY_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)EXIST_MODE, strlen(EXIST_MODE));
+        uapi_systick_delay_ms(C4001_DELAY_50_MS);
     } else {
-        writeReg(0, (uint8_t *)SPEED_MODE, strlen(SPEED_MODE));
-        uapi_systick_delay_ms(50 * DELAY_MS);
+        write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)SPEED_MODE, strlen(SPEED_MODE));
+        uapi_systick_delay_ms(C4001_DELAY_50_MS);
     }
-    uapi_systick_delay_ms(50 * DELAY_MS);
-    writeReg(0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
-    uapi_systick_delay_ms(500 * DELAY_MS);
-    writeReg(0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
-    uapi_systick_delay_ms(100 * DELAY_MS);
+    uapi_systick_delay_ms(C4001_DELAY_50_MS);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)SAVE_CONFIG, strlen(SAVE_CONFIG));
+    uapi_systick_delay_ms(C4001_DELAY_500_MS);
+    write_reg(C4001_ARRAY_INDEX_0, (uint8_t *)START_SENSOR, strlen(START_SENSOR));
+    uapi_systick_delay_ms(C4001_DELAY_100_MS);
     return true;
 }
 
-bool setTrigSensitivity(uint8_t sensitivity)
+bool set_trig_sensitivity(uint8_t sensitivity)
 {
-    if (sensitivity > 9) {
+    if (sensitivity > C4001_SENSITIVITY_MAX) {
         return false;
     }
 
     char data[] = "setSensitivity 255 1"; // 分配在栈上，可写
-    data[19] = sensitivity + '0';         // 修改有效
-    writeCMD(data, data, (uint8_t)1);
+    data[C4001_STR_POS_SENSITIVITY_TRIG_OFFSET] = sensitivity + '0';         // 修改有效
+    write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
     return true;
 }
 
-uint8_t getTrigSensitivity(void)
+uint8_t get_trig_sensitivity(void)
 {
-    sResponseData_t responseData;
-    uint8_t temp[100] = {0};
-    readReg(0, temp, 100);
+    s_response_data_t response_data;
+    uint8_t temp[C4001_STATUS_BUFFER_SIZE] = {0};
+    read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
     char *data = "getSensitivity";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response1;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response1;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-bool setKeepSensitivity(uint8_t sensitivity)
+bool set_keep_sensitivity(uint8_t sensitivity)
 {
-    if (sensitivity > 9) {
+    if (sensitivity > C4001_SENSITIVITY_MAX) {
         return false;
     }
 
     char data[] = "setSensitivity 1 255";
-    data[15] = sensitivity + '0';
-    writeCMD(data, data, (uint8_t)1);
+    data[C4001_STR_POS_SENSITIVITY_KEEP_OFFSET] = sensitivity + '0';
+    write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
     return true;
 }
 
-uint8_t getKeepSensitivity(void)
+uint8_t get_keep_sensitivity(void)
 {
-    sResponseData_t responseData;
-    uint8_t temp[100] = {0};
-    readReg(0, temp, 100);
+    s_response_data_t response_data;
+    uint8_t temp[C4001_STATUS_BUFFER_SIZE] = {0};
+    read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
     char *data = "getSensitivity";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response2;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response2;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-bool setDelay(uint8_t trig, uint16_t keep)
+bool set_delay(uint8_t trig, uint16_t keep)
 {
-    if (trig > 200) {
+    if (trig > C4001_TRIG_DELAY_MAX) {
         return false;
     }
-    if (keep < 4 || keep > 3000) {
+    if (keep < C4001_KEEP_DELAY_MIN || keep > C4001_KEEP_DELAY_MAX) {
         return false;
     }
 
     // trig: 百分比 -> 秒 (trig * 0.01)
-    float trig_val = trig * 0.01f;
+    float trig_val = trig * C4001_TRIG_DELAY_TO_SEC_MULTIPLIER;
     // keep: 乘0.5
-    float keep_val = keep * 0.5f;
+    float keep_val = keep * C4001_KEEP_DELAY_TO_SEC_MULTIPLIER;
 
-    char cmd[64] = {0};
+    char cmd[C4001_CMD_BUFFER_SIZE] = {0};
     // 格式化命令字符串
     snprintf(cmd, sizeof(cmd), "setLatency %.1f %.1f", trig_val, keep_val);
 
     // 调用底层写命令函数
-    writeCMD(cmd, cmd, 1);
+    write_cmd(cmd, cmd, C4001_ARRAY_INDEX_1);
 
     return true;
 }
 
-uint8_t getTrigDelay(void)
+uint8_t get_trig_delay(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getLatency";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response1 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response1 * C4001_TRIG_DELAY_FROM_SEC_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint16_t getKeepTimerout(void)
+uint16_t get_keep_timeout(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getLatency";
-    responseData = wRCMD(data, (uint8_t)2);
-    if (responseData.status) {
-        return responseData.response2 * 2;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_2);
+    if (response_data.status) {
+        return response_data.response2 * C4001_KEEP_DELAY_FROM_SEC_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-bool setDetectionRange(uint16_t min, uint16_t max, uint16_t trig)
+bool set_detection_range(uint16_t min, uint16_t max, uint16_t trig)
 {
-    if (max < 240 || max > 2000) {
+    if (max < C4001_RANGE_MAX_MIN || max > C4001_RANGE_MAX_MAX) {
         return false;
     }
-    if (min < 30 || min > max) {
+    if (min < C4001_RANGE_MIN_MIN || min > max) {
         return false;
     }
 
-    float min_val = min / 100.0f;
-    float max_val = max / 100.0f;
-    float trig_val = trig / 100.0f;
+    float min_val = min / C4001_RANGE_TO_METER_DIVISOR;
+    float max_val = max / C4001_RANGE_TO_METER_DIVISOR;
+    float trig_val = trig / C4001_RANGE_TO_METER_DIVISOR;
 
-    char data1[64] = {0};
-    char data2[64] = {0};
+    char data1[C4001_CMD_BUFFER_SIZE] = {0};
+    char data2[C4001_CMD_BUFFER_SIZE] = {0};
 
     // 拼接命令
     snprintf(data1, sizeof(data1), "setRange %.2f %.2f", min_val, max_val);
     snprintf(data2, sizeof(data2), "setTrigRange %.2f", trig_val);
 
     // 发送命令
-    writeCMD(data1, data2, 2);
+    write_cmd(data1, data2, C4001_ARRAY_INDEX_2);
 
     return true;
 }
 
-uint16_t getTrigRange(void)
+uint16_t get_trig_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getTrigRange";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response1 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response1 * C4001_RANGE_FROM_METER_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint16_t getMaxRange(void)
+uint16_t get_max_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getRange";
-    responseData = wRCMD(data, (uint8_t)2);
-    if (responseData.status) {
-        return responseData.response2 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_2);
+    if (response_data.status) {
+        return response_data.response2 * C4001_RANGE_FROM_METER_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint16_t getMinRange(void)
+uint16_t get_min_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getRange";
-    responseData = wRCMD(data, (uint8_t)2);
-    if (responseData.status) {
-        return responseData.response1 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_2);
+    if (response_data.status) {
+        return response_data.response1 * C4001_RANGE_FROM_METER_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint8_t getTargetNumber(void)
+uint8_t get_target_number(void)
 {
-    static uint8_t flash_number = 0;
+    static uint8_t flash_number = C4001_ARRAY_INDEX_0;
     uint8_t len = 0;
-    uint8_t temp[100] = {0};
-    sAllData_t data;
-    len = readReg(0, temp, 100);
-    data = anaysisData(temp, len);
-    if (data.target.number != 0) {
-        flash_number = 0;
-        _buffer.number = data.target.number;
-        _buffer.range = data.target.range / 100.0;
-        _buffer.speed = data.target.speed / 100.0;
-        _buffer.energy = data.target.energy;
+    uint8_t temp[C4001_STATUS_BUFFER_SIZE] = {0};
+    s_all_data_t data;
+    len = read_reg(C4001_ARRAY_INDEX_0, temp, C4001_STATUS_BUFFER_SIZE);
+    data = analysis_data(temp, len);
+    if (data.target.number != C4001_ARRAY_INDEX_0) {
+        flash_number = C4001_ARRAY_INDEX_0;
+        g_buffer.number = data.target.number;
+        g_buffer.range = data.target.range / C4001_RANGE_TO_METER_DIVISOR;
+        g_buffer.speed = data.target.speed / C4001_RANGE_TO_METER_DIVISOR;
+        g_buffer.energy = data.target.energy;
     } else {
-        _buffer.number = 1;
-        if (flash_number++ > 10) {
-            _buffer.number = 0;
-            _buffer.range = 0;
-            _buffer.speed = 0;
-            _buffer.energy = 0;
+        g_buffer.number = C4001_ARRAY_INDEX_1;
+        if (flash_number++ > C4001_FLASH_COUNTER_THRESHOLD) {
+            g_buffer.number = C4001_ARRAY_INDEX_0;
+            g_buffer.range = 0;
+            g_buffer.speed = 0;
+            g_buffer.energy = 0;
         }
     }
     return data.target.number;
 }
 
-float getTargetSpeed(void)
+float get_target_speed(void)
 {
-    return _buffer.speed;
+    return g_buffer.speed;
 }
 
-float getTargetRange(void)
+float get_target_range(void)
 {
-    return _buffer.range;
+    return g_buffer.range;
 }
 
-uint32_t getTargetEnergy(void)
+uint32_t get_target_energy(void)
 {
-    return _buffer.energy;
+    return g_buffer.energy;
 }
 
-bool setDetectThres(uint16_t min, uint16_t max, uint16_t thres)
+bool set_detect_thres(uint16_t min, uint16_t max, uint16_t thres)
 {
-    if (max > 2500) {
+    if (max > C4001_RANGE_MAX_LIMIT) {
         return false;
     }
     if (min > max) {
         return false;
     }
 
-    float min_val = min / 100.0f;
-    float max_val = max / 100.0f;
+    float min_val = min / C4001_RANGE_TO_METER_DIVISOR;
+    float max_val = max / C4001_RANGE_TO_METER_DIVISOR;
 
-    char data1[64] = {0};
-    char data2[64] = {0};
+    char data1[C4001_CMD_BUFFER_SIZE] = {0};
+    char data2[C4001_CMD_BUFFER_SIZE] = {0};
 
     // 拼接字符串
     snprintf(data1, sizeof(data1), "setRange %.2f %.2f", min_val, max_val);
     snprintf(data2, sizeof(data2), "setThrFactor %u", thres);
 
     // 发送命令
-    writeCMD(data1, data2, 2);
+    write_cmd(data1, data2, C4001_ARRAY_INDEX_2);
 
     return true;
 }
 
-bool setIoPolaity(uint8_t value)
+bool set_io_polarity(uint8_t value)
 {
-    if (value > 1) {
+    if (value > C4001_IO_POLARITY_MAX) {
         return false;
     }
 
-    char data[32] = {0};                                   // 可写缓冲
+    char data[C4001_IO_BUFFER_SIZE] = {0};                                   // 可写缓冲
     snprintf(data, sizeof(data), "setGpioMode %d", value); // 拼接字符串
-    writeCMD(data, data, (uint8_t)1);
+    write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
     return true;
 }
 
-uint8_t getIoPolaity(void)
+uint8_t get_io_polarity(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getGpioMode 1";
-    responseData = wRCMD(data, (uint8_t)2);
-    if (responseData.status) {
-        return responseData.response2;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_2);
+    if (response_data.status) {
+        return response_data.response2;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-bool setPwm(uint8_t pwm1, uint8_t pwm2, uint8_t timer)
+bool set_pwm(uint8_t pwm1, uint8_t pwm2, uint8_t timer)
 {
-    if (pwm1 > 100 || pwm2 > 100) {
+    if (pwm1 > C4001_PWM_MAX || pwm2 > C4001_PWM_MAX) {
         return false;
     }
 
-    char data[64] = {0};
+    char data[C4001_CMD_BUFFER_SIZE] = {0};
 
-    // 拼接成命令字符串，例如：setPwm 50 75 10
+    // 拼接成命令字符串，例如：set_pwm 50 75 10
     snprintf(data, sizeof(data), "setPwm %u %u %u", pwm1, pwm2, timer);
 
     // 发送命令
-    writeCMD(data, data, 1);
+    write_cmd(data, data, C4001_ARRAY_INDEX_1);
 
     return true;
 }
 
-sPwmData_t getPwm(void)
+s_pwm_data_t get_pwm(void)
 {
-    sPwmData_t pwmData;
-    memset(&pwmData, 0, sizeof(sPwmData_t));
+    s_pwm_data_t pwmData;
+    memset(&pwmData, C4001_ARRAY_INDEX_0, sizeof(s_pwm_data_t));
 
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getPwm";
-    responseData = wRCMD(data, (uint8_t)3);
-    if (responseData.status) {
-        pwmData.pwm1 = responseData.response1;
-        pwmData.pwm2 = responseData.response2;
-        pwmData.timer = responseData.response3;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_3);
+    if (response_data.status) {
+        pwmData.pwm1 = response_data.response1;
+        pwmData.pwm2 = response_data.response2;
+        pwmData.timer = response_data.response3;
     }
     return pwmData;
 }
 
-uint16_t getTMinRange(void)
+uint16_t get_t_min_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getRange";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response1 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response1 * C4001_RANGE_FROM_METER_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint16_t getTMaxRange(void)
+uint16_t get_t_max_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getRange";
-    responseData = wRCMD(data, (uint8_t)2);
-    if (responseData.status) {
-        return responseData.response2 * 100;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_2);
+    if (response_data.status) {
+        return response_data.response2 * C4001_RANGE_FROM_METER_MULTIPLIER;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-uint16_t getThresRange(void)
+uint16_t get_thres_range(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getThrFactor";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return responseData.response1;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return response_data.response1;
     }
-    return 0;
+    return C4001_ARRAY_INDEX_0;
 }
 
-void setFrettingDetection(eSwitch_t sta)
+void set_fretting_detection(e_switch_t sta)
 {
-    char data[32] = {0};
+    char data[C4001_IO_BUFFER_SIZE] = {0};
     snprintf(data, sizeof(data), "setMicroMotion %d", sta);
-    writeCMD(data, data, (uint8_t)1);
+    write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
 }
 
-eSwitch_t getFrettingDetection(void)
+e_switch_t get_fretting_detection(void)
 {
-    sResponseData_t responseData;
+    s_response_data_t response_data;
     char *data = "getMicroMotion";
-    responseData = wRCMD(data, (uint8_t)1);
-    if (responseData.status) {
-        return (eSwitch_t)responseData.response1;
+    response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_1);
+    if (response_data.status) {
+        return (e_switch_t)response_data.response1;
     }
-    return (eSwitch_t)0;
+    return (e_switch_t)C4001_ARRAY_INDEX_0;
 }

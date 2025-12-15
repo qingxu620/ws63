@@ -29,7 +29,7 @@ config I2C_SDA_MASTER_PIN
     depends on SAMPLE_SUPPORT_BME680_I2C_SAMPLE
 
 config I2C_SLAVE_ADDR
-    int "Choose I2C SDA pin"
+    int "Choose I2C ADDR"
     default 0x77
     depends on SAMPLE_SUPPORT_BME680_I2C_SAMPLE
 

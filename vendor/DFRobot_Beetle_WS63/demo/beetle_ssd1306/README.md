@@ -2,7 +2,7 @@
 
 ## 1.1 介绍
 
-**功能介绍：** 在SSD1306 OLED屏幕循环显示不同字号的"Hello,DFRobot!"。
+**功能介绍：** 在g_ssd1306 OLED屏幕循环显示不同字号的"Hello,DFRobot!"。
 
 ## 1.2 接口介绍
 
@@ -46,30 +46,30 @@
 | **返回值：** | ERRCODE_SUCC：成功    Other：失败                        |
 | **依赖：**   | include\driver\pinctrl.h                                 |
 
-### 1.2.5 ssd1306_SetCursor()
+### 1.2.5 ssd1306_set_cursor()
 
 
-| **定义：**   | void ssd1306_SetCursor(uint8_t x, uint8_t y); |
+| **定义：**   | void ssd1306_set_cursor(uint8_t x, uint8_t y); |
 | ------------ | --------------------------------------------- |
 | **功能：**   | 设置字符串显示位置                            |
 | **参数：**   | x：横坐标<br/>y：众坐标                       |
 | **返回值：** | 无返回值                                      |
 | **依赖：**   | beetle_ssd1306\ssd1306.h                      |
 
-### 1.2.6 ssd1306_DrawString()
+### 1.2.6 ssd1306_draw_string()
 
 
-| **定义：**   | char ssd1306_DrawString(char *str, FontDef Font, SSD1306_COLOR color); |
+| **定义：**   | char ssd1306_draw_string(char *str, font_def_t Font, ssd1306_color_t color); |
 | ------------ | ------------------------------------------------------------ |
 | **功能：**   | 设置输出的字符串                                             |
 | **参数：**   | str：要输出的字符串<br/>Font：字符串大小 <br/>color：颜色    |
 | **返回值：** | ERRCODE_SUCC：成功    Other：失败                            |
 | **依赖：**   | beetle_ssd1306\ssd1306.h                                     |
 
-### 1.2.7 ssd1306_UpdateScreen()
+### 1.2.7 ssd1306_update_screen()
 
 
-| **定义：**   | void ssd1306_UpdateScreen(void); |
+| **定义：**   | void ssd1306_update_screen(void); |
 | ------------ | -------------------------------- |
 | **功能：**   | 在屏幕显示字符串                 |
 | **参数：**   | 无                               |

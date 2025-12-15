@@ -6,7 +6,7 @@
  * @author Martin(Martin@dfrobot.com)
  * @version  V1.0
  * @date  2025-9-29
- * @url https://github.com/DFRobot/DFRobot_BME680
+ * @url https://github.com/DFRobot/dfrobot_bme680
  */
 
 #ifndef BME680_H_
@@ -114,7 +114,7 @@ void bme680_get_profile_dur(uint16_t *duration, const struct bme680_dev *dev);
 /**
  * @fn bme680_get_sensor_data
  * @brief This API reads the pressure, temperature and humidity and gas data
- * @n from the sensor, compensates the data and store it in the bme680_data
+ * @n from the sensor, compensates the data and store it in the g_bme680_data
  * @n structure instance passed by the user.
  * @param data: Structure instance to hold the data.
  * @param dev : Structure instance of bme680_dev.

@@ -33,66 +33,73 @@
 #define IOPOLAITY 1
 #define DELAY_MS 1
 
+/** Delay constants */
+#define MOTION_DETECTION_DELAY_MS (100 * DELAY_MS)
+
+/** Task configuration constants */
+#define MOTION_DETECTION_TASK_STACK_SIZE 0x2000
+#define MOTION_DETECTION_TASK_PRIO 25
+
 static void radar_example(void)
 {
     osal_printk("Radar example start!\r\n");
 
-    DFRobot_C4001_INIT(CONFIG_RADAR_UART_BAUD, CONFIG_RADAR_UART_TX_PIN, CONFIG_RADAR_UART_RX_PIN, CONFIG_UART_BUS_ID);
+    dfrobot_c4001_init(CONFIG_RADAR_UART_BAUD, CONFIG_RADAR_UART_TX_PIN, CONFIG_RADAR_UART_RX_PIN, CONFIG_UART_BUS_ID);
 
     osal_printk("Radar connected!\r\n");
 
     // exist Mode
-    setSensorMode(EXITMODE);
+    set_sensor_mode(EXITMODE);
 
-    sSensorStatus_t status = getStatus();
-    osal_printk("work status  = %d\r\n", status.workStatus); // 0 stop 1 start
-    osal_printk("work mode    = %d\r\n", status.workMode);   // 0 exist 1 speed
-    osal_printk("init status  = %d\r\n", status.initStatus); // 0 no init 1 success
+    s_sensor_status_t status = get_status();
+    osal_printk("work status  = %d\r\n", status.work_status); // 0 stop 1 start
+    osal_printk("work mode    = %d\r\n", status.work_mode);   // 0 exist 1 speed
+    osal_printk("init status  = %d\r\n", status.init_status); // 0 no init 1 success
 
     // 设置检测范围
-    if (setDetectionRange(MINRANGE, MAXRANGE, TRIGRANGE)) {
+    if (set_detection_range(MINRANGE, MAXRANGE, TRIGRANGE)) {
         osal_printk("set detection range successfully!\r\n");
     }
 
     // 设置触发灵敏度
-    if (setTrigSensitivity(TRIG_SENSITIVITY)) {
+    if (set_trig_sensitivity(TRIG_SENSITIVITY)) {
         osal_printk("set trig sensitivity successfully!\r\n");
     }
 
     // 设置保持灵敏度
-    if (setKeepSensitivity(KEEP_SENSITIVITY)) {
+    if (set_keep_sensitivity(KEEP_SENSITIVITY)) {
         osal_printk("set keep sensitivity successfully!\r\n");
     }
 
     // 设置触发延时和保持时间
-    if (setDelay(TRIG_DELAY, KEEP_TIME)) {
+    if (set_delay(TRIG_DELAY, KEEP_TIME)) {
         osal_printk("set delay successfully!\r\n");
     }
 
     uapi_watchdog_kick();
 
     // 设置 PWM 输出
-    if (setPwm(PWM_NO_TARGET_DUTY, PWM_TARGET_DUTY, DETECTION_TIMER_MS)) {
+    if (set_pwm(PWM_NO_TARGET_DUTY, PWM_TARGET_DUTY, DETECTION_TIMER_MS)) {
         osal_printk("set pwm period successfully!\r\n");
     }
 
     // 设置 IO 极性
-    if (setIoPolaity(IOPOLAITY)) {
+    if (set_io_polarity(IOPOLAITY)) {
         osal_printk("set Io Polaity successfully!\r\n");
     }
 
     // 打印当前参数
-    osal_printk("trig sensitivity = %d\r\n", getTrigSensitivity());
-    osal_printk("keep sensitivity = %d\r\n", getKeepSensitivity());
-    osal_printk("min range = %d\r\n", getMinRange());
-    osal_printk("max range = %d\r\n", getMaxRange());
+    osal_printk("trig sensitivity = %d\r\n", get_trig_sensitivity());
+    osal_printk("keep sensitivity = %d\r\n", get_keep_sensitivity());
+    osal_printk("min range = %d\r\n", get_min_range());
+    osal_printk("max range = %d\r\n", get_max_range());
     uapi_watchdog_kick();
-    osal_printk("trig range = %d\r\n", getTrigRange());
-    osal_printk("keep time = %d\r\n", getKeepTimerout());
-    osal_printk("trig delay = %d\r\n", getTrigDelay());
-    osal_printk("polaity = %d\r\n", getIoPolaity());
+    osal_printk("trig range = %d\r\n", get_trig_range());
+    osal_printk("keep time = %d\r\n", get_keep_timeout());
+    osal_printk("trig delay = %d\r\n", get_trig_delay());
+    osal_printk("polaity = %d\r\n", get_io_polarity());
     uapi_watchdog_kick();
-    sPwmData_t pwmData = getPwm();
+    s_pwm_data_t pwmData = get_pwm();
     osal_printk("pwm1 = %d\r\n", pwmData.pwm1);
     osal_printk("pwm2 = %d\r\n", pwmData.pwm2);
     osal_printk("pwm timer = %d\r\n", pwmData.timer);
@@ -100,10 +107,10 @@ static void radar_example(void)
     // 主循环
     while (1) {
         uapi_watchdog_kick();
-        if (motionDetection()) {
+        if (motion_detection()) {
             osal_printk("exist motion\r\n");
         }
-        uapi_systick_delay_ms(100 * DELAY_MS);
+        uapi_systick_delay_ms(MOTION_DETECTION_DELAY_MS);
     }
 }
 
@@ -112,9 +119,9 @@ static void radar_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
-    task_handle = osal_kthread_create((osal_kthread_handler)radar_example, NULL, "RadarTask", 0x2000);
+    task_handle = osal_kthread_create((osal_kthread_handler)radar_example, NULL, "RadarTask", MOTION_DETECTION_TASK_STACK_SIZE);
     if (task_handle != NULL) {
-        osal_kthread_set_priority(task_handle, 25);
+        osal_kthread_set_priority(task_handle, MOTION_DETECTION_TASK_PRIO);
     }
     osal_kthread_unlock();
 }

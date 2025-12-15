@@ -6,7 +6,7 @@
  * @author Martin(Martin@dfrobot.com)
  * @version  V1.0
  * @date  2025-9-29
- * @url https://github.com/DFRobot/DFRobot_BME680
+ * @url https://github.com/DFRobot/dfrobot_bme680
  */
 
 #ifndef DFROBOT_BME680_SPI_H
@@ -15,6 +15,6 @@
 #include "dfrobot_bme680.h"
 #include "spi.h"
 
-void DFRobot_BME680_SPI_INIT(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi, uint8_t pin_clk, uint8_t spi_bus_id);
+void dfrobot_bme680_spi_init(uint8_t pin_cs, uint8_t pin_miso, uint8_t pin_mosi, uint8_t pin_clk, uint8_t spi_bus_id);
 
 #endif

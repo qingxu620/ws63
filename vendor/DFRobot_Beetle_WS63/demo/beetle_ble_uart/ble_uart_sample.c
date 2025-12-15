@@ -29,8 +29,8 @@ typedef struct {
     uint8_t *value;
     uint16_t value_len;
 } msg_data_t;
-unsigned long mouse_msg_queue = 0;
-unsigned int msg_rev_size = sizeof(msg_data_t);
+unsigned long g_mouse_msg_queue = 0;
+unsigned int g_msg_rev_size = sizeof(msg_data_t);
 
 #if defined(CONFIG_SAMPLE_SUPPORT_BLE_UART_SERVER)
 static void ble_uart_read_int_handler(const void *buffer, uint16_t length, bool error)
@@ -46,7 +46,7 @@ static void ble_uart_read_int_handler(const void *buffer, uint16_t length, bool 
         }
         msg_data.value = (uint8_t *)buffer_cpy;
         msg_data.value_len = length;
-        osal_msg_queue_write_copy(mouse_msg_queue, (void *)&msg_data, msg_rev_size, 0);
+        osal_msg_queue_write_copy(g_mouse_msg_queue, (void *)&msg_data, g_msg_rev_size, 0);
     }
 }
 
@@ -62,7 +62,7 @@ static void *ble_uart_server_task(const char *arg)
     }
     while (1) {
         msg_data_t msg_data = {0};
-        int msg_ret = osal_msg_queue_read_copy(mouse_msg_queue, &msg_data, &msg_rev_size, OSAL_WAIT_FOREVER);
+        int msg_ret = osal_msg_queue_read_copy(g_mouse_msg_queue, &msg_data, &g_msg_rev_size, OSAL_WAIT_FOREVER);
         if (msg_ret != OSAL_SUCCESS) {
             osal_printk("msg queue read copy fail.");
             if (msg_data.value != NULL) {
@@ -90,7 +90,7 @@ static void ble_uart_read_int_handler(const void *buffer, uint16_t length, bool 
     }
     msg_data.value = (uint8_t *)buffer_cpy;
     msg_data.value_len = length;
-    osal_msg_queue_write_copy(mouse_msg_queue, (void *)&msg_data, msg_rev_size, 0);
+    osal_msg_queue_write_copy(g_mouse_msg_queue, (void *)&msg_data, g_msg_rev_size, 0);
 }
 
 static void *ble_uart_client_task(const char *arg)
@@ -106,7 +106,7 @@ static void *ble_uart_client_task(const char *arg)
     }
     while (1) {
         msg_data_t msg_data = {0};
-        int msg_ret = osal_msg_queue_read_copy(mouse_msg_queue, &msg_data, &msg_rev_size, OSAL_WAIT_FOREVER);
+        int msg_ret = osal_msg_queue_read_copy(g_mouse_msg_queue, &msg_data, &g_msg_rev_size, OSAL_WAIT_FOREVER);
         if (msg_ret != OSAL_SUCCESS) {
             osal_printk("msg queue read copy fail.");
             if (msg_data.value != NULL) {
@@ -126,7 +126,7 @@ static void *ble_uart_client_task(const char *arg)
 
 static void ble_uart_entry(void)
 {
-    int msg_ret = osal_msg_queue_create("task_msg", msg_rev_size, &mouse_msg_queue, 0, msg_rev_size);
+    int msg_ret = osal_msg_queue_create("task_msg", g_msg_rev_size, &g_mouse_msg_queue, 0, g_msg_rev_size);
     if (msg_ret != OSAL_SUCCESS) {
         osal_printk("msg queue create fail.");
         return;

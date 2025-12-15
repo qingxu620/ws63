@@ -19,6 +19,7 @@
 
 #define DELAY_US 1100
 #define DELAY_MS 200
+#define URM37_INVALID_TIME 50000
 
 #define URM37_TASK_STACK_SIZE 0x1000
 #define URM37_TASK_PRIO 24
@@ -68,7 +69,7 @@ unsigned int get_distance(void)
         }
     }
 
-    if (time >= 50000) {
+    if (time >= URM37_INVALID_TIME) {
         printf("Invalid");
     } else {
         distance_measured = time / 50; // every 50us low level stands for 1cm

@@ -23,7 +23,7 @@ LIS2DH12有用户可选择的±2g/±4g/±8g/±16g的全刻度
 ## API
 ```C++
   /**
-   * @fn DFRobot_LIS2DH12_INIT
+   * @fn dfrobot_lis2dh12_init
    * @brief 初始化函数
    * @param addr 从机I2C地址
    * @param iic_scl_master_pin SCL引脚
@@ -31,119 +31,119 @@ LIS2DH12有用户可选择的±2g/±4g/±8g/±16g的全刻度
    * @param iic_bus_id I2C总线标识符
    * @return true(成功)/false(失败)
    */
-  bool DFRobot_LIS2DH12_INIT(uint8_t addr, uint8_t iic_scl_master_pin, uint8_t iic_sda_master_pin, uint8_t iic_bus_id);
+  bool dfrobot_lis2dh12_init(uint8_t addr, uint8_t iic_scl_master_pin, uint8_t iic_sda_master_pin, uint8_t iic_bus_id);
 
   /**
-   * @fn setRange
+   * @fn set_range
    * @brief 设置测量范围
    * @param range 范围(g)
-   * @n           eLIS2DH12_2g, //±2g
-   * @n           eLIS2DH12_4g, //4g
-   * @n           eLIS2DH12_8g, //8g
-   * @n           eLIS2DH12_16g, //16g
+   * @n           e_lis2dh12_2g, //±2g
+   * @n           e_lis2dh12_4g, //4g
+   * @n           e_lis2dh12_8g, //8g
+   * @n           e_lis2dh12_16g, //16g
    */
-  void setRange(eRange_t range);
+  void set_range(e_range_t range);
 
   /**
-   * @fn setAcquireRate
+   * @fn set_acquire_rate
    * @brief 设置数据测量速率
    * @param rate 速度(HZ)
-   * @n          ePowerDown_0Hz 
-   * @n          eLowPower_1Hz 
-   * @n          eLowPower_10Hz 
-   * @n          eLowPower_25Hz 
-   * @n          eLowPower_50Hz 
-   * @n          eLowPower_100Hz
-   * @n          eLowPower_200Hz
-   * @n          eLowPower_400Hz
+   * @n          e_power_down_0hz 
+   * @n          e_low_power_1hz 
+   * @n          e_low_power_10hz 
+   * @n          e_low_power_25hz 
+   * @n          e_low_power_50hz 
+   * @n          e_low_power_100hz
+   * @n          e_low_power_200hz
+   * @n          e_low_power_400hz
    */
-  void setAcquireRate(ePowerMode_t rate);
+  void set_acquire_rate(e_power_mode_t rate);
 
   /**
-   * @fn setAcquireRate
+   * @fn set_acquire_rate
    * @brief 获取芯片ID
    * @return 8连续数据
    */
-  uint8_t getID();
+  uint8_t get_id();
 
   /**
-   * @fn readAccX
+   * @fn read_acc_x
    * @brief 获取x方向上的加速度
-   * @return 加速度为x(单位:g)，测量范围为±100g或±200g，由setRange()函数设定。
+   * @return 加速度为x(单位:g)，测量范围为±100g或±200g，由set_range()函数设定。
    */
-  int32_t readAccX();
+  int32_t read_acc_x();
 
   /**
-   * @fn readAccY
+   * @fn read_acc_y
    * @brief 获取y方向的加速度
-   * @return 加速度为y(单位:g)，测量范围为±100g或±200g，由setRange()函数设定。
+   * @return 加速度为y(单位:g)，测量范围为±100g或±200g，由set_range()函数设定。
    */
-  int32_t readAccY();
+  int32_t read_acc_y();
 
   /**
-   * @fn readAccZ
+   * @fn read_acc_z
    * @brief 获取z方向的加速度
-   * @return 加速度从z开始(单位:g)，测量范围为±100g或±200g，由setRange()函数设定。
+   * @return 加速度从z开始(单位:g)，测量范围为±100g或±200g，由set_range()函数设定。
    */
-  int32_t readAccZ();
+  int32_t read_acc_z();
   
   /**
-   * @fn setInt1Th
+   * @fn set_int1_th
    * @brief 设置中断源1中断的阈值
    * @param threshold 告警阈值在测量范围内，单位:g
    */
-  void setInt1Th(uint8_t threshold);
+  void set_int1_th(uint8_t threshold);
 
   /**
-   * @fn setInt2Th
+   * @fn set_int2_th
    * @brief 设置“中断源2”的中断产生阈值
    * @param threshold 告警阈值在测量范围内，单位:g
    */
-  void setInt2Th(uint8_t threshold);
+  void set_int2_th(uint8_t threshold);
 
   /**
-   * @fn enableInterruptEvent
+   * @fn enable_interrupt_event
    * @brief 启用中断
    * @param source 中断引脚选择
-   * @n           eINT1 = 0,/<int1 >/
-   * @n           eINT2,/<int2>/
+   * @n           e_int1 = 0,/<int1 >/
+   * @n           e_int2,/<int2>/
    * @param event 中断事件选择
-   * @n            eXLowerThanTh ,/<x方向上的加速度小于阈值>/
-   * @n            eXHigherThanTh ,/<x方向上的加速度大于阈值>/
-   * @n            eYLowerThanTh,/<y方向上的加速度小于阈值>/
-   * @n            eYHigherThanTh,/<y方向上的加速度大于阈值>/
-   * @n            eZLowerThanTh,/<z方向的加速度小于阈值>/
-   * @n            eZHigherThanTh,/<z方向的加速度大于阈值>/
+   * @n            e_x_lower_than_th ,/<x方向上的加速度小于阈值>/
+   * @n            e_x_higher_than_th ,/<x方向上的加速度大于阈值>/
+   * @n            e_y_lower_than_th,/<y方向上的加速度小于阈值>/
+   * @n            e_y_higher_than_th,/<y方向上的加速度大于阈值>/
+   * @n            e_z_lower_than_th,/<z方向的加速度小于阈值>/
+   * @n            e_z_higher_than_th,/<z方向的加速度大于阈值>/
    */
-  void enableInterruptEvent(eInterruptSource_t source, eInterruptEvent_t event);
+  void enable_interrupt_event(e_interrupt_source_t source, e_interrupt_event_t event);
 
   /**
-   * @fn getInt1Event
+   * @fn get_int1_event
    * @brief 检查中断1中是否产生中断事件'event'  
    * @param event Interrupt event
-   * @n            eXLowerThanTh ,/<x方向上的加速度小于阈值>/
-   * @n            eXHigherThanTh ,/<x方向上的加速度大于阈值>/
-   * @n            eYLowerThanTh,/<y方向上的加速度小于阈值>/
-   * @n            eYHigherThanTh,/<y方向上的加速度大于阈值>/
-   * @n            eZLowerThanTh,/<z方向的加速度小于阈值>/
-   * @n            eZHigherThanTh,/<z方向的加速度大于阈值>/
+   * @n            e_x_lower_than_th ,/<x方向上的加速度小于阈值>/
+   * @n            e_x_higher_than_th ,/<x方向上的加速度大于阈值>/
+   * @n            e_y_lower_than_th,/<y方向上的加速度小于阈值>/
+   * @n            e_y_higher_than_th,/<y方向上的加速度大于阈值>/
+   * @n            e_z_lower_than_th,/<z方向的加速度小于阈值>/
+   * @n            e_z_higher_than_th,/<z方向的加速度大于阈值>/
    * @return true 产生/false 没有产生
    */
-  bool getInt1Event(eInterruptEvent_t event);
+  bool get_int1_event(e_interrupt_event_t event);
 
   /**
-   * @fn getInt2Event
+   * @fn get_int2_event
    * @brief 检查中断2中是否产生中断事件'event'  
    * @param event Interrupt event
-   * @n            eXLowerThanTh ,/<x方向上的加速度小于阈值>/
-   * @n            eXHigherThanTh ,/<x方向上的加速度大于阈值>/
-   * @n            eYLowerThanTh,/<y方向上的加速度小于阈值>/
-   * @n            eYHigherThanTh,/<y方向上的加速度大于阈值>/
-   * @n            eZLowerThanTh,/<z方向的加速度小于阈值>/
-   * @n            eZHigherThanTh,/<z方向的加速度大于阈值>/
+   * @n            e_x_lower_than_th ,/<x方向上的加速度小于阈值>/
+   * @n            e_x_higher_than_th ,/<x方向上的加速度大于阈值>/
+   * @n            e_y_lower_than_th,/<y方向上的加速度小于阈值>/
+   * @n            e_y_higher_than_th,/<y方向上的加速度大于阈值>/
+   * @n            e_z_lower_than_th,/<z方向的加速度小于阈值>/
+   * @n            e_z_higher_than_th,/<z方向的加速度大于阈值>/
    * @return true 产生/false 没有产生
    */
-  bool getInt2Event(eInterruptEvent_t event);
+  bool get_int2_event(e_interrupt_event_t event);
 ```
 ## 历史
 

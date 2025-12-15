@@ -33,6 +33,8 @@
 #define I2C_TASK_PRIO 17
 #define DELAY_S 1000
 
+#define LARGE_FONT_HEIGHT 15
+
 void app_i2c_init_pin(void)
 {
     uapi_pin_set_mode(CONFIG_I2C_SCL_MASTER_PIN, CONFIG_I2C_MASTER_PIN_MODE);
@@ -48,35 +50,35 @@ void oled_task(void)
     if (ret != 0) {
         printf("i2c init failed, ret = %0x\r\n", ret);
     }
-    ssd1306_Init();
+    ssd1306_init();
 
     // 定义不同字号的字体数组
-    FontDef fonts[] = {Font_6x8, Font_7x10, Font_11x18, Font_16x26};
+    font_def_t fonts[] = {font_6x8, font_7x10, font_11x18, font_16x26};
     char *font_names[] = {"6x8", "7x10", "11x18", "16x26"};
     int font_count = sizeof(fonts) / sizeof(fonts[0]);
     int current_font = 0;
 
     while (1) {
         // 清屏
-        ssd1306_Fill(Black);
+        ssd1306_fill(ssd1306_color_black);
 
         // 显示当前使用的字体信息
-        ssd1306_SetCursor(0, 0);
-        ssd1306_DrawString("Font:", Font_6x8, White);
-        ssd1306_DrawString(font_names[current_font], Font_6x8, White);
+        ssd1306_set_cursor(0, 0);
+        ssd1306_draw_string("Font:", font_6x8, ssd1306_color_white);
+        ssd1306_draw_string(font_names[current_font], font_6x8, ssd1306_color_white);
 
         // 根据字体大小调整显示位置
         int y_pos = 20;
-        if (fonts[current_font].FontHeight > 15) {
-            y_pos = 15; // 大字体需要更靠上的位置
+        if (fonts[current_font].font_height > LARGE_FONT_HEIGHT) {
+            y_pos = LARGE_FONT_HEIGHT; // 大字体需要更靠上的位置
         }
 
         // 显示主要文本
-        ssd1306_SetCursor(0, y_pos);
-        ssd1306_DrawString("Hello,DFRobot!", fonts[current_font], White);
+        ssd1306_set_cursor(0, y_pos);
+        ssd1306_draw_string("Hello,DFRobot!", fonts[current_font], ssd1306_color_white);
 
         // 更新屏幕
-        ssd1306_UpdateScreen();
+        ssd1306_update_screen();
 
         // 延时2秒
         uapi_systick_delay_ms(DELAY_S * 2);

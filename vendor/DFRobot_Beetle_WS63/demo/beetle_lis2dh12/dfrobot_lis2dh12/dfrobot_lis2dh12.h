@@ -62,58 +62,118 @@
 #define REG_INT1_SRC 0x31   ///< Interrupt source 1 status register
 #define REG_INT2_SRC 0x35   ///< Interrupt source 2 status register
 
+/** I2C configuration constants */
+#define LIS2DH12_I2C_MASTER_ADDR UINT8_C(0x0)
+#define LIS2DH12_I2C_SET_BAUDRATE UINT32_C(400000)
+#define LIS2DH12_I2C_MASTER_PIN_MODE UINT8_C(2)
+
+/** Default scale velocity constants */
+#define LIS2DH12_DEFAULT_MG_SCALE_VEL UINT8_C(16)
+#define LIS2DH12_RESET_DEFAULT UINT8_C(0)
+#define LIS2DH12_RESET_SET UINT8_C(1)
+
+/** Chip identification constants */
+#define LIS2DH12_CHIP_ID_VALID UINT8_C(0x33)
+#define LIS2DH12_CHIP_ID_INVALID_1 UINT8_C(0x00)
+#define LIS2DH12_CHIP_ID_INVALID_2 UINT8_C(0xFF)
+
+/** Buffer and array size constants */
+#define LIS2DH12_REG_ADDR_SIZE UINT8_C(1)
+#define LIS2DH12_SENSOR_DATA_SIZE UINT8_C(2)
+#define LIS2DH12_ARRAY_INDEX_0 UINT8_C(0)
+#define LIS2DH12_ARRAY_INDEX_1 UINT8_C(1)
+
+/** Acceleration scale velocity constants */
+#define LIS2DH12_MG_SCALE_2G UINT8_C(16)
+#define LIS2DH12_MG_SCALE_4G UINT8_C(32)
+#define LIS2DH12_MG_SCALE_8G UINT8_C(64)
+#define LIS2DH12_MG_SCALE_16G UINT8_C(192)
+
+/** Acceleration limit constants (in mg) */
+#define LIS2DH12_ACC_LIMIT_2G_POS UINT16_C(2000)
+#define LIS2DH12_ACC_LIMIT_2G_NEG INT16_C(-2000)
+#define LIS2DH12_ACC_LIMIT_4G_POS UINT16_C(4000)
+#define LIS2DH12_ACC_LIMIT_4G_NEG INT16_C(-4000)
+#define LIS2DH12_ACC_LIMIT_8G_POS UINT16_C(8000)
+#define LIS2DH12_ACC_LIMIT_8G_NEG INT16_C(-8000)
+#define LIS2DH12_ACC_LIMIT_16G_POS UINT16_C(16000)
+#define LIS2DH12_ACC_LIMIT_16G_NEG INT16_C(-16000)
+
+/** Register operation constants */
+#define LIS2DH12_REG_READ_MASK UINT8_C(0x80)
+#define LIS2DH12_CTRL_REG1_DEFAULT UINT8_C(0x0F)
+#define LIS2DH12_CTRL_REG2_DEFAULT UINT8_C(0x00)
+#define LIS2DH12_CTRL_REG3_INT1_DEFAULT UINT8_C(0x40)
+#define LIS2DH12_CTRL_REG3_INT2_DEFAULT UINT8_C(0x00)
+#define LIS2DH12_CTRL_REG5_INT1_DEFAULT UINT8_C(0x08)
+#define LIS2DH12_CTRL_REG5_INT2_DEFAULT UINT8_C(0x02)
+#define LIS2DH12_CTRL_REG6_INT2_DEFAULT UINT8_C(0x40)
+#define LIS2DH12_INT_CFG_BASE UINT8_C(0x80)
+
+/** Threshold calculation constants */
+#define LIS2DH12_THRESHOLD_MULTIPLIER UINT16_C(1024)
+
+/** Interrupt status bit masks */
+#define LIS2DH12_INT_STATUS_IA_MASK UINT8_C(0x40)
+#define LIS2DH12_INT_EVENT_XL_MASK UINT8_C(0x01)
+#define LIS2DH12_INT_EVENT_XH_MASK UINT8_C(0x02)
+#define LIS2DH12_INT_EVENT_YL_MASK UINT8_C(0x04)
+#define LIS2DH12_INT_EVENT_YH_MASK UINT8_C(0x08)
+#define LIS2DH12_INT_EVENT_ZL_MASK UINT8_C(0x10)
+#define LIS2DH12_INT_EVENT_ZH_MASK UINT8_C(0x20)
+
 /**
- * @fn  ePowerMode_t
+ * @fn  e_power_mode_t
  * @brief  Power mode selection, determine the frequency of data collection Represents the number of data collected per
  * second
  */
 typedef enum {
-    ePowerDown_0Hz = 0,
-    eLowPower_1Hz = 0x10,
-    eLowPower_10Hz = 0x20,
-    eLowPower_25Hz = 0x30,
-    eLowPower_50Hz = 0x40,
-    eLowPower_100Hz = 0x50,
-    eLowPower_200Hz = 0x60,
-    eLowPower_400Hz = 0x70
-} ePowerMode_t;
+    e_power_down_0hz = 0,
+    e_low_power_1hz = 0x10,
+    e_low_power_10hz = 0x20,
+    e_low_power_25hz = 0x30,
+    e_low_power_50hz = 0x40,
+    e_low_power_100hz = 0x50,
+    e_low_power_200hz = 0x60,
+    e_low_power_400hz = 0x70
+} e_power_mode_t;
 
 /**
- * @fn  eRange_t
+ * @fn  e_range_t
  * @brief  Sensor range selection
  */
 typedef enum {
-    eLIS2DH12_2g = 0x00, /**<±2g>*/
-    eLIS2DH12_4g = 0x10, /**<±4g>*/
-    eLIS2DH12_8g = 0x20, /**<±8g>*/
-    eLIS2DH12_16g = 0x30 /**<±16g>*/
-} eRange_t;
+    e_lis2dh12_2g = 0x00, /**<±2g>*/
+    e_lis2dh12_4g = 0x10, /**<±4g>*/
+    e_lis2dh12_8g = 0x20, /**<±8g>*/
+    e_lis2dh12_16g = 0x30 /**<±16g>*/
+} e_range_t;
 
 /**
- * @fn  eInterruptEvent_t
+ * @fn  e_interrupt_event_t
  * @brief  Interrupt event
  */
 typedef enum {
-    eXLowerThanTh = 0x01,  /**<The acceleration in the x direction is less than the threshold>*/
-    eXHigherThanTh = 0x02, /**<The acceleration in the x direction is greater than the threshold>*/
-    eYLowerThanTh = 0x04,  /**<The acceleration in the y direction is less than the threshold>*/
-    eYHigherThanTh = 0x08, /**<The acceleration in the y direction is greater than the threshold>*/
-    eZLowerThanTh = 0x10,  /**<The acceleration in the z direction is less than the threshold>*/
-    eZHigherThanTh = 0x20, /**<The acceleration in the z direction is greater than the threshold>*/
-    eEventError = 0,       /**< No event>*/
-} eInterruptEvent_t;
+    e_x_lower_than_th = 0x01,  /**<The acceleration in the x direction is less than the threshold>*/
+    e_x_higher_than_th = 0x02, /**<The acceleration in the x direction is greater than the threshold>*/
+    e_y_lower_than_th = 0x04,  /**<The acceleration in the y direction is less than the threshold>*/
+    e_y_higher_than_th = 0x08, /**<The acceleration in the y direction is greater than the threshold>*/
+    e_z_lower_than_th = 0x10,  /**<The acceleration in the z direction is less than the threshold>*/
+    e_z_higher_than_th = 0x20, /**<The acceleration in the z direction is greater than the threshold>*/
+    e_event_error = 0,       /**< No event>*/
+} e_interrupt_event_t;
 
 /**
- * @fn  eInterruptSource_t
+ * @fn  e_interrupt_source_t
  * @brief  Interrupt pin selection
  */
 typedef enum {
-    eINT1 = 0, /**<int1 >*/
-    eINT2,     /**<int2>*/
-} eInterruptSource_t;
+    e_int1 = 0, /**<int1 >*/
+    e_int2,     /**<int2>*/
+} e_interrupt_source_t;
 
 /**
- * @fn DFRobot_LIS2DH12_INIT
+ * @fn dfrobot_lis2dh12_init
  * @brief initialization function
  * @param addr I2C slave addr
  * @param iic_scl_master_pin SCL pin
@@ -121,137 +181,137 @@ typedef enum {
  * @param iic_bus_id I2C bus id
  * @return true/false
  */
-bool DFRobot_LIS2DH12_INIT(uint8_t addr, uint8_t iic_scl_master_pin, uint8_t iic_sda_master_pin, uint8_t iic_bus_id);
+bool dfrobot_lis2dh12_init(uint8_t addr, uint8_t iic_scl_master_pin, uint8_t iic_sda_master_pin, uint8_t iic_bus_id);
 
 /**
- * @fn setRange
+ * @fn set_range
  * @brief Set the measurement range
  * @param range Range(g)
- * @n           eLIS2DH12_2g, //2g
- * @n           eLIS2DH12_4g, //4g
- * @n           eLIS2DH12_8g, //8g
- * @n           eLIS2DH12_16g, //16g
+ * @n           e_lis2dh12_2g, //2g
+ * @n           e_lis2dh12_4g, //4g
+ * @n           e_lis2dh12_8g, //8g
+ * @n           e_lis2dh12_16g, //16g
  */
-void setRange(eRange_t range);
+void set_range(e_range_t range);
 
 /**
- * @fn setAcquireRate
+ * @fn set_acquire_rate
  * @brief Set data measurement rate
  * @param rate rate(HZ)
- * @n          ePowerDown_0Hz
- * @n          eLowPower_1Hz
- * @n          eLowPower_10Hz
- * @n          eLowPower_25Hz
- * @n          eLowPower_50Hz
- * @n          eLowPower_100Hz
- * @n          eLowPower_200Hz
- * @n          eLowPower_400Hz
+ * @n          e_power_down_0hz
+ * @n          e_low_power_1hz
+ * @n          e_low_power_10hz
+ * @n          e_low_power_25hz
+ * @n          e_low_power_50hz
+ * @n          e_low_power_100hz
+ * @n          e_low_power_200hz
+ * @n          e_low_power_400hz
  */
-void setAcquireRate(ePowerMode_t rate);
+void set_acquire_rate(e_power_mode_t rate);
 
 /**
- * @fn getID
+ * @fn get_id
  * @brief Get chip id
  * @return 8 bit serial number
  */
-uint8_t getID(void);
+uint8_t get_id(void);
 
 /**
- * @fn readAccX
+ * @fn read_acc_x
  * @brief Get the acceleration in the x direction
- * @return acceleration from x (unit:g), the mearsurement range is ±100g or ±200g, set by setRange() function.
+ * @return acceleration from x (unit:g), the mearsurement range is ±100g or ±200g, set by set_range() function.
  */
-int32_t readAccX(void);
+int32_t read_acc_x(void);
 
 /**
- * @fn readAccY
+ * @fn read_acc_y
  * @brief Get the acceleration in the y direction
- * @return acceleration from y(unit:g), the mearsurement range is ±100g or ±200g, set by setRange() function.
+ * @return acceleration from y(unit:g), the mearsurement range is ±100g or ±200g, set by set_range() function.
  */
-int32_t readAccY(void);
+int32_t read_acc_y(void);
 
 /**
- * @fn readAccZ
+ * @fn read_acc_z
  * @brief Get the acceleration in the z direction
- * @return acceleration from z(unit:g), the mearsurement range is ±100g or ±200g, set by setRange() function.
+ * @return acceleration from z(unit:g), the mearsurement range is ±100g or ±200g, set by set_range() function.
  */
-int32_t readAccZ(void);
+int32_t read_acc_z(void);
 
 /**
- * @fn setInt1Th
+ * @fn set_int1_th
  * @brief Set the threshold of interrupt source 1 interrupt
  * @param threshold The threshold is within the measurement range(unit:g)
  */
-void setInt1Th(uint8_t threshold);
+void set_int1_th(uint8_t threshold);
 
 /**
- * @fn setInt2Th
+ * @fn set_int2_th
  * @brief Set interrupt source 2 interrupt generation threshold
  * @param threshold The threshold is within the measurement range(unit:g）
  */
-void setInt2Th(uint8_t threshold);
+void set_int2_th(uint8_t threshold);
 
 /**
- * @fn enableInterruptEvent
+ * @fn enable_interrupt_event
  * @brief Enable interrupt
  * @param source Interrupt pin selection
- * @n           eINT1 = 0,/<int1 >/
- * @n           eINT2,/<int2>/
+ * @n           e_int1 = 0,/<int1 >/
+ * @n           e_int2,/<int2>/
  * @param event Interrupt event selection
- * @n           eXLowerThanTh ,/<The acceleration in the x direction is less than the threshold>/
- * @n           eXHigherThanTh ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           eYLowerThanTh,/<The acceleration in the y direction is less than the threshold>/
- * @n           eYHigherThanTh,/<The acceleration in the y direction is greater than the threshold>/
- * @n           eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
- * @n           eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
+ * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
+ * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
  */
-void enableInterruptEvent(eInterruptSource_t source, eInterruptEvent_t event);
+void enable_interrupt_event(e_interrupt_source_t source, e_interrupt_event_t event);
 
 /**
- * @fn getInt1Event
+ * @fn get_int1_event
  * @brief Check whether the interrupt event'event' is generated in interrupt 1
  * @param event Interrupt event
- * @n           eXLowerThanTh ,/<The acceleration in the x direction is less than the threshold>/
- * @n           eXHigherThanTh ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           eYLowerThanTh,/<The acceleration in the y direction is less than the threshold>/
- * @n           eYHigherThanTh,/<The acceleration in the y direction is greater than the threshold>/
- * @n           eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
- * @n           eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
+ * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
+ * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
  * @return true Generated/false Not generated
  */
-bool getInt1Event(eInterruptEvent_t event);
+bool get_int1_event(e_interrupt_event_t event);
 
 /**
- * @fn getInt2Event
+ * @fn get_int2_event
  * @brief Check whether the interrupt event'event' is generated in interrupt 1
  * @param event Interrupt event
- * @n           eXLowerThanTh ,/<The acceleration in the x direction is less than the threshold>/
- * @n           eXHigherThanTh ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           eYLowerThanTh,/<The acceleration in the y direction is less than the threshold>/
- * @n           eYHigherThanTh,/<The acceleration in the y direction is greater than the threshold>/
- * @n           eZLowerThanTh,/<The acceleration in the z direction is less than the threshold>/
- * @n           eZHigherThanTh,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
+ * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
+ * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
  * @return true Generated/false Not generated
  */
-bool getInt2Event(eInterruptEvent_t event);
+bool get_int2_event(e_interrupt_event_t event);
 
 /**
- * @fn readReg
+ * @fn read_reg
  * @brief read data from sensor chip register
  * @param reg chip register
- * @param pBuf  buf for store data to read
+ * @param p_buf  buf for store data to read
  * @param size  number of data to read
  * @return The number of successfully read data
  */
-uint8_t readReg(uint8_t reg, void *pBuf, size_t size);
+uint8_t read_reg(uint8_t reg, uint8_t *p_buf, size_t size);
 
 /**
- * @fn writeReg
+ * @fn write_reg
  * @brief Write data to sensor register
  * @param reg register
- * @param pBuf  buf for store data to write
- * @param size  The number of the data in pBuf
+ * @param p_buf  buf for store data to write
+ * @param size  The number of the data in p_buf
  */
-void writeReg(uint8_t reg, const void *pBuf, size_t size);
+void write_reg(uint8_t reg, const uint8_t *p_buf, size_t size);
 
 #endif

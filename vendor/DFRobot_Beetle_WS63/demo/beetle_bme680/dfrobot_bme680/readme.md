@@ -28,82 +28,82 @@ BME680 是专为移动应用和可穿戴设备开发的集成环境传感器其�
    * @retval  非0值 : 失败
    * @retval  0     : 成功
    */
-  int16_t begin(void);
+  int16_t bme680_bme680_begin(void);
 
   /**
    * @fn update
    * @brief 将所有数据更新到 MCU 内存
    */
-  void    update(void);
+  void    bme680_bme680_update(void);
 
   /**
-   * @fn startConvert
+   * @fn start_convert
    * @brief 开始转换以获得准确的值
    */
-  void  startConvert(void);
+  void  start_convert(void);
   /**
-   * @fn readTemperature
+   * @fn read_temperature
    * @brief 获取温度值 (单位 摄氏度)
    *
    * @return 温度值, 这个值有两个小数点
    */
-  float readTemperature(void);
+  float read_temperature(void);
   /**
-   * @fn readPressure
+   * @fn read_pressure
    * @brief 读取压强值 (单位 帕)
    *
    * @return 压强值, 这个值有两个小数点
    */
-  float readPressure(void);
+  float read_pressure(void);
   /**
-   * @fn readHumidity
+   * @fn read_humidity
    * @brief 读取湿度值 (单位 %rh)
    * @return 湿度值, 这个值有两个小数点
    */
-  float readHumidity(void);
+  float read_humidity(void);
   /**
-   * @fn readAltitude
+   * @fn read_altitude
    * @brief 读取高度（单位米）
    * @return 高度值, 这个值有两个小数点
    */
-  float readAltitude(void);
+  float read_altitude(void);
   /**
-   * @fn readCalibratedAltitude
+   * @fn read_calibrated_altitude
    * @brief 读取校准高度（单位米）
    *
    * @param seaLevel  正规化大气压
    *
    * @return 标定高度值，该值有两位小数
    */
-  float readCalibratedAltitude(float seaLevel);
+  float read_calibrated_altitude(float seaLevel);
   /**
-   * @fn readGasResistance
+   * @fn read_gas_resistance
    * @brief 读取气体电阻（单位欧姆）
    * @return 温度值，这个值有两位小数
    */
-  float readGasResistance(void);
+  float read_gas_resistance(void);
   /**
-   * @fn readSeaLevel
+   * @fn read_sea_level
    * @brief 读取标准化大气压力（单位帕）
    * @param altitude   标准化大气压力
    * @return 标准化大气压力
    */
-  float readSeaLevel(float altitude);
+  float read_sea_level(float altitude);
   /**
-   * @fn setParam
+   * @fn set_param
    * @brief 设置bme680的参数
    *
    * @param eParam        : 需要设置的参数
    *        dat           : 对象数据，不能超过5
    */  
-  void    setParam(eBME680_param_t eParam, uint8_t dat);
+  void    set_param(e_bme680_param_t eParam, uint8_t dat);
   /**
-   * @fn setGasHeater
+   * @fn set_gas_heater
    * @brief 设置bme680燃气加热器
    * @param temp        :目标温度
    * @param t           :以毫秒为单位花费的时间
    */
-   void    setGasHeater(uint16_t temp, uint16_t t);
+   void    set_gas_heater(uint16_t temp, uint16_t t);
 ```
 
 ## 历史

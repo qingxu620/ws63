@@ -20,6 +20,7 @@
 #define BT_INDEX_4 4
 #define BT_INDEX_0 0
 #define UART_BUFF_LENGTH 0x100
+#define MTU_SIZE 520
 
 /* 广播ID */
 #define SLE_ADV_HANDLE_DEFAULT 1
@@ -52,10 +53,10 @@ uint16_t get_connect_id(void)
     return g_sle_conn_hdl;
 }
 
-static void encode2byte_little(uint8_t *_ptr, uint16_t data)
+static void encode2byte_little(uint8_t *ptr, uint16_t data)
 {
-    *(uint8_t *)((_ptr) + 1) = (uint8_t)((data) >> 0x8);
-    *(uint8_t *)(_ptr) = (uint8_t)(data);
+    *(uint8_t *)((ptr) + 1) = (uint8_t)((data) >> 0x8);
+    *(uint8_t *)(ptr) = (uint8_t)(data);
 }
 
 static void sle_uuid_set_base(sle_uuid_t *out)
@@ -329,7 +330,7 @@ static void sle_pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errc
                         addr->addr[BT_INDEX_0], addr->addr[BT_INDEX_4]);
     g_sle_pair_hdl = conn_id + 1;
     ssap_exchange_info_t parameter = {0};
-    parameter.mtu_size = 520;
+    parameter.mtu_size = MTU_SIZE;
     parameter.version = 1;
     ssaps_set_info(g_server_id, &parameter);
 }

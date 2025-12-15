@@ -53,7 +53,7 @@
    * @n  SAVEPARAMS      保存配置
    * @n  CHANGEMODE      切换模式
    */
-  void setSensor(eSetMode_t mode);
+  void setSensor(e_set_mode_t mode);
   
   /**
    * @fn setDelay
@@ -145,7 +145,7 @@
   /**
    * @fn getStatus
    * @brief 获取模块当前状态
-   * @return sSensorStatus_t 
+   * @return s_sensor_status_t 
    * @n     workStatus
    * @n       0 stop
    * @n       1 start
@@ -156,7 +156,7 @@
    * @n       0 未初始化
    * @n       1 初始化完成
    */
-  sSensorStatus_t getStatus(void);
+  s_sensor_status_t getStatus(void);
 
   /**
    * @fn setIoPolaity
@@ -189,13 +189,13 @@
   /**
    * @fn getPwm
    * @brief 获取pwm 周期
-   * @return sPwmData_t 
+   * @return s_pwm_data_t 
    * @retval pwm1  未检测到目标时，OUT引脚输出信号的占空比，取值范围：0～100
    * @retval pwm2  检测到目标后，OUT引脚输出信号的占空比，取值范围：0～100
    * @retval timer  从pwm1 占空比渐变为pwm2 占空比的时间，取值范围：0～255，对应时间值 = timer*64ms
    * @n      如timer=20，占空比从pwm1渐变为pwm2需要 20*64ms=1.28s。
    */
-  sPwmData_t getPwm(void);
+  s_pwm_data_t getPwm(void);
 
   /**
    * @fn setSensorMode
@@ -203,7 +203,7 @@
    * @param mode 存在模式或者运动模式
    * @return true or false 
    */
-  bool setSensorMode(eMode_t mode);
+  bool setSensorMode(e_mode_t mode);
 
   /**
    * @fn getTargetNumber
@@ -262,14 +262,14 @@
    * @brief 设置微动检测
    * @param sta 枚举类型
    */
-  void setFrettingDetection(eSwitch_t sta);
+  void setFrettingDetection(e_switch_t sta);
 
   /**
    * @fn getFrettingDetection
    * @brief 获取微动检测的配置状态
-   * @return eSwitch_t 
+   * @return e_switch_t 
    */
-  eSwitch_t getFrettingDetection(void);
+  e_switch_t getFrettingDetection(void);
 ```
 
 ## 历史

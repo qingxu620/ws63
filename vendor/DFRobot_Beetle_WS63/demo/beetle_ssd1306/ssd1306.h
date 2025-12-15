@@ -20,12 +20,12 @@
 #include <stdint.h>
 #include "ssd1306_fonts.h"
 
-// SSD1306 OLED height in pixels
+// g_ssd1306 OLED height in pixels
 #ifndef SSD1306_HEIGHT
 #define SSD1306_HEIGHT 64
 #endif
 
-// SSD1306 width in pixels
+// g_ssd1306 width in pixels
 #ifndef SSD1306_WIDTH
 #define SSD1306_WIDTH 128
 #endif
@@ -38,44 +38,44 @@
 
 // Enumeration for screen colors
 typedef enum {
-    Black = 0x00, // Black color, no pixel
-    White = 0x01  // Pixel is set. Color depends on OLED
-} SSD1306_COLOR;
+    ssd1306_color_black = 0x00, // ssd1306_color_black color, no pixel
+    ssd1306_color_white = 0x01  // Pixel is set. Color depends on OLED
+} ssd1306_color_t;
 
 typedef enum {
-    SSD1306_OK = 0x00,
-    SSD1306_ERR = 0x01 // Generic error.
-} SSD1306_Error_t;
+    ssd1306_ok = 0x00,
+    ssd1306_err = 0x01 // Generic error.
+} ssd1306_error_t;
 
 // Struct to store transformations
 typedef struct {
-    uint16_t CurrentX;
-    uint16_t CurrentY;
-    uint8_t Inverted;
-    uint8_t Initialized;
-    uint8_t DisplayOn;
-} SSD1306_t;
+    uint16_t current_x;
+    uint16_t current_y;
+    uint8_t inverted;
+    uint8_t initialized;
+    uint8_t display_on;
+} ssd1306_t;
 typedef struct {
     uint8_t x;
     uint8_t y;
-} SSD1306_VERTEX;
+} ssd1306_vertex_t;
 
 // Procedure definitions
-void ssd1306_Init(void);
-void ssd1306_Fill(SSD1306_COLOR color);
-void ssd1306_SetCursor(uint8_t x, uint8_t y);
-void ssd1306_UpdateScreen(void);
+void ssd1306_init(void);
+void ssd1306_fill(ssd1306_color_t color);
+void ssd1306_set_cursor(uint8_t x, uint8_t y);
+void ssd1306_update_screen(void);
 
-char ssd1306_DrawChar(char ch, FontDef Font, SSD1306_COLOR color);
-char ssd1306_DrawString(char *str, FontDef Font, SSD1306_COLOR color);
+char ssd1306_draw_char(char ch, font_def_t Font, ssd1306_color_t color);
+char ssd1306_draw_string(char *str, font_def_t Font, ssd1306_color_t color);
 
-void ssd1306_DrawPixel(uint8_t x, uint8_t y, SSD1306_COLOR color);
-void ssd1306_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SSD1306_COLOR color);
-void ssd1306_DrawPolyline(const SSD1306_VERTEX *par_vertex, uint16_t par_size, SSD1306_COLOR color);
-void ssd1306_DrawRectangle(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SSD1306_COLOR color);
-void ssd1306_DrawCircle(uint8_t par_x, uint8_t par_y, uint8_t par_r, SSD1306_COLOR par_color);
-void ssd1306_DrawBitmap(const uint8_t *bitmap, uint32_t size);
-void ssd1306_DrawRegion(uint8_t x, uint8_t y, uint8_t w, const uint8_t *data, uint32_t size);
+void ssd1306_draw_pixel(uint8_t x, uint8_t y, ssd1306_color_t color);
+void ssd1306_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, ssd1306_color_t color);
+void ssd1306_draw_polyline(const ssd1306_vertex_t *par_vertex, uint16_t par_size, ssd1306_color_t color);
+void ssd1306_draw_rectangle(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, ssd1306_color_t color);
+void ssd1306_draw_circle(uint8_t par_x, uint8_t par_y, uint8_t par_r, ssd1306_color_t par_color);
+void ssd1306_draw_bitmap(const uint8_t *bitmap, uint32_t size);
+void ssd1306_draw_region(uint8_t x, uint8_t y, uint8_t w, const uint8_t *data, uint32_t size);
 
 /**
  * @brief Sets the contrast of the display.
@@ -83,25 +83,25 @@ void ssd1306_DrawRegion(uint8_t x, uint8_t y, uint8_t w, const uint8_t *data, ui
  * @note Contrast increases as the value increases.
  * @note RESET = 7Fh.
  */
-void ssd1306_SetContrast(const uint8_t value);
+void ssd1306_set_contrast(const uint8_t value);
 /**
  * @brief Set Display ON/OFF.
  * @param[in] on 0 for OFF, any for ON.
  */
-void ssd1306_SetDisplayOn(const uint8_t on);
+void ssd1306_set_display_on(const uint8_t on);
 /**
- * @brief Reads DisplayOn state.
+ * @brief Reads display_on state.
  * @return  0: OFF.
  *          1: ON.
  */
-uint8_t ssd1306_GetDisplayOn(void);
+uint8_t ssd1306_get_display_on(void);
 
 // Low-level procedures
-void ssd1306_Reset(void);
-void ssd1306_WriteCommand(uint8_t byte);
-void ssd1306_WriteData(uint8_t *buffer, size_t buff_size);
-SSD1306_Error_t ssd1306_FillBuffer(uint8_t *buf, uint32_t len);
-void ssd1306_ClearOLED(void);
+void ssd1306_reset(void);
+void ssd1306_write_command(uint8_t byte);
+void ssd1306_write_data(uint8_t *buffer, size_t buff_size);
+ssd1306_error_t ssd1306_fill_buffer(uint8_t *buf, uint32_t len);
+void ssd1306_clear_oled(void);
 void ssd1306_printf(char *fmt, ...);
 
 #endif // __SSD1306_H__
