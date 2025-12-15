@@ -134,7 +134,7 @@
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_SERVER_SPEED = y",
     "needSmoke": "false",
     "key":"13",
-    "name":"sle_throughput",
+    "name":"sle_throughput_server",
     "description":"SLE速率展示"
   },
   {
@@ -142,6 +142,7 @@
     "relativePath": "demo/sle_throughput",
     "chip": "WS63",
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_CLIENT_SPEED = y",
+	"name":"sle_throughput_client",
     "needSmoke": "false"
   },
   {
@@ -230,13 +231,14 @@
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_DISTRIBUTE_NETWORK_SERVER=y",
     "needSmoke": "false",
     "key":"21",
-    "name":"sle_distribute_network",
+    "name":"sle_distribute_network_server",
     "description":"SLE配网"
   },{
     "buildTarget": "ws63-liteos-app",
     "relativePath": "demo/sle_distribute_network",
     "chip": "WS63",
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_DISTRIBUTE_NETWORK_CLIENT=y",
+	"name":"sle_distribute_network_client",
     "needSmoke": "false"
   },{
     "buildTarget": "ws63-liteos-app",
@@ -267,6 +269,7 @@
     "relativePath": "demo/wifidemo",
     "chip": "WS63",
     "buildDef": "CONFIG_SAMPLE_SUPPORT_WIFI_STA=y",
+	"name":"wifi_sta_demo",
     "needSmoke": "false"
   },{
     "buildTarget": "ws63-liteos-app",
@@ -275,13 +278,14 @@
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_LED_SERVER=y",
     "needSmoke": "false",
     "key":"24",
-    "name":"sle_led",
+    "name":"sle_led_server",
     "description":"sle灯控"
   },{
     "buildTarget": "ws63-liteos-app",
     "relativePath": "demo/sle_led",
     "chip": "WS63",
     "buildDef": "CONFIG_SAMPLE_SUPPORT_SLE_LED_CLIENT=y",
+	"name":"sle_led_client",
     "needSmoke": "false"
   },{
     "buildTarget": "ws63-liteos-app",
@@ -297,12 +301,14 @@
     "relativePath": "demo/wifi_promiscuous_mode",
     "chip": "WS63",
     "buildDef": "",
+	"name":"wifi_promiscuous_mode",
     "needSmoke": "false"
   },{
     "buildTarget": "ws63-liteos-app",
     "relativePath": "demo/sg90_demo",
     "chip": "WS63",
     "buildDef": "",
+	"name":"sg90_demo",
     "needSmoke": "false"
   }, {
     "buildTarget": "ws63-liteos-app",
