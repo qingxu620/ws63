@@ -119,7 +119,8 @@ static void radar_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
-    task_handle = osal_kthread_create((osal_kthread_handler)radar_example, NULL, "RadarTask", MOTION_DETECTION_TASK_STACK_SIZE);
+    task_handle =
+        osal_kthread_create((osal_kthread_handler)radar_example, NULL, "RadarTask", MOTION_DETECTION_TASK_STACK_SIZE);
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, MOTION_DETECTION_TASK_PRIO);
     }

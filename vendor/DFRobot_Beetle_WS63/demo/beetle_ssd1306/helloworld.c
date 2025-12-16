@@ -53,19 +53,19 @@ void oled_task(void)
     ssd1306_init();
 
     // 定义不同字号的字体数组
-    font_def_t fonts[] = {font_6x8, font_7x10, font_11x18, font_16x26};
+    font_def_t fonts[] = {g_font_6x8, g_font_7x10, g_font_11x18, g_font_16x26};
     char *font_names[] = {"6x8", "7x10", "11x18", "16x26"};
     int font_count = sizeof(fonts) / sizeof(fonts[0]);
     int current_font = 0;
 
     while (1) {
         // 清屏
-        ssd1306_fill(ssd1306_color_black);
+        ssd1306_fill(SSD1306_COLOR_BLACK);
 
         // 显示当前使用的字体信息
         ssd1306_set_cursor(0, 0);
-        ssd1306_draw_string("Font:", font_6x8, ssd1306_color_white);
-        ssd1306_draw_string(font_names[current_font], font_6x8, ssd1306_color_white);
+        ssd1306_draw_string("Font:", g_font_6x8, SSD1306_COLOR_WHITE);
+        ssd1306_draw_string(font_names[current_font], g_font_6x8, SSD1306_COLOR_WHITE);
 
         // 根据字体大小调整显示位置
         int y_pos = 20;
@@ -75,7 +75,7 @@ void oled_task(void)
 
         // 显示主要文本
         ssd1306_set_cursor(0, y_pos);
-        ssd1306_draw_string("Hello,DFRobot!", fonts[current_font], ssd1306_color_white);
+        ssd1306_draw_string("Hello,DFRobot!", fonts[current_font], SSD1306_COLOR_WHITE);
 
         // 更新屏幕
         ssd1306_update_screen();

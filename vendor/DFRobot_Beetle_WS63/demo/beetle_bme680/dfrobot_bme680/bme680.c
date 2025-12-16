@@ -14,15 +14,15 @@
 
 /**<static variables */
 /**<Look up table for the possible gas range values */
-uint32_t lookupTable1[16] = {UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2147483647),
-                             UINT32_C(2147483647), UINT32_C(2126008810), UINT32_C(2147483647), UINT32_C(2130303777),
-                             UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2143188679), UINT32_C(2136746228),
-                             UINT32_C(2147483647), UINT32_C(2126008810), UINT32_C(2147483647), UINT32_C(2147483647)};
+uint32_t g_lookup_table1[16] = {UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2147483647),
+                                UINT32_C(2147483647), UINT32_C(2126008810), UINT32_C(2147483647), UINT32_C(2130303777),
+                                UINT32_C(2147483647), UINT32_C(2147483647), UINT32_C(2143188679), UINT32_C(2136746228),
+                                UINT32_C(2147483647), UINT32_C(2126008810), UINT32_C(2147483647), UINT32_C(2147483647)};
 /**<Look up table for the possible gas range values */
-uint32_t lookupTable2[16] = {UINT32_C(4096000000), UINT32_C(2048000000), UINT32_C(1024000000), UINT32_C(512000000),
-                             UINT32_C(255744255),  UINT32_C(127110228),  UINT32_C(64000000),   UINT32_C(32258064),
-                             UINT32_C(16016016),   UINT32_C(8000000),    UINT32_C(4000000),    UINT32_C(2000000),
-                             UINT32_C(1000000),    UINT32_C(500000),     UINT32_C(250000),     UINT32_C(125000)};
+uint32_t g_lookup_table2[16] = {UINT32_C(4096000000), UINT32_C(2048000000), UINT32_C(1024000000), UINT32_C(512000000),
+                                UINT32_C(255744255),  UINT32_C(127110228),  UINT32_C(64000000),   UINT32_C(32258064),
+                                UINT32_C(16016016),   UINT32_C(8000000),    UINT32_C(4000000),    UINT32_C(2000000),
+                                UINT32_C(1000000),    UINT32_C(500000),     UINT32_C(250000),     UINT32_C(125000)};
 
 /**
  * @fn get_calib_data
@@ -36,6 +36,16 @@ uint32_t lookupTable2[16] = {UINT32_C(4096000000), UINT32_C(2048000000), UINT32_
  * @retval zero -> Success / +ve value -> Warning / -ve value -> Error
  */
 static int8_t get_calib_data(struct bme680_dev *dev);
+static void parse_temp_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev);
+static void parse_pressure_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev);
+static void parse_humidity_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev);
+static void parse_gas_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev);
+static int8_t parse_other_coefficients(struct bme680_dev *dev);
+static int8_t interleave_reg_data(const uint8_t *reg_addr,
+                                  const uint8_t *reg_data,
+                                  uint8_t len,
+                                  uint8_t *tmp_buff,
+                                  struct bme680_dev *dev);
 
 /**
  * @fn set_gas_config
@@ -182,7 +192,11 @@ static int8_t boundary_check(uint8_t *value, uint8_t min, uint8_t max, struct bm
  * @param dev : Structure instance of bme680_dev.
  * @return Result of API execution status.
  */
-static int8_t configure_filter_settings(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev);
+static int8_t configure_filter_settings(uint16_t desired_settings,
+                                        uint8_t *reg_array,
+                                        uint8_t *data_array,
+                                        uint8_t *count,
+                                        struct bme680_dev *dev);
 
 /**
  * @fn configure_heater_control
@@ -194,7 +208,11 @@ static int8_t configure_filter_settings(uint16_t desired_settings, uint8_t *reg_
  * @param dev : Structure instance of bme680_dev.
  * @return Result of API execution status.
  */
-static int8_t configure_heater_control(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev);
+static int8_t configure_heater_control(uint16_t desired_settings,
+                                       uint8_t *reg_array,
+                                       uint8_t *data_array,
+                                       uint8_t *count,
+                                       struct bme680_dev *dev);
 
 /**
  * @fn configure_tph_oversampling
@@ -206,7 +224,11 @@ static int8_t configure_heater_control(uint16_t desired_settings, uint8_t *reg_a
  * @param dev : Structure instance of bme680_dev.
  * @return Result of API execution status.
  */
-static int8_t configure_tph_oversampling(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev);
+static int8_t configure_tph_oversampling(uint16_t desired_settings,
+                                         uint8_t *reg_array,
+                                         uint8_t *data_array,
+                                         uint8_t *count,
+                                         struct bme680_dev *dev);
 
 /**
  * @fn configure_humidity_oversampling
@@ -218,7 +240,11 @@ static int8_t configure_tph_oversampling(uint16_t desired_settings, uint8_t *reg
  * @param dev : Structure instance of bme680_dev.
  * @return Result of API execution status.
  */
-static int8_t configure_humidity_oversampling(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev);
+static int8_t configure_humidity_oversampling(uint16_t desired_settings,
+                                              uint8_t *reg_array,
+                                              uint8_t *data_array,
+                                              uint8_t *count,
+                                              struct bme680_dev *dev);
 
 /**
  * @fn configure_gas_settings
@@ -230,7 +256,11 @@ static int8_t configure_humidity_oversampling(uint16_t desired_settings, uint8_t
  * @param dev : Structure instance of bme680_dev.
  * @return Result of API execution status.
  */
-static int8_t configure_gas_settings(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev);
+static int8_t configure_gas_settings(uint16_t desired_settings,
+                                     uint8_t *reg_array,
+                                     uint8_t *data_array,
+                                     uint8_t *count,
+                                     struct bme680_dev *dev);
 
 /**
  * @fn calculate_tph_duration
@@ -247,21 +277,28 @@ int8_t bme680_init(struct bme680_dev *dev)
 
     /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
-    if (rslt == BME680_OK) {
-        /* Soft reset to restore it to default values */
-        rslt = bme680_soft_reset(dev);
-        if (rslt == BME680_OK) {
-            rslt = bme680_get_regs(BME680_CHIP_ID_ADDR, &dev->chip_id, 1, dev);
-            if (rslt == BME680_OK) {
-                if (dev->chip_id == BME680_CHIP_ID) {
-                    /* Get the Calibration data */
-                    rslt = get_calib_data(dev);
-                } else {
-                    rslt = BME680_E_DEV_NOT_FOUND;
-                }
-            }
-        }
+    if (rslt != BME680_OK) {
+        return rslt;
     }
+
+    /* Soft reset to restore it to default values */
+    rslt = bme680_soft_reset(dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    rslt = bme680_get_regs(BME680_CHIP_ID_ADDR, &dev->chip_id, 1, dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    if (dev->chip_id != BME680_CHIP_ID) {
+        return BME680_E_DEV_NOT_FOUND;
+    }
+
+    /* Get the Calibration data */
+    rslt = get_calib_data(dev);
+
     return rslt;
 }
 
@@ -293,36 +330,31 @@ int8_t bme680_set_regs(const uint8_t *reg_addr, const uint8_t *reg_data, uint8_t
     int8_t rslt;
     /* Length of the temporary buffer is 2*(length of register) */
     uint8_t tmp_buff[BME680_TMP_BUFFER_LENGTH] = {0};
-    uint16_t index;
 
     /* Check for null pointer in the device structure */
     rslt = null_ptr_check(dev);
-    if (rslt == BME680_OK) {
-        if ((len > 0) && (len < BME680_TMP_BUFFER_HALF)) {
-            /* Interleave the 2 arrays */
-            for (index = 0; index < len; index++) {
-                if (dev->intf == BME680_SPI_INTF) {
-                    /* Set the memory page */
-                    rslt = set_mem_page(reg_addr[index], dev);
-                    tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index)] = reg_addr[index] & BME680_SPI_WR_MSK;
-                } else {
-                    tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index)] = reg_addr[index];
-                }
-                tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index) + 1] = reg_data[index];
-            }
-            /* Write the interleaved array */
-            if (rslt == BME680_OK) {
-                dev->com_rslt = dev->write(dev->dev_id, tmp_buff[BME680_TMP_BUFF_REG_ADDR_INDEX], &tmp_buff[BME680_TMP_BUFF_REG_DATA_INDEX], (BME680_REG_PAIR_MULTIPLIER * len) - 1);
-                if (dev->com_rslt != 0) {
-                    rslt = BME680_E_COM_FAIL;
-                }
-            }
-        } else {
-            rslt = BME680_E_INVALID_LENGTH;
-        }
+    if (rslt != BME680_OK) {
+        return rslt;
     }
 
-    return rslt;
+    if ((len == 0) || (len >= BME680_TMP_BUFFER_HALF)) {
+        return BME680_E_INVALID_LENGTH;
+    }
+
+    /* Interleave the 2 arrays */
+    rslt = interleave_reg_data(reg_addr, reg_data, len, tmp_buff, dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    /* Write the interleaved array */
+    dev->com_rslt = dev->write(dev->dev_id, tmp_buff[BME680_TMP_BUFF_REG_ADDR_INDEX],
+                               &tmp_buff[BME680_TMP_BUFF_REG_DATA_INDEX], (BME680_REG_PAIR_MULTIPLIER * len) - 1);
+    if (dev->com_rslt != 0) {
+        return BME680_E_COM_FAIL;
+    }
+
+    return BME680_OK;
 }
 
 int8_t bme680_soft_reset(struct bme680_dev *dev)
@@ -429,12 +461,15 @@ int8_t bme680_get_sensor_settings(uint16_t desired_settings, struct bme680_dev *
 
             /* get the T,P,H ,Filter,ODR settings here */
             if (desired_settings & BME680_FILTER_SEL) {
-                dev->tph_sett.filter = bme680_get_bits(data_array[BME680_REG_FILTER_INDEX], BME680_FILTER_MSK, BME680_FILTER_POS);
+                dev->tph_sett.filter =
+                    bme680_get_bits(data_array[BME680_REG_FILTER_INDEX], BME680_FILTER_MSK, BME680_FILTER_POS);
             }
 
             if (desired_settings & (BME680_OST_SEL | BME680_OSP_SEL)) {
-                dev->tph_sett.os_temp = bme680_get_bits(data_array[BME680_REG_TEMP_INDEX], BME680_OST_MSK, BME680_OST_POS);
-                dev->tph_sett.os_pres = bme680_get_bits(data_array[BME680_REG_PRES_INDEX], BME680_OSP_MSK, BME680_OSP_POS);
+                dev->tph_sett.os_temp =
+                    bme680_get_bits(data_array[BME680_REG_TEMP_INDEX], BME680_OST_MSK, BME680_OST_POS);
+                dev->tph_sett.os_pres =
+                    bme680_get_bits(data_array[BME680_REG_PRES_INDEX], BME680_OSP_MSK, BME680_OSP_POS);
             }
 
             if (desired_settings & BME680_OSH_SEL) {
@@ -448,7 +483,8 @@ int8_t bme680_get_sensor_settings(uint16_t desired_settings, struct bme680_dev *
 
             if (desired_settings & (BME680_RUN_GAS_SEL | BME680_NBCONV_SEL)) {
                 dev->gas_sett.nb_conv = bme680_get_bits_pos_0(data_array[BME680_REG_NBCONV_INDEX], BME680_NBCONV_MSK);
-                dev->gas_sett.run_gas = bme680_get_bits(data_array[BME680_REG_RUN_GAS_INDEX], BME680_RUN_GAS_MSK, BME680_RUN_GAS_POS);
+                dev->gas_sett.run_gas =
+                    bme680_get_bits(data_array[BME680_REG_RUN_GAS_INDEX], BME680_RUN_GAS_MSK, BME680_RUN_GAS_POS);
             }
         }
     } else {
@@ -562,55 +598,29 @@ int8_t bme680_get_sensor_data(struct bme680_field_data *data, struct bme680_dev 
     return rslt;
 }
 
-static int8_t get_calib_data(struct bme680_dev *dev)
+static void parse_temp_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev)
 {
-    int8_t rslt;
-    uint8_t coeff_array[BME680_COEFF_SIZE] = {0};
-    uint8_t temp_var = 0; /* Temporary variable */
-
-    /* Check for null pointer in the device structure */
-    rslt = null_ptr_check(dev);
-    if (rslt != BME680_OK) {
-        return rslt;
-    }
-
-    rslt = bme680_get_regs(BME680_COEFF_ADDR1, coeff_array, BME680_COEFF_ADDR1_LEN, dev);
-    if (rslt != BME680_OK) {
-        return rslt;
-    }
-
-    /* Append the second half in the same array */
-    rslt = bme680_get_regs(BME680_COEFF_ADDR2, &coeff_array[BME680_COEFF_ADDR1_LEN], BME680_COEFF_ADDR2_LEN, dev);
-    if (rslt != BME680_OK) {
-        return rslt;
-    }
-
-    /* Temperature related coefficients */
-    dev->calib.par_t1 =
-        (uint16_t)(bme680_concat_bytes(coeff_array[BME680_T1_MSB_REG], coeff_array[BME680_T1_LSB_REG]));
-    dev->calib.par_t2 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_T2_MSB_REG], coeff_array[BME680_T2_LSB_REG]));
+    dev->calib.par_t1 = (uint16_t)(bme680_concat_bytes(coeff_array[BME680_T1_MSB_REG], coeff_array[BME680_T1_LSB_REG]));
+    dev->calib.par_t2 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_T2_MSB_REG], coeff_array[BME680_T2_LSB_REG]));
     dev->calib.par_t3 = (int8_t)(coeff_array[BME680_T3_REG]);
+}
 
-    /* Pressure related coefficients */
-    dev->calib.par_p1 =
-        (uint16_t)(bme680_concat_bytes(coeff_array[BME680_P1_MSB_REG], coeff_array[BME680_P1_LSB_REG]));
-    dev->calib.par_p2 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_P2_MSB_REG], coeff_array[BME680_P2_LSB_REG]));
+static void parse_pressure_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev)
+{
+    dev->calib.par_p1 = (uint16_t)(bme680_concat_bytes(coeff_array[BME680_P1_MSB_REG], coeff_array[BME680_P1_LSB_REG]));
+    dev->calib.par_p2 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_P2_MSB_REG], coeff_array[BME680_P2_LSB_REG]));
     dev->calib.par_p3 = (int8_t)coeff_array[BME680_P3_REG];
-    dev->calib.par_p4 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_P4_MSB_REG], coeff_array[BME680_P4_LSB_REG]));
-    dev->calib.par_p5 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_P5_MSB_REG], coeff_array[BME680_P5_LSB_REG]));
+    dev->calib.par_p4 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_P4_MSB_REG], coeff_array[BME680_P4_LSB_REG]));
+    dev->calib.par_p5 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_P5_MSB_REG], coeff_array[BME680_P5_LSB_REG]));
     dev->calib.par_p6 = (int8_t)(coeff_array[BME680_P6_REG]);
     dev->calib.par_p7 = (int8_t)(coeff_array[BME680_P7_REG]);
-    dev->calib.par_p8 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_P8_MSB_REG], coeff_array[BME680_P8_LSB_REG]));
-    dev->calib.par_p9 =
-        (int16_t)(bme680_concat_bytes(coeff_array[BME680_P9_MSB_REG], coeff_array[BME680_P9_LSB_REG]));
+    dev->calib.par_p8 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_P8_MSB_REG], coeff_array[BME680_P8_LSB_REG]));
+    dev->calib.par_p9 = (int16_t)(bme680_concat_bytes(coeff_array[BME680_P9_MSB_REG], coeff_array[BME680_P9_LSB_REG]));
     dev->calib.par_p10 = (uint8_t)(coeff_array[BME680_P10_REG]);
+}
 
-    /* Humidity related coefficients */
+static void parse_humidity_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev)
+{
     dev->calib.par_h1 = (uint16_t)(((uint16_t)coeff_array[BME680_H1_MSB_REG] << BME680_HUM_REG_SHIFT_VAL) |
                                    (coeff_array[BME680_H1_LSB_REG] & BME680_BIT_H1_DATA_MSK));
     dev->calib.par_h2 = (uint16_t)(((uint16_t)coeff_array[BME680_H2_MSB_REG] << BME680_HUM_REG_SHIFT_VAL) |
@@ -620,14 +630,21 @@ static int8_t get_calib_data(struct bme680_dev *dev)
     dev->calib.par_h5 = (int8_t)coeff_array[BME680_H5_REG];
     dev->calib.par_h6 = (uint8_t)coeff_array[BME680_H6_REG];
     dev->calib.par_h7 = (int8_t)coeff_array[BME680_H7_REG];
+}
 
-    /* Gas heater related coefficients */
+static void parse_gas_coefficients(const uint8_t *coeff_array, struct bme680_dev *dev)
+{
     dev->calib.par_gh1 = (int8_t)coeff_array[BME680_GH1_REG];
     dev->calib.par_gh2 =
         (int16_t)(bme680_concat_bytes(coeff_array[BME680_GH2_MSB_REG], coeff_array[BME680_GH2_LSB_REG]));
     dev->calib.par_gh3 = (int8_t)coeff_array[BME680_GH3_REG];
+}
 
-    /* Other coefficients */
+static int8_t parse_other_coefficients(struct bme680_dev *dev)
+{
+    int8_t rslt;
+    uint8_t temp_var = 0;
+
     rslt = bme680_get_regs(BME680_ADDR_RES_HEAT_RANGE_ADDR, &temp_var, 1, dev);
     if (rslt != BME680_OK) {
         return rslt;
@@ -646,6 +663,66 @@ static int8_t get_calib_data(struct bme680_dev *dev)
     }
 
     dev->calib.range_sw_err = ((int8_t)temp_var & (int8_t)BME680_RSERROR_MSK) / BME680_RSERROR_DIVISOR;
+
+    return rslt;
+}
+
+static int8_t interleave_reg_data(const uint8_t *reg_addr,
+                                  const uint8_t *reg_data,
+                                  uint8_t len,
+                                  uint8_t *tmp_buff,
+                                  struct bme680_dev *dev)
+{
+    int8_t rslt = BME680_OK;
+    uint16_t index;
+
+    for (index = 0; index < len; index++) {
+        if (dev->intf == BME680_SPI_INTF) {
+            /* Set the memory page */
+            rslt = set_mem_page(reg_addr[index], dev);
+            if (rslt != BME680_OK) {
+                return rslt;
+            }
+            tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index)] = reg_addr[index] & BME680_SPI_WR_MSK;
+        } else {
+            tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index)] = reg_addr[index];
+        }
+        tmp_buff[(BME680_REG_PAIR_MULTIPLIER * index) + 1] = reg_data[index];
+    }
+
+    return rslt;
+}
+
+static int8_t get_calib_data(struct bme680_dev *dev)
+{
+    int8_t rslt;
+    uint8_t coeff_array[BME680_COEFF_SIZE] = {0};
+
+    /* Check for null pointer in the device structure */
+    rslt = null_ptr_check(dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    rslt = bme680_get_regs(BME680_COEFF_ADDR1, coeff_array, BME680_COEFF_ADDR1_LEN, dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    /* Append the second half in the same array */
+    rslt = bme680_get_regs(BME680_COEFF_ADDR2, &coeff_array[BME680_COEFF_ADDR1_LEN], BME680_COEFF_ADDR2_LEN, dev);
+    if (rslt != BME680_OK) {
+        return rslt;
+    }
+
+    /* Parse all coefficients from the array */
+    parse_temp_coefficients(coeff_array, dev);
+    parse_pressure_coefficients(coeff_array, dev);
+    parse_humidity_coefficients(coeff_array, dev);
+    parse_gas_coefficients(coeff_array, dev);
+
+    /* Parse other coefficients from additional registers */
+    rslt = parse_other_coefficients(dev);
 
     return rslt;
 }
@@ -692,7 +769,7 @@ static int8_t get_gas_config(struct bme680_dev *dev)
         return rslt;
     }
 
-    if (BME680_SPI_INTF == dev->intf) {
+    if (dev->intf == BME680_SPI_INTF) {
         /* Memory page switch the SPI address */
         rslt = set_mem_page(reg_addr1, dev);
         if (rslt != BME680_OK) {
@@ -728,12 +805,14 @@ static int16_t calc_temperature(uint32_t temp_adc, struct bme680_dev *dev)
     int64_t var3;
     int16_t calc_temp;
 
-    var1 = ((int32_t)temp_adc >> BME680_TEMP_ADC_SHIFT_RIGHT) - ((int32_t)dev->calib.par_t1 << BME680_TEMP_PAR_T1_SHIFT_LEFT);
+    var1 = ((int32_t)temp_adc >> BME680_TEMP_ADC_SHIFT_RIGHT) -
+           ((int32_t)dev->calib.par_t1 << BME680_TEMP_PAR_T1_SHIFT_LEFT);
     var2 = (var1 * (int32_t)dev->calib.par_t2) >> BME680_TEMP_VAR2_SHIFT_RIGHT;
     var3 = ((var1 >> 1) * (var1 >> 1)) >> BME680_TEMP_VAR3_SHIFT_RIGHT;
     var3 = ((var3) * ((int32_t)dev->calib.par_t3 << BME680_TEMP_PAR_T3_SHIFT_LEFT)) >> BME680_TEMP_VAR3_SHIFT_RIGHT_2;
     dev->calib.t_fine = (int32_t)(var2 + var3);
-    calc_temp = (int16_t)(((dev->calib.t_fine * BME680_TEMP_CALC_MULTIPLIER) + BME680_TEMP_CALC_OFFSET) >> BME680_TEMP_SHIFT_RIGHT);
+    calc_temp = (int16_t)(((dev->calib.t_fine * BME680_TEMP_CALC_MULTIPLIER) + BME680_TEMP_CALC_OFFSET) >>
+                          BME680_TEMP_SHIFT_RIGHT);
 
     return calc_temp;
 }
@@ -747,28 +826,42 @@ static uint32_t calc_pressure(uint32_t pres_adc, const struct bme680_dev *dev)
     int32_t pressure_comp = 0;
 
     var1 = (((int32_t)dev->calib.t_fine) >> BME680_PRES_VAR1_SHIFT_RIGHT) - BME680_PRES_VAR1_SUBTRACT;
-    var2 = ((((var1 >> BME680_PRES_VAR2_SHIFT_RIGHT) * (var1 >> BME680_PRES_VAR2_SHIFT_RIGHT)) >> BME680_PRES_VAR2_SHIFT_RIGHT_2) * (int32_t)dev->calib.par_p6) >> BME680_PRES_VAR2_SHIFT_RIGHT_3;
+    var2 = ((((var1 >> BME680_PRES_VAR2_SHIFT_RIGHT) * (var1 >> BME680_PRES_VAR2_SHIFT_RIGHT)) >>
+             BME680_PRES_VAR2_SHIFT_RIGHT_2) *
+            (int32_t)dev->calib.par_p6) >>
+           BME680_PRES_VAR2_SHIFT_RIGHT_3;
     var2 = var2 + ((var1 * (int32_t)dev->calib.par_p5) << BME680_PRES_VAR1_SHIFT_RIGHT);
     var2 = (var2 >> BME680_PRES_VAR2_SHIFT_RIGHT) + ((int32_t)dev->calib.par_p4 << BME680_PRES_PAR_P4_SHIFT_LEFT);
-    var1 = (((((var1 >> BME680_PRES_VAR2_SHIFT_RIGHT) * (var1 >> BME680_PRES_VAR2_SHIFT_RIGHT)) >> BME680_PRES_VAR1_SHIFT_RIGHT_2) * ((int32_t)dev->calib.par_p3 << BME680_PRES_PAR_P3_SHIFT_LEFT)) >> BME680_PRES_VAR1_SHIFT_RIGHT_3) +
+    var1 = (((((var1 >> BME680_PRES_VAR2_SHIFT_RIGHT) * (var1 >> BME680_PRES_VAR2_SHIFT_RIGHT)) >>
+              BME680_PRES_VAR1_SHIFT_RIGHT_2) *
+             ((int32_t)dev->calib.par_p3 << BME680_PRES_PAR_P3_SHIFT_LEFT)) >>
+            BME680_PRES_VAR1_SHIFT_RIGHT_3) +
            (((int32_t)dev->calib.par_p2 * var1) >> BME680_PRES_VAR1_SHIFT_RIGHT);
     var1 = var1 >> BME680_PRES_VAR1_SHIFT_RIGHT_4;
     var1 = ((BME680_PRES_VAR1_ADD + var1) * (int32_t)dev->calib.par_p1) >> BME680_PRES_VAR1_SHIFT_RIGHT_5;
     pressure_comp = BME680_PRES_COMP_SUBTRACT - pres_adc;
-    pressure_comp = (int32_t)((pressure_comp - (var2 >> BME680_PRES_VAR2_SHIFT_RIGHT_4)) * ((uint32_t)BME680_PRES_COMP_MULTIPLIER));
+    pressure_comp =
+        (int32_t)((pressure_comp - (var2 >> BME680_PRES_VAR2_SHIFT_RIGHT_4)) * ((uint32_t)BME680_PRES_COMP_MULTIPLIER));
     var4 = (1 << BME680_PRES_VAR4_SHIFT_LEFT);
     if (pressure_comp >= var4) {
         pressure_comp = ((pressure_comp / (uint32_t)var1) << BME680_PRES_COMP_SHIFT_LEFT);
     } else {
         pressure_comp = ((pressure_comp << BME680_PRES_COMP_SHIFT_LEFT) / (uint32_t)var1);
     }
-    var1 = ((int32_t)dev->calib.par_p9 * (int32_t)(((pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT) * (pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT)) >> BME680_PRES_COMP_SHIFT_RIGHT_2)) >> BME680_PRES_COMP_SHIFT_RIGHT_3;
-    var2 = ((int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_4) * (int32_t)dev->calib.par_p8) >> BME680_PRES_PAR_P8_SHIFT_RIGHT;
-    var3 = ((int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) * (int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) * (int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) *
-            (int32_t)dev->calib.par_p10) >>
+    var1 = ((int32_t)dev->calib.par_p9 * (int32_t)(((pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT) *
+                                                    (pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT)) >>
+                                                   BME680_PRES_COMP_SHIFT_RIGHT_2)) >>
+           BME680_PRES_COMP_SHIFT_RIGHT_3;
+    var2 = ((int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_4) * (int32_t)dev->calib.par_p8) >>
+           BME680_PRES_PAR_P8_SHIFT_RIGHT;
+    var3 = ((int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) *
+            (int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) *
+            (int32_t)(pressure_comp >> BME680_PRES_COMP_SHIFT_RIGHT_5) * (int32_t)dev->calib.par_p10) >>
            BME680_PRES_COMP_SHIFT_RIGHT_6;
 
-    pressure_comp = (int32_t)(pressure_comp) + ((var1 + var2 + var3 + ((int32_t)dev->calib.par_p7 << BME680_PRES_PAR_P7_SHIFT_LEFT)) >> BME680_PRES_COMP_SHIFT_RIGHT_7);
+    pressure_comp = (int32_t)(pressure_comp) +
+                    ((var1 + var2 + var3 + ((int32_t)dev->calib.par_p7 << BME680_PRES_PAR_P7_SHIFT_LEFT)) >>
+                     BME680_PRES_COMP_SHIFT_RIGHT_7);
 
     return (uint32_t)pressure_comp;
 }
@@ -784,20 +877,27 @@ static uint32_t calc_humidity(uint16_t hum_adc, const struct bme680_dev *dev)
     int32_t temp_scaled;
     int32_t calc_hum;
 
-    temp_scaled = (((int32_t)dev->calib.t_fine * BME680_TEMP_CALC_MULTIPLIER) + BME680_TEMP_CALC_OFFSET) >> BME680_TEMP_SHIFT_RIGHT;
+    temp_scaled = (((int32_t)dev->calib.t_fine * BME680_TEMP_CALC_MULTIPLIER) + BME680_TEMP_CALC_OFFSET) >>
+                  BME680_TEMP_SHIFT_RIGHT;
     var1 = (int32_t)(hum_adc - ((int32_t)((int32_t)dev->calib.par_h1 * BME680_HUM_PAR_H1_MULTIPLIER))) -
-           (((temp_scaled * (int32_t)dev->calib.par_h3) / ((int32_t)BME680_HUM_PERCENT_DIVISOR)) >> BME680_HUM_VAR1_SHIFT_RIGHT);
+           (((temp_scaled * (int32_t)dev->calib.par_h3) / ((int32_t)BME680_HUM_PERCENT_DIVISOR)) >>
+            BME680_HUM_VAR1_SHIFT_RIGHT);
     var2 = ((int32_t)dev->calib.par_h2 *
             (((temp_scaled * (int32_t)dev->calib.par_h4) / ((int32_t)BME680_HUM_PERCENT_DIVISOR)) +
-             (((temp_scaled * ((temp_scaled * (int32_t)dev->calib.par_h5) / ((int32_t)BME680_HUM_PERCENT_DIVISOR))) >> BME680_HUM_VAR2_SHIFT_RIGHT) / ((int32_t)BME680_HUM_PERCENT_DIVISOR)) +
+             (((temp_scaled * ((temp_scaled * (int32_t)dev->calib.par_h5) / ((int32_t)BME680_HUM_PERCENT_DIVISOR))) >>
+               BME680_HUM_VAR2_SHIFT_RIGHT) /
+              ((int32_t)BME680_HUM_PERCENT_DIVISOR)) +
              (int32_t)(1 << BME680_HUM_VAR2_SHIFT_LEFT))) >>
            BME680_HUM_VAR2_SHIFT_RIGHT_2;
     var3 = var1 * var2;
     var4 = (int32_t)dev->calib.par_h6 << BME680_HUM_VAR4_SHIFT_LEFT;
-    var4 = ((var4) + ((temp_scaled * (int32_t)dev->calib.par_h7) / ((int32_t)BME680_HUM_PERCENT_DIVISOR))) >> BME680_HUM_VAR4_SHIFT_RIGHT;
-    var5 = ((var3 >> BME680_HUM_VAR5_SHIFT_RIGHT) * (var3 >> BME680_HUM_VAR5_SHIFT_RIGHT)) >> BME680_HUM_VAR5_SHIFT_RIGHT_2;
+    var4 = ((var4) + ((temp_scaled * (int32_t)dev->calib.par_h7) / ((int32_t)BME680_HUM_PERCENT_DIVISOR))) >>
+           BME680_HUM_VAR4_SHIFT_RIGHT;
+    var5 = ((var3 >> BME680_HUM_VAR5_SHIFT_RIGHT) * (var3 >> BME680_HUM_VAR5_SHIFT_RIGHT)) >>
+           BME680_HUM_VAR5_SHIFT_RIGHT_2;
     var6 = (var4 * var5) >> BME680_HUM_VAR6_SHIFT_RIGHT;
-    calc_hum = (((var3 + var6) >> BME680_HUM_CALC_SHIFT_RIGHT) * ((int32_t)BME680_HUM_CALC_MULTIPLIER)) >> BME680_HUM_CALC_SHIFT_RIGHT_2;
+    calc_hum = (((var3 + var6) >> BME680_HUM_CALC_SHIFT_RIGHT) * ((int32_t)BME680_HUM_CALC_MULTIPLIER)) >>
+               BME680_HUM_CALC_SHIFT_RIGHT_2;
 
     if (calc_hum > BME680_HUM_MAX_VALUE) { /* Cap at 100%rH */
         calc_hum = BME680_HUM_MAX_VALUE;
@@ -815,9 +915,12 @@ uint32_t calc_gas_resistance(uint16_t gas_res_adc, uint8_t gas_range, struct bme
     int64_t var3;
     uint32_t calc_gas_res;
 
-    var1 = (int64_t)((BME680_GAS_VAR1_BASE + (BME680_GAS_VAR1_MULTIPLIER * (int64_t)dev->calib.range_sw_err)) * ((int64_t)lookupTable1[gas_range])) >> BME680_GAS_VAR1_SHIFT_RIGHT;
-    var2 = (((int64_t)((int64_t)gas_res_adc << BME680_GAS_VAR2_SHIFT_LEFT) - (int64_t)(BME680_GAS_VAR2_SUBTRACT)) + var1);
-    var3 = (((int64_t)lookupTable2[gas_range] * (int64_t)var1) >> BME680_GAS_VAR3_SHIFT_RIGHT);
+    var1 = (int64_t)((BME680_GAS_VAR1_BASE + (BME680_GAS_VAR1_MULTIPLIER * (int64_t)dev->calib.range_sw_err)) *
+                     ((int64_t)g_lookup_table1[gas_range])) >>
+           BME680_GAS_VAR1_SHIFT_RIGHT;
+    var2 =
+        (((int64_t)((int64_t)gas_res_adc << BME680_GAS_VAR2_SHIFT_LEFT) - (int64_t)(BME680_GAS_VAR2_SUBTRACT)) + var1);
+    var3 = (((int64_t)g_lookup_table2[gas_range] * (int64_t)var1) >> BME680_GAS_VAR3_SHIFT_RIGHT);
     calc_gas_res = (uint32_t)((var3 + ((int64_t)var2 >> BME680_GAS_VAR2_SHIFT_RIGHT)) / (int64_t)var2);
 
     return calc_gas_res;
@@ -839,8 +942,13 @@ static uint8_t calc_heater_res(uint16_t temp, const struct bme680_dev *dev)
         temp = BME680_HEATR_TEMP_MAX;
     }
 
-    var1 = (((int32_t)dev->amb_temp * dev->calib.par_gh3) / BME680_HEATR_AMBIENT_DIVISOR) * BME680_HEATR_AMBIENT_MULTIPLIER;
-    var2 = (dev->calib.par_gh1 + BME680_HEATR_PAR_GH1_ADD) * (((((dev->calib.par_gh2 + BME680_HEATR_PAR_GH2_ADD) * temp * BME680_HEATR_TEMP_MULTIPLIER) / BME680_HEATR_TEMP_DIVISOR) + BME680_HEATR_TEMP_ADD) / BME680_HEATR_TEMP_DIVISOR_2);
+    var1 = (((int32_t)dev->amb_temp * dev->calib.par_gh3) / BME680_HEATR_AMBIENT_DIVISOR) *
+           BME680_HEATR_AMBIENT_MULTIPLIER;
+    var2 = (dev->calib.par_gh1 + BME680_HEATR_PAR_GH1_ADD) *
+           (((((dev->calib.par_gh2 + BME680_HEATR_PAR_GH2_ADD) * temp * BME680_HEATR_TEMP_MULTIPLIER) /
+              BME680_HEATR_TEMP_DIVISOR) +
+             BME680_HEATR_TEMP_ADD) /
+            BME680_HEATR_TEMP_DIVISOR_2);
     var3 = var1 + (var2 / BME680_REG_PAIR_MULTIPLIER);
     var4 = (var3 / (dev->calib.res_heat_range + BME680_HEATR_RES_RANGE_ADD));
     var5 = (BME680_HEATR_VAR5_MULTIPLIER * dev->calib.res_heat_val) + BME680_HEATR_VAR5_ADD;
@@ -890,10 +998,16 @@ static int8_t read_field_data(struct bme680_field_data *data, struct bme680_dev 
             data->meas_index = buff[BME680_FIELD_MEAS_INDEX];
 
             /* read the raw data from the sensor */
-            adc_pres = (uint32_t)(((uint32_t)buff[BME680_FIELD_PRES_MSB_INDEX] * BME680_ADC_PRES_MULTIPLIER_MSB) | ((uint32_t)buff[BME680_FIELD_PRES_LSB_INDEX] * BME680_ADC_PRES_MULTIPLIER_MID) | ((uint32_t)buff[BME680_FIELD_PRES_XLSB_INDEX] / BME680_ADC_PRES_DIVISOR));
-            adc_temp = (uint32_t)(((uint32_t)buff[BME680_FIELD_TEMP_MSB_INDEX] * BME680_ADC_TEMP_MULTIPLIER_MSB) | ((uint32_t)buff[BME680_FIELD_TEMP_LSB_INDEX] * BME680_ADC_TEMP_MULTIPLIER_MID) | ((uint32_t)buff[BME680_FIELD_TEMP_XLSB_INDEX] / BME680_ADC_TEMP_DIVISOR));
-            adc_hum = (uint16_t)(((uint32_t)buff[BME680_FIELD_HUM_MSB_INDEX] * BME680_ADC_HUM_MULTIPLIER) | (uint32_t)buff[BME680_FIELD_HUM_LSB_INDEX]);
-            adc_gas_res = (uint16_t)(((uint32_t)buff[BME680_FIELD_GAS_RES_MSB_INDEX] * BME680_ADC_GAS_MULTIPLIER) | (((uint32_t)buff[BME680_FIELD_GAS_RES_LSB_INDEX]) / BME680_ADC_GAS_DIVISOR));
+            adc_pres = (uint32_t)(((uint32_t)buff[BME680_FIELD_PRES_MSB_INDEX] * BME680_ADC_PRES_MULTIPLIER_MSB) |
+                                  ((uint32_t)buff[BME680_FIELD_PRES_LSB_INDEX] * BME680_ADC_PRES_MULTIPLIER_MID) |
+                                  ((uint32_t)buff[BME680_FIELD_PRES_XLSB_INDEX] / BME680_ADC_PRES_DIVISOR));
+            adc_temp = (uint32_t)(((uint32_t)buff[BME680_FIELD_TEMP_MSB_INDEX] * BME680_ADC_TEMP_MULTIPLIER_MSB) |
+                                  ((uint32_t)buff[BME680_FIELD_TEMP_LSB_INDEX] * BME680_ADC_TEMP_MULTIPLIER_MID) |
+                                  ((uint32_t)buff[BME680_FIELD_TEMP_XLSB_INDEX] / BME680_ADC_TEMP_DIVISOR));
+            adc_hum = (uint16_t)(((uint32_t)buff[BME680_FIELD_HUM_MSB_INDEX] * BME680_ADC_HUM_MULTIPLIER) |
+                                 (uint32_t)buff[BME680_FIELD_HUM_LSB_INDEX]);
+            adc_gas_res = (uint16_t)(((uint32_t)buff[BME680_FIELD_GAS_RES_MSB_INDEX] * BME680_ADC_GAS_MULTIPLIER) |
+                                     (((uint32_t)buff[BME680_FIELD_GAS_RES_LSB_INDEX]) / BME680_ADC_GAS_DIVISOR));
             gas_range = buff[BME680_FIELD_GAS_RES_LSB_INDEX] & BME680_GAS_RANGE_MSK;
 
             data->status |= buff[BME680_FIELD_GAS_RES_LSB_INDEX] & BME680_GASM_VALID_MSK;
@@ -1017,7 +1131,11 @@ static int8_t null_ptr_check(const struct bme680_dev *dev)
     return rslt;
 }
 
-static int8_t configure_filter_settings(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev)
+static int8_t configure_filter_settings(uint16_t desired_settings,
+                                        uint8_t *reg_array,
+                                        uint8_t *data_array,
+                                        uint8_t *count,
+                                        struct bme680_dev *dev)
 {
     int8_t rslt = BME680_OK;
     uint8_t reg_addr;
@@ -1045,7 +1163,11 @@ static int8_t configure_filter_settings(uint16_t desired_settings, uint8_t *reg_
     return rslt;
 }
 
-static int8_t configure_heater_control(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev)
+static int8_t configure_heater_control(uint16_t desired_settings,
+                                       uint8_t *reg_array,
+                                       uint8_t *data_array,
+                                       uint8_t *count,
+                                       struct bme680_dev *dev)
 {
     int8_t rslt = BME680_OK;
     uint8_t reg_addr;
@@ -1071,7 +1193,11 @@ static int8_t configure_heater_control(uint16_t desired_settings, uint8_t *reg_a
     return rslt;
 }
 
-static int8_t configure_tph_oversampling(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev)
+static int8_t configure_tph_oversampling(uint16_t desired_settings,
+                                         uint8_t *reg_array,
+                                         uint8_t *data_array,
+                                         uint8_t *count,
+                                         struct bme680_dev *dev)
 {
     int8_t rslt = BME680_OK;
     uint8_t reg_addr;
@@ -1103,7 +1229,11 @@ static int8_t configure_tph_oversampling(uint16_t desired_settings, uint8_t *reg
     return rslt;
 }
 
-static int8_t configure_humidity_oversampling(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev)
+static int8_t configure_humidity_oversampling(uint16_t desired_settings,
+                                              uint8_t *reg_array,
+                                              uint8_t *data_array,
+                                              uint8_t *count,
+                                              struct bme680_dev *dev)
 {
     int8_t rslt = BME680_OK;
     uint8_t reg_addr;
@@ -1129,7 +1259,11 @@ static int8_t configure_humidity_oversampling(uint16_t desired_settings, uint8_t
     return rslt;
 }
 
-static int8_t configure_gas_settings(uint16_t desired_settings, uint8_t *reg_array, uint8_t *data_array, uint8_t *count, struct bme680_dev *dev)
+static int8_t configure_gas_settings(uint16_t desired_settings,
+                                     uint8_t *reg_array,
+                                     uint8_t *data_array,
+                                     uint8_t *count,
+                                     struct bme680_dev *dev)
 {
     int8_t rslt = BME680_OK;
     uint8_t reg_addr;

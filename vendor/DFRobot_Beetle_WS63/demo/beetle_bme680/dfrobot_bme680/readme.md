@@ -71,11 +71,11 @@ BME680 是专为移动应用和可穿戴设备开发的集成环境传感器其�
    * @fn read_calibrated_altitude
    * @brief 读取校准高度（单位米）
    *
-   * @param seaLevel  正规化大气压
+  * @param sea_level  正规化大气压
    *
    * @return 标定高度值，该值有两位小数
    */
-  float read_calibrated_altitude(float seaLevel);
+  float read_calibrated_altitude(float sea_level);
   /**
    * @fn read_gas_resistance
    * @brief 读取气体电阻（单位欧姆）
@@ -93,10 +93,10 @@ BME680 是专为移动应用和可穿戴设备开发的集成环境传感器其�
    * @fn set_param
    * @brief 设置bme680的参数
    *
-   * @param eParam        : 需要设置的参数
+  * @param e_param        : 需要设置的参数
    *        dat           : 对象数据，不能超过5
    */  
-  void    set_param(e_bme680_param_t eParam, uint8_t dat);
+  void    set_param(e_bme680_param_t e_param, uint8_t dat);
   /**
    * @fn set_gas_heater
    * @brief 设置bme680燃气加热器

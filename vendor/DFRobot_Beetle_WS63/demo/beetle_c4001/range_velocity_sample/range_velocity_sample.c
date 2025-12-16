@@ -60,7 +60,8 @@ static void m_range_velocity_task(void)
      * is abnormal. max Detection range Maximum distance, unit cm, range 2.4~20m (240~2000) thres Target detection
      * threshold, dimensionless unit 0.1, range 0~6553.5 (0~65535)
      */
-    if (set_detect_thres(RANGE_VELOCITY_DETECT_MIN_CM /* min */, RANGE_VELOCITY_DETECT_MAX_CM /* max */, RANGE_VELOCITY_DETECT_THRES /* thres */)) {
+    if (set_detect_thres(RANGE_VELOCITY_DETECT_MIN_CM /* min */, RANGE_VELOCITY_DETECT_MAX_CM /* max */,
+                         RANGE_VELOCITY_DETECT_THRES /* thres */)) {
         osal_printk("set detect threshold successfully\r\n");
     }
 
@@ -91,7 +92,8 @@ static void m_range_velocity_entry(void)
 {
     osal_task *task_handle = NULL;
     osal_kthread_lock();
-    task_handle = osal_kthread_create((osal_kthread_handler)m_range_velocity_task, NULL, "RadarTask", RANGE_VELOCITY_TASK_STACK_SIZE);
+    task_handle = osal_kthread_create((osal_kthread_handler)m_range_velocity_task, NULL, "RadarTask",
+                                      RANGE_VELOCITY_TASK_STACK_SIZE);
     if (task_handle != NULL) {
         osal_kthread_set_priority(task_handle, RANGE_VELOCITY_TASK_PRIO);
     }

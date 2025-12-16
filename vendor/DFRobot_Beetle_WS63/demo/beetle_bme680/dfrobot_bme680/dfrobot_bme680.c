@@ -13,7 +13,9 @@
 
 static struct bme680_dev g_bme680_sensor;
 static struct bme680_field_data g_bme680_data;
-static uint8_t g_convert_cmd = (BME680_CONVERT_CMD_OS_TEMP_VAL << BME680_CONVERT_CMD_OS_TEMP_SHIFT) | (BME680_CONVERT_CMD_OS_PRES_VAL << BME680_CONVERT_CMD_OS_PRES_SHIFT) | BME680_CONVERT_CMD_MODE_VAL;
+static uint8_t g_convert_cmd = (BME680_CONVERT_CMD_OS_TEMP_VAL << BME680_CONVERT_CMD_OS_TEMP_SHIFT) |
+                               (BME680_CONVERT_CMD_OS_PRES_VAL << BME680_CONVERT_CMD_OS_PRES_SHIFT) |
+                               BME680_CONVERT_CMD_MODE_VAL;
 
 uint8_t g_bme680_i2c_addr = BME680_INIT_SUCCESS;
 
@@ -22,14 +24,14 @@ void bme680_delay_ms(uint32_t period)
     uapi_systick_delay_ms(period);
 }
 
-void dfrobot_bme680(bme680_com_fptr_t readReg,
-                    bme680_com_fptr_t writeReg,
-                    bme680_delay_fptr_t delayMS,
+void dfrobot_bme680(bme680_com_fptr_t read_reg,
+                    bme680_com_fptr_t write_reg,
+                    bme680_delay_fptr_t delay_ms,
                     e_bme680_interface interface)
 {
-    g_bme680_sensor.read = readReg;
-    g_bme680_sensor.write = writeReg;
-    g_bme680_sensor.delay_ms = delayMS;
+    g_bme680_sensor.read = read_reg;
+    g_bme680_sensor.write = write_reg;
+    g_bme680_sensor.delay_ms = delay_ms;
     switch (interface) {
         case BME680_INTERFACE_I2C:
             g_bme680_sensor.intf = BME680_I2C_INTF;
@@ -61,7 +63,7 @@ int16_t bme680_bme680_begin(void)
     g_bme680_sensor.gas_sett.run_gas = BME680_ENABLE_GAS_MEAS;
     /* Create a ramp heat waveform in 3 steps */
     g_bme680_sensor.gas_sett.heatr_temp = BME680_DEFAULT_HEATR_TEMP; /* degree Celsius */
-    g_bme680_sensor.gas_sett.heatr_dur = BME680_DEFAULT_HEATR_DUR;  /* milliseconds */
+    g_bme680_sensor.gas_sett.heatr_dur = BME680_DEFAULT_HEATR_DUR;   /* milliseconds */
 
     /* Select the power mode */
     /* Must be set before writing the sensor configuration */
@@ -112,12 +114,15 @@ float read_humidity(void)
 
 float read_altitude(void)
 {
-    return (1.0f - pow((float)g_bme680_data.pressure / BME680_PRESSURE_TO_HPA_DIVISOR / BME680_SEALEVEL, BME680_ALTITUDE_EXPONENT)) * BME680_ALTITUDE_COEFFICIENT_1 / BME680_ALTITUDE_COEFFICIENT_2;
+    return (1.0f - pow((float)g_bme680_data.pressure / BME680_PRESSURE_TO_HPA_DIVISOR / BME680_SEALEVEL,
+                       BME680_ALTITUDE_EXPONENT)) *
+           BME680_ALTITUDE_COEFFICIENT_1 / BME680_ALTITUDE_COEFFICIENT_2;
 }
 
-float read_calibrated_altitude(float seaLevel)
+float read_calibrated_altitude(float sea_level)
 {
-    return (1.0f - pow((float)g_bme680_data.pressure / seaLevel, BME680_ALTITUDE_EXPONENT)) * BME680_ALTITUDE_COEFFICIENT_1 / BME680_ALTITUDE_COEFFICIENT_2;
+    return (1.0f - pow((float)g_bme680_data.pressure / sea_level, BME680_ALTITUDE_EXPONENT)) *
+           BME680_ALTITUDE_COEFFICIENT_1 / BME680_ALTITUDE_COEFFICIENT_2;
 }
 
 float read_gas_resistance(void)
@@ -127,16 +132,17 @@ float read_gas_resistance(void)
 
 float read_sea_level(float altitude)
 {
-    return (g_bme680_data.pressure / pow(1.0f - (altitude / BME680_SEA_LEVEL_ALTITUDE_BASE), BME680_SEA_LEVEL_EXPONENT));
+    return (g_bme680_data.pressure /
+            pow(1.0f - (altitude / BME680_SEA_LEVEL_ALTITUDE_BASE), BME680_SEA_LEVEL_EXPONENT));
 }
 
-void set_param(e_bme680_param_t eParam, uint8_t dat)
+void set_param(e_bme680_param_t e_param, uint8_t dat)
 {
     if (dat > BME680_PARAM_MAX_VALUE) {
         return;
     }
 
-    switch (eParam) {
+    switch (e_param) {
         case BME680_PARAM_TEMPSAMP:
             write_param_helper(BME680_REG_CTRL_TEMP_PRES, dat, BME680_PARAM_MASK << BME680_PARAM_TEMP_SHIFT);
             break;
@@ -157,7 +163,7 @@ void set_gas_heater(uint16_t temp, uint16_t t)
     UNUSED(temp);
     UNUSED(t);
     g_bme680_sensor.gas_sett.heatr_temp = BME680_DEFAULT_HEATR_TEMP; /* degree Celsius */
-    g_bme680_sensor.gas_sett.heatr_dur = BME680_DEFAULT_HEATR_DUR;  /* milliseconds */
+    g_bme680_sensor.gas_sett.heatr_dur = BME680_DEFAULT_HEATR_DUR;   /* milliseconds */
     uint8_t set_required_settings = BME680_GAS_SENSOR_SEL;
     bme680_set_sensor_settings(set_required_settings, &g_bme680_sensor);
 }
@@ -165,7 +171,7 @@ void set_gas_heater(uint16_t temp, uint16_t t)
 void write_param_helper(uint8_t reg, uint8_t dat, uint8_t addr)
 {
     uint8_t var1 = BME680_INIT_SUCCESS;
-    uint8_t addrCount = BME680_INIT_SUCCESS;
+    uint8_t addr_count = BME680_INIT_SUCCESS;
     if (g_bme680_sensor.intf == BME680_SPI_INTF) {
         uint8_t spi_page_reset = BME680_REG_SPI_PAGE_RESET;
         g_bme680_sensor.write(g_bme680_sensor.dev_id, BME680_REG_CTRL_SPI_PAGE, &spi_page_reset, BME680_REG_DATA_SIZE);
@@ -173,9 +179,9 @@ void write_param_helper(uint8_t reg, uint8_t dat, uint8_t addr)
     g_bme680_sensor.read(g_bme680_sensor.dev_id, reg, &var1, BME680_REG_DATA_SIZE);
     var1 &= ~addr;
     while (!(addr & BME680_BIT_MASK_LSB)) {
-        addrCount++;
+        addr_count++;
         addr >>= 1;
     }
-    var1 |= dat << addrCount;
+    var1 |= dat << addr_count;
     g_bme680_sensor.write(g_bme680_sensor.dev_id, reg, &var1, BME680_REG_DATA_SIZE);
 }

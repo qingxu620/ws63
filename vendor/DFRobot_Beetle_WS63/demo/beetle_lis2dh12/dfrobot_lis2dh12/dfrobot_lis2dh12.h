@@ -128,14 +128,14 @@
  * second
  */
 typedef enum {
-    e_power_down_0hz = 0,
-    e_low_power_1hz = 0x10,
-    e_low_power_10hz = 0x20,
-    e_low_power_25hz = 0x30,
-    e_low_power_50hz = 0x40,
-    e_low_power_100hz = 0x50,
-    e_low_power_200hz = 0x60,
-    e_low_power_400hz = 0x70
+    E_POWER_DOWN_0HZ = 0,
+    E_LOW_POWER_1HZ = 0x10,
+    E_LOW_POWER_10HZ = 0x20,
+    E_LOW_POWER_25HZ = 0x30,
+    E_LOW_POWER_50HZ = 0x40,
+    E_LOW_POWER_100HZ = 0x50,
+    E_LOW_POWER_200HZ = 0x60,
+    E_LOW_POWER_400HZ = 0x70
 } e_power_mode_t;
 
 /**
@@ -143,10 +143,10 @@ typedef enum {
  * @brief  Sensor range selection
  */
 typedef enum {
-    e_lis2dh12_2g = 0x00, /**<±2g>*/
-    e_lis2dh12_4g = 0x10, /**<±4g>*/
-    e_lis2dh12_8g = 0x20, /**<±8g>*/
-    e_lis2dh12_16g = 0x30 /**<±16g>*/
+    E_LIS2DH12_2G = 0x00, /**<±2g>*/
+    E_LIS2DH12_4G = 0x10, /**<±4g>*/
+    E_LIS2DH12_8G = 0x20, /**<±8g>*/
+    E_LIS2DH12_16G = 0x30 /**<±16g>*/
 } e_range_t;
 
 /**
@@ -154,13 +154,13 @@ typedef enum {
  * @brief  Interrupt event
  */
 typedef enum {
-    e_x_lower_than_th = 0x01,  /**<The acceleration in the x direction is less than the threshold>*/
-    e_x_higher_than_th = 0x02, /**<The acceleration in the x direction is greater than the threshold>*/
-    e_y_lower_than_th = 0x04,  /**<The acceleration in the y direction is less than the threshold>*/
-    e_y_higher_than_th = 0x08, /**<The acceleration in the y direction is greater than the threshold>*/
-    e_z_lower_than_th = 0x10,  /**<The acceleration in the z direction is less than the threshold>*/
-    e_z_higher_than_th = 0x20, /**<The acceleration in the z direction is greater than the threshold>*/
-    e_event_error = 0,       /**< No event>*/
+    E_X_LOWER_THAN_TH = 0x01,  /**<The acceleration in the x direction is less than the threshold>*/
+    E_X_HIGHER_THAN_TH = 0x02, /**<The acceleration in the x direction is greater than the threshold>*/
+    E_Y_LOWER_THAN_TH = 0x04,  /**<The acceleration in the y direction is less than the threshold>*/
+    E_Y_HIGHER_THAN_TH = 0x08, /**<The acceleration in the y direction is greater than the threshold>*/
+    E_Z_LOWER_THAN_TH = 0x10,  /**<The acceleration in the z direction is less than the threshold>*/
+    E_Z_HIGHER_THAN_TH = 0x20, /**<The acceleration in the z direction is greater than the threshold>*/
+    E_EVENT_ERROR = 0,         /**< No event>*/
 } e_interrupt_event_t;
 
 /**
@@ -168,8 +168,8 @@ typedef enum {
  * @brief  Interrupt pin selection
  */
 typedef enum {
-    e_int1 = 0, /**<int1 >*/
-    e_int2,     /**<int2>*/
+    E_INT1 = 0, /**<int1 >*/
+    E_INT2,     /**<int2>*/
 } e_interrupt_source_t;
 
 /**
@@ -187,10 +187,10 @@ bool dfrobot_lis2dh12_init(uint8_t addr, uint8_t iic_scl_master_pin, uint8_t iic
  * @fn set_range
  * @brief Set the measurement range
  * @param range Range(g)
- * @n           e_lis2dh12_2g, //2g
- * @n           e_lis2dh12_4g, //4g
- * @n           e_lis2dh12_8g, //8g
- * @n           e_lis2dh12_16g, //16g
+ * @n           E_LIS2DH12_2G, //2g
+ * @n           E_LIS2DH12_4G, //4g
+ * @n           E_LIS2DH12_8G, //8g
+ * @n           E_LIS2DH12_16G, //16g
  */
 void set_range(e_range_t range);
 
@@ -198,14 +198,14 @@ void set_range(e_range_t range);
  * @fn set_acquire_rate
  * @brief Set data measurement rate
  * @param rate rate(HZ)
- * @n          e_power_down_0hz
- * @n          e_low_power_1hz
- * @n          e_low_power_10hz
- * @n          e_low_power_25hz
- * @n          e_low_power_50hz
- * @n          e_low_power_100hz
- * @n          e_low_power_200hz
- * @n          e_low_power_400hz
+ * @n          E_POWER_DOWN_0HZ
+ * @n          E_LOW_POWER_1HZ
+ * @n          E_LOW_POWER_10HZ
+ * @n          E_LOW_POWER_25HZ
+ * @n          E_LOW_POWER_50HZ
+ * @n          E_LOW_POWER_100HZ
+ * @n          E_LOW_POWER_200HZ
+ * @n          E_LOW_POWER_400HZ
  */
 void set_acquire_rate(e_power_mode_t rate);
 
@@ -255,15 +255,15 @@ void set_int2_th(uint8_t threshold);
  * @fn enable_interrupt_event
  * @brief Enable interrupt
  * @param source Interrupt pin selection
- * @n           e_int1 = 0,/<int1 >/
- * @n           e_int2,/<int2>/
+ * @n           E_INT1 = 0,/<int1 >/
+ * @n           E_INT2,/<int2>/
  * @param event Interrupt event selection
- * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
- * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
- * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
- * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
- * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           E_X_LOWER_THAN_TH ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           E_X_HIGHER_THAN_TH ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           E_Y_LOWER_THAN_TH,/<The acceleration in the y direction is less than the threshold>/
+ * @n           E_Y_HIGHER_THAN_TH,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           E_Z_LOWER_THAN_TH,/<The acceleration in the z direction is less than the threshold>/
+ * @n           E_Z_HIGHER_THAN_TH,/<The acceleration in the z direction is greater than the threshold>/
  */
 void enable_interrupt_event(e_interrupt_source_t source, e_interrupt_event_t event);
 
@@ -271,12 +271,12 @@ void enable_interrupt_event(e_interrupt_source_t source, e_interrupt_event_t eve
  * @fn get_int1_event
  * @brief Check whether the interrupt event'event' is generated in interrupt 1
  * @param event Interrupt event
- * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
- * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
- * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
- * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
- * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           E_X_LOWER_THAN_TH ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           E_X_HIGHER_THAN_TH ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           E_Y_LOWER_THAN_TH,/<The acceleration in the y direction is less than the threshold>/
+ * @n           E_Y_HIGHER_THAN_TH,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           E_Z_LOWER_THAN_TH,/<The acceleration in the z direction is less than the threshold>/
+ * @n           E_Z_HIGHER_THAN_TH,/<The acceleration in the z direction is greater than the threshold>/
  * @return true Generated/false Not generated
  */
 bool get_int1_event(e_interrupt_event_t event);
@@ -285,12 +285,12 @@ bool get_int1_event(e_interrupt_event_t event);
  * @fn get_int2_event
  * @brief Check whether the interrupt event'event' is generated in interrupt 1
  * @param event Interrupt event
- * @n           e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
- * @n           e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
- * @n           e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
- * @n           e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
- * @n           e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
- * @n           e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
+ * @n           E_X_LOWER_THAN_TH ,/<The acceleration in the x direction is less than the threshold>/
+ * @n           E_X_HIGHER_THAN_TH ,/<The acceleration in the x direction is greater than the threshold>/
+ * @n           E_Y_LOWER_THAN_TH,/<The acceleration in the y direction is less than the threshold>/
+ * @n           E_Y_HIGHER_THAN_TH,/<The acceleration in the y direction is greater than the threshold>/
+ * @n           E_Z_LOWER_THAN_TH,/<The acceleration in the z direction is less than the threshold>/
+ * @n           E_Z_HIGHER_THAN_TH,/<The acceleration in the z direction is greater than the threshold>/
  * @return true Generated/false Not generated
  */
 bool get_int2_event(e_interrupt_event_t event);

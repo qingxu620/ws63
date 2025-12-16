@@ -73,6 +73,9 @@
 #define BME680_COEFF_ADDR1_LEN UINT8_C(25)
 #define BME680_COEFF_ADDR2_LEN UINT8_C(16)
 
+/** Common constants */
+#define BME680_BITS_PER_BYTE UINT8_C(8)
+
 /** BME680 field_x related defines */
 #define BME680_FIELD_LENGTH UINT8_C(15)
 #define BME680_FIELD_ADDR_OFFSET UINT8_C(17)
@@ -416,7 +419,7 @@
 /** Inline function to combine two 8 bit data's to form a 16 bit data */
 static inline uint16_t bme680_concat_bytes(uint8_t msb, uint8_t lsb)
 {
-    return ((uint16_t)msb << 8) | (uint16_t)lsb;
+    return ((uint16_t)msb << BME680_BITS_PER_BYTE) | (uint16_t)lsb;
 }
 
 /** Inline function to SET BITS of a register */

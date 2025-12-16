@@ -84,10 +84,10 @@ static ssd1306_t g_ssd1306;
 /* Fills the Screenbuffer with values from a given buffer of a fixed length */
 ssd1306_error_t ssd1306_fill_buffer(uint8_t *buf, uint32_t len)
 {
-    ssd1306_error_t ret = ssd1306_err;
+    ssd1306_error_t ret = SSD1306_ERR;
     if (len <= SSD1306_BUFFER_SIZE) {
         memcpy_s(g_ssd1306_buffer, len + 1, buf, len);
-        ret = ssd1306_ok;
+        ret = SSD1306_OK;
     }
     return ret;
 }
@@ -121,7 +121,7 @@ void ssd1306_init_cmd(void)
 
     ssd1306_write_command(0x8D); // --set DC-DC enable
     ssd1306_write_command(0x14); //
-    ssd1306_set_display_on(1);    // --turn on g_ssd1306 panel
+    ssd1306_set_display_on(1);   // --turn on g_ssd1306 panel
 }
 
 // Initialize the oled screen
@@ -134,7 +134,7 @@ void ssd1306_init(void)
 
     ssd1306_write_command(0x20); // Set Memory Addressing Mode
     ssd1306_write_command(0x00); // 00b,Horizontal Addressing Mode; 01b,Vertical Addressing Mode;
-                                // 10b,Page Addressing Mode (RESET); 11b,Invalid
+                                 // 10b,Page Addressing Mode (RESET); 11b,Invalid
 
     ssd1306_write_command(0xB0); // Set Page Start Address for Page Addressing Mode,0-7
 
@@ -182,7 +182,7 @@ void ssd1306_init(void)
 #endif
     ssd1306_init_cmd();
     // Clear screen
-    ssd1306_fill(ssd1306_color_black);
+    ssd1306_fill(SSD1306_COLOR_BLACK);
 
     // Flush buffer to screen
     ssd1306_update_screen();
@@ -201,7 +201,7 @@ void ssd1306_fill(ssd1306_color_t color)
     uint32_t i;
 
     for (i = 0; i < sizeof(g_ssd1306_buffer); i++) {
-        g_ssd1306_buffer[i] = (color == ssd1306_color_black) ? 0x00 : 0xFF;
+        g_ssd1306_buffer[i] = (color == SSD1306_COLOR_BLACK) ? 0x00 : 0xFF;
     }
 }
 
@@ -262,7 +262,7 @@ void ssd1306_draw_pixel(uint8_t x, uint8_t y, ssd1306_color_t color)
 
     // Draw in the right color
     uint32_t c = 8; // 8
-    if (color == ssd1306_color_white) {
+    if (color == SSD1306_COLOR_WHITE) {
         g_ssd1306_buffer[x + (y / c) * SSD1306_WIDTH] |= 1 << (y % c);
     } else {
         g_ssd1306_buffer[x + (y / c) * SSD1306_WIDTH] &= ~(1 << (y % c));
@@ -271,9 +271,9 @@ void ssd1306_draw_pixel(uint8_t x, uint8_t y, ssd1306_color_t color)
 
 // Draw 1 char to the screen buffer
 // ch       => char om weg te schrijven
-// Font     => Font waarmee we gaan schrijven
-// color    => ssd1306_color_black or ssd1306_color_white
-char ssd1306_draw_char(char ch, font_def_t Font, ssd1306_color_t color)
+// font     => font waarmee we gaan schrijven
+// color    => SSD1306_COLOR_BLACK or SSD1306_COLOR_WHITE
+char ssd1306_draw_char(char ch, font_def_t font, ssd1306_color_t color)
 {
     uint32_t i;
     uint32_t b;
@@ -287,15 +287,16 @@ char ssd1306_draw_char(char ch, font_def_t Font, ssd1306_color_t color)
     }
 
     // Check remaining space on current line
-    if ((g_ssd1306.current_x + Font.font_width) > SSD1306_WIDTH || (g_ssd1306.current_y + Font.font_height) > SSD1306_HEIGHT) {
+    if ((g_ssd1306.current_x + font.font_width) > SSD1306_WIDTH ||
+        (g_ssd1306.current_y + font.font_height) > SSD1306_HEIGHT) {
         // Not enough space on current line
         return 0;
     }
 
     // Use the font to write
-    for (i = 0; i < Font.font_height; i++) {
-        b = Font.data[(ch - ch_min) * Font.font_height + i];
-        for (j = 0; j < Font.font_width; j++) {
+    for (i = 0; i < font.font_height; i++) {
+        b = font.data[(ch - ch_min) * font.font_height + i];
+        for (j = 0; j < font.font_width; j++) {
             if ((b << j) & 0x8000) {
                 ssd1306_draw_pixel(g_ssd1306.current_x + j, (g_ssd1306.current_y + i), (ssd1306_color_t)color);
             } else {
@@ -305,19 +306,19 @@ char ssd1306_draw_char(char ch, font_def_t Font, ssd1306_color_t color)
     }
 
     // The current space is now taken
-    g_ssd1306.current_x += Font.font_width;
+    g_ssd1306.current_x += font.font_width;
 
     // Return written char for validation
     return ch;
 }
 
 // Write full string to screenbuffer
-char ssd1306_draw_string(char *str, font_def_t Font, ssd1306_color_t color)
+char ssd1306_draw_string(char *str, font_def_t font, ssd1306_color_t color)
 {
     // Write until null-byte
     char *str1 = str;
     while (*str1) {
-        if (ssd1306_draw_char(*str1, Font, color) != *str1) {
+        if (ssd1306_draw_char(*str1, font, color) != *str1) {
             // Char could not be written
             return *str1;
         }
@@ -441,7 +442,7 @@ void ssd1306_draw_bitmap(const uint8_t *bitmap, uint32_t size)
         for (uint8_t x = 0; x < SSD1306_WIDTH; x++) {
             uint8_t byte = bitmap[(y * SSD1306_WIDTH / c) + (x / c)];
             uint8_t bit = byte & (0x80 >> (x % c));
-            ssd1306_draw_pixel(x, y, bit ? ssd1306_color_white : ssd1306_color_black);
+            ssd1306_draw_pixel(x, y, bit ? SSD1306_COLOR_WHITE : SSD1306_COLOR_BLACK);
         }
     }
 }
@@ -468,7 +469,7 @@ void ssd1306_draw_region(uint8_t x, uint8_t y, uint8_t w, const uint8_t *data, u
             uint32_t idx = base + (j / c);
             uint8_t byte = idx < size ? data[idx] : 0;
             uint8_t bit = byte & (0x80 >> (j % c));
-            ssd1306_draw_pixel(x + j, y + i, bit ? ssd1306_color_white : ssd1306_color_black);
+            ssd1306_draw_pixel(x + j, y + i, bit ? SSD1306_COLOR_WHITE : SSD1306_COLOR_BLACK);
         }
     }
 }
@@ -503,7 +504,7 @@ int g_ssd1306_current_loc_v = 0;
 
 void ssd1306_clear_oled(void)
 {
-    ssd1306_fill(ssd1306_color_black);
+    ssd1306_fill(SSD1306_COLOR_BLACK);
     g_ssd1306_current_loc_v = 0;
 }
 
@@ -520,7 +521,7 @@ void ssd1306_printf(char *fmt, ...)
         }
         va_end(arg_list);
         ssd1306_set_cursor(0, g_ssd1306_current_loc_v);
-        ssd1306_draw_string(buffer, font_7x10, ssd1306_color_white);
+        ssd1306_draw_string(buffer, g_font_7x10, SSD1306_COLOR_WHITE);
 
         ssd1306_update_screen();
     }

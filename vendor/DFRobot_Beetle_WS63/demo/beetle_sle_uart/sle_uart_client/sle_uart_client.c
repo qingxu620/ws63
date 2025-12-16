@@ -140,8 +140,8 @@ static void sle_uart_client_sample_connect_state_changed_cbk(uint16_t conn_id,
 
 void sle_uart_client_sample_pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errcode_t status)
 {
-    osal_printk("%s pair complete conn_id:%d, addr:%02x***%02x%02x\n", SLE_UART_CLIENT_LOG, conn_id, addr->addr[SLE_ADDR_INDEX_0],
-                addr->addr[SLE_ADDR_INDEX_4], addr->addr[SLE_ADDR_INDEX_5]);
+    osal_printk("%s pair complete conn_id:%d, addr:%02x***%02x%02x\n", SLE_UART_CLIENT_LOG, conn_id,
+                addr->addr[SLE_ADDR_INDEX_0], addr->addr[SLE_ADDR_INDEX_4], addr->addr[SLE_ADDR_INDEX_5]);
     if (status == 0) {
         ssap_exchange_info_t info = {0};
         info.mtu_size = SLE_MTU_SIZE_DEFAULT;

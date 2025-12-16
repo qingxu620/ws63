@@ -165,13 +165,13 @@ int32_t read_acc_z(void)
 void set_range(e_range_t range)
 {
     switch (range) {
-        case e_lis2dh12_2g:
+        case E_LIS2DH12_2G:
             g_mg_scale_vel = LIS2DH12_MG_SCALE_2G;
             break;
-        case e_lis2dh12_4g:
+        case E_LIS2DH12_4G:
             g_mg_scale_vel = LIS2DH12_MG_SCALE_4G;
             break;
-        case e_lis2dh12_8g:
+        case E_LIS2DH12_8G:
             g_mg_scale_vel = LIS2DH12_MG_SCALE_8G;
             break;
         default:
@@ -238,7 +238,7 @@ void enable_interrupt_event(e_interrupt_source_t source, e_interrupt_event_t eve
     uint8_t data = LIS2DH12_ARRAY_INDEX_0;
     data = LIS2DH12_INT_CFG_BASE | event;
     DBG(data);
-    if (source == e_int1) {
+    if (source == E_INT1) {
         write_reg(REG_INT1_CFG, &data, LIS2DH12_REG_ADDR_SIZE);
     } else {
         write_reg(REG_INT2_CFG, &data, LIS2DH12_REG_ADDR_SIZE);
@@ -255,27 +255,27 @@ bool get_int1_event(e_interrupt_event_t event)
     DBG(data, HEX);
     if (data & LIS2DH12_INT_STATUS_IA_MASK) {
         switch (event) {
-            case e_x_lower_than_th:
+            case E_X_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_XL_MASK))
                     ret = true;
                 break;
-            case e_x_higher_than_th:
+            case E_X_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_XH_MASK) == LIS2DH12_INT_EVENT_XH_MASK)
                     ret = true;
                 break;
-            case e_y_lower_than_th:
+            case E_Y_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_YL_MASK))
                     ret = true;
                 break;
-            case e_y_higher_than_th:
+            case E_Y_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_YH_MASK) == LIS2DH12_INT_EVENT_YH_MASK)
                     ret = true;
                 break;
-            case e_z_lower_than_th:
+            case E_Z_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_ZL_MASK))
                     ret = true;
                 break;
-            case e_z_higher_than_th:
+            case E_Z_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_ZH_MASK) == LIS2DH12_INT_EVENT_ZH_MASK)
                     ret = true;
                 break;
@@ -296,27 +296,27 @@ bool get_int2_event(e_interrupt_event_t event)
     DBG(data, HEX);
     if (data & LIS2DH12_INT_STATUS_IA_MASK) {
         switch (event) {
-            case e_x_lower_than_th:
+            case E_X_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_XL_MASK))
                     ret = true;
                 break;
-            case e_x_higher_than_th:
+            case E_X_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_XH_MASK) == LIS2DH12_INT_EVENT_XH_MASK)
                     ret = true;
                 break;
-            case e_y_lower_than_th:
+            case E_Y_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_YL_MASK))
                     ret = true;
                 break;
-            case e_y_higher_than_th:
+            case E_Y_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_YH_MASK) == LIS2DH12_INT_EVENT_YH_MASK)
                     ret = true;
                 break;
-            case e_z_lower_than_th:
+            case E_Z_LOWER_THAN_TH:
                 if (!(data & LIS2DH12_INT_EVENT_ZL_MASK))
                     ret = true;
                 break;
-            case e_z_higher_than_th:
+            case E_Z_HIGHER_THAN_TH:
                 if ((data & LIS2DH12_INT_EVENT_ZH_MASK) == LIS2DH12_INT_EVENT_ZH_MASK)
                     ret = true;
                 break;

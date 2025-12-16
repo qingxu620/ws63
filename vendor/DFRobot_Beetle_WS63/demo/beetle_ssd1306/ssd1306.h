@@ -38,13 +38,13 @@
 
 // Enumeration for screen colors
 typedef enum {
-    ssd1306_color_black = 0x00, // ssd1306_color_black color, no pixel
-    ssd1306_color_white = 0x01  // Pixel is set. Color depends on OLED
+    SSD1306_COLOR_BLACK = 0x00, // SSD1306_COLOR_BLACK color, no pixel
+    SSD1306_COLOR_WHITE = 0x01  // Pixel is set. Color depends on OLED
 } ssd1306_color_t;
 
 typedef enum {
-    ssd1306_ok = 0x00,
-    ssd1306_err = 0x01 // Generic error.
+    SSD1306_OK = 0x00,
+    SSD1306_ERR = 0x01 // Generic error.
 } ssd1306_error_t;
 
 // Struct to store transformations
@@ -66,8 +66,8 @@ void ssd1306_fill(ssd1306_color_t color);
 void ssd1306_set_cursor(uint8_t x, uint8_t y);
 void ssd1306_update_screen(void);
 
-char ssd1306_draw_char(char ch, font_def_t Font, ssd1306_color_t color);
-char ssd1306_draw_string(char *str, font_def_t Font, ssd1306_color_t color);
+char ssd1306_draw_char(char ch, font_def_t font, ssd1306_color_t color);
+char ssd1306_draw_string(char *str, font_def_t font, ssd1306_color_t color);
 
 void ssd1306_draw_pixel(uint8_t x, uint8_t y, ssd1306_color_t color);
 void ssd1306_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, ssd1306_color_t color);

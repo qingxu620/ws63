@@ -65,7 +65,7 @@
 
 /** Return value constants */
 #define BME680_INIT_SUCCESS 0
-#define BME680_INIT_FAILURE -1
+#define BME680_INIT_FAILURE (-1)
 
 /** Altitude calculation constants */
 #define BME680_PRESSURE_TO_HPA_DIVISOR 100.0f
@@ -98,9 +98,9 @@ typedef enum {
     BME680_PARAM_IIRSIZE
 } e_bme680_param_t;
 
-void dfrobot_bme680(bme680_com_fptr_t readReg,
-                    bme680_com_fptr_t writeReg,
-                    bme680_delay_fptr_t delayMS,
+void dfrobot_bme680(bme680_com_fptr_t read_reg,
+                    bme680_com_fptr_t write_reg,
+                    bme680_delay_fptr_t delay_ms,
                     e_bme680_interface interface);
 
 extern uint8_t g_bme680_i2c_addr;
@@ -153,11 +153,11 @@ float read_altitude(void);
  * @fn read_calibrated_altitude
  * @brief read the Calibrated altitude (unit meter)
  *
- * @param seaLevel  normalised atmospheric pressure
+ * @param sea_level  normalised atmospheric pressure
  *
  * @return calibrated altitude value , this value has two decimal points
  */
-float read_calibrated_altitude(float seaLevel);
+float read_calibrated_altitude(float sea_level);
 /**
  * @fn read_gas_resistance
  * @brief read the gas resistance(unit ohm)
@@ -175,10 +175,10 @@ float read_sea_level(float altitude);
  * @fn set_param
  * @brief set bme680 parament
  *
- * @param eParam        :which param you want to change
+ * @param e_param        :which param you want to change
  *        dat           :object data, can't more than 5
  */
-void set_param(e_bme680_param_t eParam, uint8_t dat);
+void set_param(e_bme680_param_t e_param, uint8_t dat);
 /**
  * @fn set_gas_heater
  * @brief set bme680 gas heater

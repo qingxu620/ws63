@@ -37,19 +37,19 @@ extern "C" {
  * @{
  */
 
-extern const unsigned char g_f6x8[][6];
-extern const unsigned char g_f8x16[];
+extern const unsigned char F6X8[][6];
+extern const unsigned char F8X16[];
 
 typedef struct {
     const unsigned char font_width; /*!< Font width in pixels */
     unsigned char font_height;      /*!< Font height in pixels */
-    const unsigned short *data;    /*!< Pointer to data font data array */
+    const unsigned short *data;     /*!< Pointer to data font data array */
 } font_def_t;
 
-extern font_def_t font_7x10;
-extern font_def_t font_6x8;
-extern font_def_t font_11x18;
-extern font_def_t font_16x26;
+extern font_def_t g_font_7x10;
+extern font_def_t g_font_6x8;
+extern font_def_t g_font_11x18;
+extern font_def_t g_font_16x26;
 
 #ifdef __cplusplus
 }

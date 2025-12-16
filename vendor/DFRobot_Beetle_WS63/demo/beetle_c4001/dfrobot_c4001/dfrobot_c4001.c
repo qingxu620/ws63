@@ -12,8 +12,8 @@
 
 static s_private_data_t g_buffer;
 
-#define TIME_OUT C4001_TIME_OUT_MS    ///< time out
-#define SENSOR_UART_ID 2 // 替换成你初始化时使用的 UART ID
+#define TIME_OUT C4001_TIME_OUT_MS ///< time out
+#define SENSOR_UART_ID 2           // 替换成你初始化时使用的 UART ID
 #define DELAY_MS C4001_DELAY_MS_BASE
 
 #define THE_UART_TRANSFER_SIZE C4001_UART_TRANSFER_SIZE
@@ -77,7 +77,8 @@ static s_response_data_t analysis_response(uint8_t *data, uint8_t len, uint8_t c
     uint8_t i = 0;
     uint8_t j = 0;
     for (i = 0; i < len; i++) {
-        if (data[i] == C4001_STR_CHAR_R && data[i + C4001_ARRAY_INDEX_1] == C4001_STR_CHAR_E && data[i + C4001_ARRAY_INDEX_2] == C4001_STR_CHAR_S) {
+        if (data[i] == C4001_STR_CHAR_R && data[i + C4001_ARRAY_INDEX_1] == C4001_STR_CHAR_E &&
+            data[i + C4001_ARRAY_INDEX_2] == C4001_STR_CHAR_S) {
             break;
         }
     }
@@ -135,7 +136,7 @@ static s_all_data_t analysis_data(uint8_t *data, uint8_t len)
         all_data.sta.init_status = C4001_ARRAY_INDEX_1;
         char *token;
         char *parts[C4001_PARTS_ARRAY_SIZE]; // Let's say there are at most 10 parts
-        int index = 0;   // Used to track the number of parts stored
+        int index = 0;                       // Used to track the number of parts stored
         token = strtok((char *)(data + location), ",");
         while (token != NULL) {
             parts[index] = token; // Stores partial Pointers in an array
@@ -313,8 +314,8 @@ bool set_trig_sensitivity(uint8_t sensitivity)
         return false;
     }
 
-    char data[] = "setSensitivity 255 1"; // 分配在栈上，可写
-    data[C4001_STR_POS_SENSITIVITY_TRIG_OFFSET] = sensitivity + '0';         // 修改有效
+    char data[] = "setSensitivity 255 1";                            // 分配在栈上，可写
+    data[C4001_STR_POS_SENSITIVITY_TRIG_OFFSET] = sensitivity + '0'; // 修改有效
     write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
     return true;
 }
@@ -534,7 +535,7 @@ bool set_io_polarity(uint8_t value)
         return false;
     }
 
-    char data[C4001_IO_BUFFER_SIZE] = {0};                                   // 可写缓冲
+    char data[C4001_IO_BUFFER_SIZE] = {0};                 // 可写缓冲
     snprintf(data, sizeof(data), "setGpioMode %d", value); // 拼接字符串
     write_cmd(data, data, (uint8_t)C4001_ARRAY_INDEX_1);
     return true;
@@ -570,18 +571,18 @@ bool set_pwm(uint8_t pwm1, uint8_t pwm2, uint8_t timer)
 
 s_pwm_data_t get_pwm(void)
 {
-    s_pwm_data_t pwmData;
-    memset(&pwmData, C4001_ARRAY_INDEX_0, sizeof(s_pwm_data_t));
+    s_pwm_data_t pwm_data;
+    memset(&pwm_data, C4001_ARRAY_INDEX_0, sizeof(s_pwm_data_t));
 
     s_response_data_t response_data;
     char *data = "getPwm";
     response_data = write_read_cmd(data, (uint8_t)C4001_ARRAY_INDEX_3);
     if (response_data.status) {
-        pwmData.pwm1 = response_data.response1;
-        pwmData.pwm2 = response_data.response2;
-        pwmData.timer = response_data.response3;
+        pwm_data.pwm1 = response_data.response1;
+        pwm_data.pwm2 = response_data.response2;
+        pwm_data.timer = response_data.response3;
     }
-    return pwmData;
+    return pwm_data;
 }
 
 uint16_t get_t_min_range(void)

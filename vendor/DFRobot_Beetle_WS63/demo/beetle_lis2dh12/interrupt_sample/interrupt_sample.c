@@ -1,14 +1,14 @@
 /**！
  * @file interrupt_sample.c
  * @brief Interrupt detection
- * @n In this example, the enable e_z_higher_than_th interrupt event means when the acceleration in the Z direction exceeds
- * the
+ * @n In this example, the enable E_Z_HIGHER_THAN_TH interrupt event means when the acceleration in the Z direction
+ * exceeds the
  * @n threshold set by the program, the interrupt level can be detected on the interrupt pin int1/int2 we set, and the
  * level change on the
  * @n interrupt pin can be used to determine whether the interrupt occurs. The following are the 6 settable interrupt
- * events：e_x_higher_than_th,
- * @n e_x_lower_than_th, e_y_higher_than_th, e_y_lower_than_th, e_z_higher_than_th, e_z_lower_than_th. For a detailed explanation of each of
- * them,
+ * events：E_X_HIGHER_THAN_TH,
+ * @n E_X_LOWER_THAN_TH, E_Y_HIGHER_THAN_TH, E_Y_LOWER_THAN_TH, E_Z_HIGHER_THAN_TH, E_Z_LOWER_THAN_TH. For a detailed
+ * explanation of each of them,
  * @n please look up the comments of the enable_interrupt_event() function.
  * @n This example needs to connect the int2/int1 pin of the module to the interrupt pin of the motherboard.
  * @copyright  Copyright (c) 2025 DFRobot Co.Ltd (http://www.dfrobot.com)
@@ -69,25 +69,25 @@ static void interrupt_task(void)
 
     /**
         set range:Range(g)
-                e_lis2dh12_2g,/< ±2g>/
-                e_lis2dh12_4g,/< ±4g>/
-                e_lis2dh12_8g,/< ±8g>/
-                e_lis2dh12_16g,/< ±16g>/
+                E_LIS2DH12_2G,/< ±2g>/
+                E_LIS2DH12_4G,/< ±4g>/
+                E_LIS2DH12_8G,/< ±8g>/
+                E_LIS2DH12_16G,/< ±16g>/
     */
-    set_range(e_lis2dh12_16g);
+    set_range(E_LIS2DH12_16G);
 
     /**
         Set data measurement rate：
-        e_power_down_0hz
-        e_low_power_1hz
-        e_low_power_10hz
-        e_low_power_25hz
-        e_low_power_50hz
-        e_low_power_100hz
-        e_low_power_200hz
-        e_low_power_400hz
+        E_POWER_DOWN_0HZ
+        E_LOW_POWER_1HZ
+        E_LOW_POWER_10HZ
+        E_LOW_POWER_25HZ
+        E_LOW_POWER_50HZ
+        E_LOW_POWER_100HZ
+        E_LOW_POWER_200HZ
+        E_LOW_POWER_400HZ
     */
-    set_acquire_rate(e_low_power_10hz);
+    set_acquire_rate(E_LOW_POWER_10HZ);
 
     attach_interrupt(CONFIG_INTERRUPT_PIN, inter_event, CHANGE);
 
@@ -100,17 +100,17 @@ static void interrupt_task(void)
     /*!
     Enable interrupt
     Interrupt pin selection:
-      e_int1 = 0,/<int1 >/
-      e_int2,/<int2>/
+      E_INT1 = 0,/<int1 >/
+      E_INT2,/<int2>/
     Interrupt event selection:
-      e_x_lower_than_th ,/<The acceleration in the x direction is less than the threshold>/
-      e_x_higher_than_th ,/<The acceleration in the x direction is greater than the threshold>/
-      e_y_lower_than_th,/<The acceleration in the y direction is less than the threshold>/
-      e_y_higher_than_th,/<The acceleration in the y direction is greater than the threshold>/
-      e_z_lower_than_th,/<The acceleration in the z direction is less than the threshold>/
-      e_z_higher_than_th,/<The acceleration in the z direction is greater than the threshold>/
+      E_X_LOWER_THAN_TH ,/<The acceleration in the x direction is less than the threshold>/
+      E_X_HIGHER_THAN_TH ,/<The acceleration in the x direction is greater than the threshold>/
+      E_Y_LOWER_THAN_TH,/<The acceleration in the y direction is less than the threshold>/
+      E_Y_HIGHER_THAN_TH,/<The acceleration in the y direction is greater than the threshold>/
+      E_Z_LOWER_THAN_TH,/<The acceleration in the z direction is less than the threshold>/
+      E_Z_HIGHER_THAN_TH,/<The acceleration in the z direction is greater than the threshold>/
     */
-    enable_interrupt_event(e_int1 /* int pin */, e_z_higher_than_th /* interrupt event */);
+    enable_interrupt_event(E_INT1 /* int pin */, E_Z_HIGHER_THAN_TH /* interrupt event */);
 
     uapi_systick_delay_ms(DELAY_S);
 
@@ -130,7 +130,7 @@ static void interrupt_task(void)
         // The interrupt flag is set
         if (int_flag == true) {
             // Check whether the interrupt event is generated in interrupt 1
-            if (get_int1_event(e_z_higher_than_th)) {
+            if (get_int1_event(E_Z_HIGHER_THAN_TH)) {
                 osal_printk("The acceleration in the z direction is greater than the threshold\r\n");
             }
             int_flag = false;

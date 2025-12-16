@@ -32,25 +32,25 @@ static void get_acceleration_task(void)
 
     /**
       set range:Range(g)
-                e_lis2dh12_2g,/< ±2g>/
-                e_lis2dh12_4g,/< ±4g>/
-                e_lis2dh12_8g,/< ±8g>/
-                e_lis2dh12_16g,/< ±16g>/
+                E_LIS2DH12_2G,/< ±2g>/
+                E_LIS2DH12_4G,/< ±4g>/
+                E_LIS2DH12_8G,/< ±8g>/
+                E_LIS2DH12_16G,/< ±16g>/
     */
-    set_range(e_lis2dh12_16g);
+    set_range(E_LIS2DH12_16G);
 
     /**
       Set data measurement rate：
-        e_power_down_0hz
-        e_low_power_1hz
-        e_low_power_10hz
-        e_low_power_25hz
-        e_low_power_50hz
-        e_low_power_100hz
-        e_low_power_200hz
-        e_low_power_400hz
+        E_POWER_DOWN_0HZ
+        E_LOW_POWER_1HZ
+        E_LOW_POWER_10HZ
+        E_LOW_POWER_25HZ
+        E_LOW_POWER_50HZ
+        E_LOW_POWER_100HZ
+        E_LOW_POWER_200HZ
+        E_LOW_POWER_400HZ
     */
-    set_acquire_rate(e_low_power_10hz);
+    set_acquire_rate(E_LOW_POWER_10HZ);
     osal_printk("Acceleration:\r\n");
     uapi_systick_delay_ms(DELAY_S);
 
