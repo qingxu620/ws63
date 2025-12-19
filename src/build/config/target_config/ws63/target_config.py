@@ -58,9 +58,9 @@ codesize_flags = {
     ]
 }
 
-fp_flags = {
+fp_flags = [
     '-:-mabi=ilp32', '-:-march=rv32imc', '-mabi=ilp32f', '-march=rv32imfc'
-}
+]
 
 target_template = {
     'target_ws63_app_rom_template': {
