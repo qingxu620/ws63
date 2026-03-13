@@ -1,0 +1,10 @@
+{
+    "git.ignoreLimitWarning": true,
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.autocomplete": "default",
+    "C_Cpp.dimInactiveRegions": true,
+    "C_Cpp.vcpkg.enabled": false,
+    "C_Cpp.default.browse.path": [
+        "${workspaceFolder}"
+    ]
+}

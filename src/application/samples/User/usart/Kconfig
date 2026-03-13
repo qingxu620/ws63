@@ -1,0 +1,52 @@
+#===============================================================================
+# User/usart/Kconfig
+# USART Sample Configuration
+
+config MY_USART_BUS_ID
+    int
+    prompt "Choose USART Bus ID."
+    depends on SAMPLE_SUPPORT_MY_USART
+    default 1
+    help
+        Set the USART bus ID (0, 1, or 2).
+
+config MY_USART_TXD_PIN
+    int
+    prompt "Choose USART TXD pin."
+    depends on SAMPLE_SUPPORT_MY_USART
+    default 15
+    help
+        Set the GPIO pin number for USART TXD.
+
+config MY_USART_RXD_PIN
+    int
+    prompt "Choose USART RXD pin."
+    depends on SAMPLE_SUPPORT_MY_USART
+    default 16
+    help
+        Set the GPIO pin number for USART RXD.
+
+config MY_USART_TXD_PIN_MODE
+    int
+    prompt "Choose USART TXD pin mode."
+    depends on SAMPLE_SUPPORT_MY_USART
+    default 2
+    help
+        Set the pin mode for USART TXD pin.
+
+config MY_USART_RXD_PIN_MODE
+    int
+    prompt "Choose USART RXD pin mode."
+    depends on SAMPLE_SUPPORT_MY_USART
+    default 2
+    help
+        Set the pin mode for USART RXD pin.
+
+config MY_USART_USE_INT_MODE
+    bool
+    prompt "Use Interrupt Mode"
+    depends on SAMPLE_SUPPORT_MY_USART
+    default n
+    help
+        If enabled, use interrupt mode for USART communication.
+        If disabled, use polling mode.

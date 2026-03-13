@@ -74,3 +74,5 @@ config ENABLE_NFC_SAMPLE
 if ENABLE_NFC_SAMPLE
 osource "application/samples/nfc/Kconfig"
 endif
+# 注册你的 User 配置菜单
+source "application/samples/User/Kconfig"

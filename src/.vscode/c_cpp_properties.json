@@ -1,0 +1,38 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "compileCommands": "${workspaceFolder}/output/ws63/acore/ws63-liteos-app/compile_commands.json",
+            "compilerPath": "/root/fbb_ws63/src/tools/bin/compiler/riscv/cc_riscv32_musl_105/cc_riscv32_musl_fp/bin/riscv32-linux-musl-gcc",
+            "includePath": [
+                        "${workspaceFolder}/**",
+                        "${workspaceFolder}/include",
+                        "${workspaceFolder}/include/driver",
+                        "${workspaceFolder}/kernel/osal/include",
+                        "${workspaceFolder}/kernel/osal/include/debug",
+                        "${workspaceFolder}/drivers/chips/ws63/include",
+                        "${workspaceFolder}/middleware/utils/app_init",
+                        "${workspaceFolder}/output/ws63/acore/ws63-liteos-app"
+                    ],
+                    "defines": [
+                        "__LITEOS__",
+                        "CHIP_WS63",
+                        "CONFIG_DRIVER_SUPPORT_PWM",
+                        "CONFIG_SAMPLE_SUPPORT_MY_PWM"
+                    ],
+                    "forcedInclude": [
+                        "${workspaceFolder}/output/ws63/acore/ws63-liteos-app/mconfig.h"
+                    ],
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-riscv",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}

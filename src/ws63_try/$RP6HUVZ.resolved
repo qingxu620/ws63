@@ -1,0 +1,239 @@
+# WS63 星闪激光打标机系统设计 (V2 - 修正版)
+
+> [!CAUTION]
+> **V1 架构存在致命缺陷**：将插补计算放在发射板会导致无线带宽爆炸 (~6.4 Mbps)，造成丢包、线条锯齿、烧焦点等问题。V2 已根据 Qing 的分析修正。
+
+## 🔑 设计原则（V2 核心修正）
+
+```
+V1 错误路径:  发射板[G-Code → 解析 → 插补 → 50000点/s] ──SLE──> 接收板[执行]
+                                                    ↑ 带宽爆炸！
+
+V2 正确路径:  发射板[G-Code → 解析 → 运动命令]  ──SLE──> 接收板[插补 → 执行]
+                                              ↑ ~100 cmd/s，轻松传输
+```
+
+**核心改动：插补在接收板本地完成，发射板只发送"线段级"运动命令。**
+
+---
+
+## 🏗️ 修正后系统架构
+
+```mermaid
+graph LR
+    subgraph 发射板
+        A[上位机<br>LaserGRBL] -->|G-Code<br>UART 115200| B[WS63 发射板]
+    end
+    
+    subgraph 星闪链路
+        B -->|运动命令<br>~20 bytes/cmd<br>~100 cmd/s| C[WS63 接收板]
+        C -->|状态反馈<br>ACK/队列状态| B
+    end
+    
+    subgraph 接收板
+        C -->|本地插补<br>50kHz+| D[DAC8562]
+        C -->|PWM| E[激光器]
+        D --> F[振镜]
+    end
+```
+
+---
+
+## 📊 带宽对比分析
+
+| 指标 | V1 (插补在发射板) | V2 (插补在接收板) |
+|------|:--:|:--:|
+| 每秒命令数 | ~50,000 点 | ~100 条线段 |
+| 每包大小 | 16 bytes | 20 bytes |
+| **净荷带宽** | **~6.4 Mbps** ❌ | **~16 Kbps** ✅ |
+| 丢包容忍度 | 极差 (1包=1个烧焦点) | 好 (有重传时间) |
+| 抗干扰能力 | 差 | 强 |
+
+---
+
+## 📦 发射板 (Transmitter) - 修正设计
+
+### 职责：解析 + 转发（轻量级）
+
+```
+┌───────────────────────────────────────────────┐
+│               发射板 WS63                      │
+├───────────────────────────────────────────────┤
+│                                               │
+│  UART 接收  ──>  G-Code 解析  ──>  运动命令    │
+│  (上位机)        GCodeParser       打包发送    │
+│                                     │         │
+│  Grbl 协议  <──  流控管理    <──  SLE Client   │
+│  (回复ok)        (窗口控制)        (星闪发送)  │
+│                                               │
+└───────────────────────────────────────────────┘
+```
+
+**关键变化**：
+- ❌ ~~不再做插补计算~~
+- ✅ 只做 G-Code 解析，提取运动参数
+- ✅ 将 `G1 X10 Y20 F1000` 打包为一个运动命令发送
+- ✅ 基于接收板队列反馈做流量控制
+
+### 流控机制
+
+```
+发射板维护一个"发送窗口"：
+- 接收板队列容量: 32 条命令
+- 接收板反馈剩余空间: queue_free
+- 当 queue_free < 4 时暂停发送
+- 当 queue_free > 16 时恢复发送
+- 每条命令收到 ACK 后才回复上位机 "ok"
+```
+
+---
+
+## 📦 接收板 (Receiver) - 修正设计
+
+### 职责：本地插补 + 实时执行（重量级）
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   接收板 WS63                        │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  SLE Server  ──>  命令队列  ──>  ★ 本地插补引擎 ★    │
+│  (星闪接收)       (32条缓冲)      (核心模块!)        │
+│                                      │               │
+│                       ┌──────────────┼──────────┐    │
+│                       ▼              ▼          ▼    │
+│                   DAC8562        激光 PWM    状态反馈 │
+│                   (SPI输出)      (功率控制)   (SLE)  │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+**关键变化**：
+- ✅ 从 Arduino [performMove()](file:///C:/Users/ZKX/OneDrive/Desktop/WS63%E6%BF%80%E5%85%89%E6%89%93%E6%A0%87%E6%9C%BA/ws63_try/Arduino_Ji_Guang_Da_Biao_Ji_copy_20260117200049/Arduino_Ji_Guang_Da_Biao_Ji_copy_20260117200049.ino#212-269) 完整移植插补算法到接收板
+- ✅ 命令队列提供缓冲，抵消无线抖动
+- ✅ 定时器中断驱动 DAC 更新，保证时序精度
+- ✅ 插补直接操作本地 SPI/GPIO，零延迟
+
+### 执行流水线
+
+```
+命令队列 [G1 X10 Y20 F1000] [G1 X15 Y25 F1000] [M5] ...
+              │
+              ▼
+         插补引擎 (定时器中断驱动)
+              │
+              ├── 计算 steps = distance / STEP_NUM
+              ├── 计算 stepTime = distance / feedRate / steps
+              │
+              └── 每个 step:
+                    ├── currentX += stepDx
+                    ├── currentY += stepDy
+                    ├── DAC_write(X, Y)   ← 本地 SPI，微秒级
+                    └── delay(stepTime)    ← 定时器精确控制
+```
+
+---
+
+## 📡 修正后的通信协议
+
+### 运动命令包 (发射板 → 接收板)
+
+```c
+typedef struct {
+    uint8_t  cmd;           // 命令类型
+    uint8_t  flags;         // 标志位 (bit0: 激光开/关)
+    uint16_t seq;           // 序列号
+    float    target_x;      // 目标 X (mm)
+    float    target_y;      // 目标 Y (mm)
+    float    feed_rate;     // 进给速度 (mm/min)
+    uint16_t laser_pwr;     // 激光功率 (0-1000)
+    uint16_t reserved;      // 保留
+} __packed motion_cmd_t;    // 20 bytes
+```
+
+### 命令类型
+
+| cmd | 命令 | 说明 |
+|-----|------|------|
+| 0x01 | G0_MOVE | 快速移动 (激光关) |
+| 0x02 | G1_MOVE | 直线插补移动 |
+| 0x03 | LASER_ON | M3/M4 开启激光 |
+| 0x04 | LASER_OFF | M5 关闭激光 |
+| 0x05 | SET_ORIGIN | G92 设置原点 |
+| 0x06 | SET_MODE | G90/G91 设置模式 |
+| 0xFE | HEARTBEAT | 心跳 |
+
+### 状态反馈包 (接收板 → 发射板)
+
+```c
+typedef struct {
+    uint8_t  status;        // 0=IDLE, 1=RUNNING, 2=ERROR
+    uint8_t  error_code;    // 错误码
+    uint16_t ack_seq;       // 已执行的最新序列号
+    uint16_t queue_free;    // 队列剩余空间
+    float    cur_x;         // 当前 X
+    float    cur_y;         // 当前 Y
+} __packed status_pkt_t;    // 14 bytes
+```
+
+---
+
+## 📚 修正后的学习路线
+
+### 阶段 1: 环境搭建 (1-2天)
+- [ ] HiSparkStudio 开发环境
+- [ ] HelloWorld 编译烧录
+
+### 阶段 2: 驱动基础 (3-5天)
+- [ ] GPIO / SPI / PWM / UART / Timer 示例
+
+### 阶段 3: SLE 通信 (5-7天)
+- [ ] `sle_speed_server` / `sle_speed_client` 跑通
+- [ ] 两板自定义数据包收发
+
+### 阶段 4: 接收板核心 (7-10天) ⬆️ 优先级提升
+- [ ] DAC8562 SPI 驱动移植
+- [ ] PWM 激光控制
+- [ ] **插补引擎移植** (从 [performMove()](file:///C:/Users/ZKX/OneDrive/Desktop/WS63%E6%BF%80%E5%85%89%E6%89%93%E6%A0%87%E6%9C%BA/ws63_try/Arduino_Ji_Guang_Da_Biao_Ji_copy_20260117200049/Arduino_Ji_Guang_Da_Biao_Ji_copy_20260117200049.ino#212-269))
+- [ ] 命令队列 + 定时器执行
+- [ ] 与 SLE 集成
+
+### 阶段 5: 发射板开发 (5-7天)
+- [ ] GCodeParser 移植
+- [ ] UART 接收 + G-Code 处理
+- [ ] 流控逻辑
+- [ ] Grbl 协议兼容
+
+### 阶段 6: 联调 (3-5天)
+- [ ] 两板联调
+- [ ] LaserGRBL 端到端测试
+
+---
+
+## 📁 修正后代码结构
+
+```
+laser_marker_ws63/
+├── common/
+│   ├── protocol.h             # 通信协议定义 (motion_cmd_t 等)
+│   └── config.h               # 系统配置 (BEILV, STEP_NUM 等)
+│
+├── transmitter/               # 发射板 (轻量级)
+│   ├── main.c
+│   ├── uart_handler.c         # UART 收发
+│   ├── gcode_parser.c/h       # 移植的 GCodeParser
+│   ├── gcode_processor.c      # G-Code → motion_cmd_t
+│   ├── sle_client.c           # SLE 发送 + 流控
+│   └── grbl_compat.c          # Grbl 协议回复
+│
+├── receiver/                  # 接收板 (重量级)
+│   ├── main.c
+│   ├── sle_server.c           # SLE 接收
+│   ├── cmd_queue.c/h          # 命令队列 (环形缓冲)
+│   ├── interpolator.c/h       # ★ 插补引擎 (核心)
+│   ├── dac8562.c/h            # DAC 驱动 (SPI)
+│   └── laser_ctrl.c/h         # 激光 PWM 控制
+│
+└── docs/
+    └── protocol_spec.md
+```

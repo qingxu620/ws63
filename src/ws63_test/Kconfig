@@ -1,0 +1,53 @@
+#===============================================================================
+# @brief    WS63 Laser Marker Kconfig
+#===============================================================================
+
+config LASER_MARKER_RECEIVER
+    bool
+    prompt "Build Laser Marker Receiver (接收板)"
+    default n
+    help
+        Build the receiver board firmware.
+        Includes: SLE Server, DAC8562 driver, interpolation engine,
+        laser PWM control, and safety monitor.
+
+config LASER_MARKER_TRANSMITTER
+    bool
+    prompt "Build Laser Marker Transmitter (发射板)"
+    default n
+    help
+        Build the transmitter board firmware.
+        Includes: SLE Client, UART handler, G-Code parser,
+        and Grbl protocol compatibility.
+
+if LASER_MARKER_RECEIVER
+
+config LASER_DAC_SPI_BUS
+    int "DAC8562 SPI Bus Number"
+    default 0
+    help
+        SPI bus number connected to DAC8562.
+
+config LASER_DAC_CS_PIN
+    int "DAC8562 CS GPIO Pin"
+    default 10
+    help
+        GPIO pin number for DAC8562 chip select.
+
+config LASER_PWM_CHANNEL
+    int "Laser PWM Channel"
+    default 2
+    help
+        PWM channel number for laser power control.
+
+endif # LASER_MARKER_RECEIVER
+
+if LASER_MARKER_TRANSMITTER
+
+config LASER_UART_BUS
+    int "UART Bus for G-Code"
+    default 1
+    help
+        UART bus number for receiving G-Code from host PC.
+
+endif # LASER_MARKER_TRANSMITTER

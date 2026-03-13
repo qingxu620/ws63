@@ -31,6 +31,8 @@ endif()
 
 add_subdirectory_if_exist(custom)
 
+add_subdirectory_if_exist(User)
+
 set(PRIVATE_HEADER
 )
 
@@ -68,5 +70,7 @@ install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/nfc" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/ble" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/sle" "*")
 install_sdk("${CMAKE_CURRENT_SOURCE_DIR}/bt/sle_chba" "*")
+
+set(SOURCES "${SOURCES}" PARENT_SCOPE)
 
 build_component()

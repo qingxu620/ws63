@@ -1,0 +1,93 @@
+#===============================================================================
+# @brief    User Samples Kconfig file.
+#===============================================================================
+
+config ENABLE_USER_SAMPLE
+    bool
+    prompt "Enable the Sample of User."
+    default y
+    help
+        This option means enable the user defined samples.
+
+# --- LED 示例的配置 ---
+config SAMPLE_SUPPORT_MY_LED
+    bool
+    prompt "Support My LED Sample."
+    default n
+    depends on ENABLE_USER_SAMPLE
+    help
+        This option means support My LED Sample.
+
+if SAMPLE_SUPPORT_MY_LED
+menu "My LED Sample Configuration"
+    osource "application/samples/User/led/Kconfig"
+endmenu
+endif
+
+# User/Kconfig
+
+# 1. 定义总开关
+config SAMPLE_SUPPORT_MY_PWM
+    bool
+    prompt "Support My PWM Sample"
+    default n
+    depends on ENABLE_USER_SAMPLE
+    help
+        Enable the user defined PWM sample.
+
+# 2. 引入子目录的详细配置（引脚选择）
+if SAMPLE_SUPPORT_MY_PWM
+    source "application/samples/User/pwm/Kconfig"
+endif
+
+# --- BUTTON 示例的配置 ---
+config SAMPLE_SUPPORT_MY_BUTTON
+    bool
+    prompt "Support My Button Sample"
+    default n
+    depends on ENABLE_USER_SAMPLE
+    help
+        Enable the user defined Button sample.
+
+if SAMPLE_SUPPORT_MY_BUTTON
+    source "application/samples/User/button/Kconfig"
+endif
+
+# --- USART 示例的配置 ---
+config SAMPLE_SUPPORT_MY_USART
+    bool
+    prompt "Support My USART Sample"
+    default n
+    depends on ENABLE_USER_SAMPLE
+    help
+        Enable the user defined USART sample.
+
+if SAMPLE_SUPPORT_MY_USART
+    source "application/samples/User/usart/Kconfig"
+endif
+
+# --- 激光打标机 (ws63_test) ---
+config LASER_MARKER_RECEIVER
+    bool
+    prompt "Build Laser Marker Receiver (接收板)"
+    default n
+    depends on ENABLE_USER_SAMPLE
+    select SPI_SUPPORT_MASTER
+    help
+        Build the receiver board firmware for laser marker.
+        Includes: SLE Server, DAC8562, interpolation engine,
+        laser PWM, and safety monitor.
+
+config LASER_MARKER_TRANSMITTER
+    bool
+    prompt "Build Laser Marker Transmitter (发射板)"
+    default n
+    depends on ENABLE_USER_SAMPLE
+    help
+        Build the transmitter board firmware for laser marker.
+        Includes: SLE Client, UART handler, G-Code parser,
+        and Grbl protocol compatibility.
+
+# 以后如果你增加了 OLED，就在下面继续添加：
+# config SAMPLE_SUPPORT_MY_OLED
+# ... 依此类推
