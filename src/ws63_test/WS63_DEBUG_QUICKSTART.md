@@ -1,5 +1,9 @@
 # WS63 激光打标机：傻瓜式上手与 Debug 手册
 
+配套文档：
+- 使用与交付入口：[README.md](./README.md)
+- 源码导读与模块职责：[CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)
+
 适用目录：`ws63_test/`
 
 ## 0. 当前状态结论（稳定基线）

@@ -1,0 +1,318 @@
+# WS63 激光打标双板工程 README
+
+`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。
+
+当前目录包含三类核心工程模块：
+- `common/`：协议、CRC、全局配置，负责收发两端共享契约。
+- `transmitter/`：发射板固件，负责 UART/G-Code/SLE Client。
+- `receiver/`：接收板固件，负责 SLE Server/命令队列/插补/DAC/PWM/安全监控。
+
+配套支持目录：
+- `tools/`：Windows 或 Linux 上位机自动化测试脚本。
+- `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
+- `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
+
+## 1. 你会先用到哪些文档
+
+如果你是第一次接手这个工程，建议按下面顺序看：
+
+1. 先看本 README：搞清楚工程目标、目录、编译烧录、验收路径。
+2. 再看 [WS63_DEBUG_QUICKSTART.md](./WS63_DEBUG_QUICKSTART.md)：照着做双板联调。
+3. 最后看 [CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)：进入源码、二次开发、问题定位。
+
+## 2. 前置知识目录
+
+开始之前，建议至少具备下面这些基础认知：
+
+| 主题 | 需要知道什么 | 对应位置 |
+| --- | --- | --- |
+| G-Code 基础 | `G0/G1/G90/G91/G92/M3/M4/M5/S/F/?/$I/$G` 的基本含义 | `transmitter/gcode_parser.c`、`transmitter/gcode_processor.c` |
+| 串口通信 | 上位机通过 UART1 给发射板逐行发文本指令 | `transmitter/uart_handler.c` |
+| SLE 通信 | 发射板是 Client，接收板是 Server，命令与状态通过 SSAP 特征值传输 | `transmitter/sle_client.c`、`receiver/sle_server.c` |
+| 坐标与功率输出 | X/Y 由 DAC8562 输出，激光功率由 PWM 输出 | `receiver/dac8562.c`、`receiver/laser_ctrl.c` |
+| 插补与执行 | 接收板消费命令队列并执行线性插补 | `receiver/interpolator.c` |
+| 安全机制 | 接收板会根据心跳和业务活动做超时停光保护 | `receiver/safety_monitor.c` |
+| 构建系统 | 通过 `Kconfig + CMakeLists.txt` 二选一构建发射板或接收板 | `Kconfig`、`CMakeLists.txt` |
+| 自动化测试 | 用 Python 串口脚本做 smoke/square/repeat/stress 回归 | `tools/uart_auto_test.py`、`tools/stress_test.py` |
+
+## 3. 新手入门指南
+
+### 3.1 先建立整体认知
+
+一套完整链路里各节点的职责如下：
+
+```text
+LaserGRBL / 串口工具
+    |
+    | UART1 文本 G-Code
+    v
+发射板 transmitter
+    |
+    | SLE motion_cmd_t
+    v
+接收板 receiver
+    |
+    +--> DAC8562 -> 振镜 X/Y
+    +--> PWM      -> 激光功率
+    |
+    `--> status_full_pkt 回传发射板
+```
+
+要点只有两条：
+- 发射板负责“理解上位机语言”。
+- 接收板负责“真实执行运动和出光”。
+
+### 3.2 先准备什么
+
+- 一块发射板固件目标板
+- 一块接收板固件目标板
+- 上位机到发射板的业务串口线
+- 可选的两路 UART0 调试串口
+- 可运行 `python3`/`py -3` 的 PC 环境
+- `pyserial` Python 依赖
+
+Windows 现场联调常用映射：
+- 业务串口：`COM8`
+- 发射板调试串口：`COM11`
+- 接收板调试串口：`COM13`
+
+## 4. 目录结构
+
+```text
+src/ws63_test/
+├── CMakeLists.txt
+├── Kconfig
+├── README.md
+├── CODE_ARCHITECTURE.md
+├── WS63_DEBUG_QUICKSTART.md
+├── common/
+│   ├── config.h
+│   ├── protocol.h
+│   ├── crc16.c
+│   └── crc16.h
+├── transmitter/
+│   ├── main.c
+│   ├── uart_handler.c
+│   ├── gcode_parser.c
+│   ├── gcode_processor.c
+│   └── sle_client.c
+├── receiver/
+│   ├── main.c
+│   ├── sle_server.c
+│   ├── cmd_queue.c
+│   ├── interpolator.c
+│   ├── dac8562.c
+│   ├── laser_ctrl.c
+│   └── safety_monitor.c
+└── tools/
+    ├── uart_auto_test.py
+    └── stress_test.py
+```
+
+## 5. 三个工程模块概览
+
+### 5.1 `common` 共享契约模块
+
+职责：
+- 定义收发板共用协议结构
+- 定义 CRC 校验
+- 固化硬件引脚、超时、流控与安全参数
+
+关键文件：
+- `common/protocol.h`：`motion_cmd_t`、`status_pkt_t`、`status_full_pkt_t`
+- `common/config.h`：UART/SLE/心跳/安全/硬件配置
+- `common/crc16.c`：无线链路数据完整性校验
+
+### 5.2 `transmitter` 发射板模块
+
+职责：
+- 接收上位机 UART1 的 G-Code 文本
+- 做 Grbl 兼容应答
+- 生成 `motion_cmd_t`
+- 通过 SLE 可靠下发给接收板
+- 接收接收板状态回传并用于 `?` 查询和流控
+
+关键文件：
+- `transmitter/main.c`
+- `transmitter/uart_handler.c`
+- `transmitter/gcode_parser.c`
+- `transmitter/gcode_processor.c`
+- `transmitter/sle_client.c`
+
+### 5.3 `receiver` 接收板模块
+
+职责：
+- 作为 SLE Server 接收命令
+- 做 CRC、参数、队列和安全校验
+- 通过插补驱动振镜
+- 通过 PWM 控制激光功率
+- 周期回传状态和 ACK
+
+关键文件：
+- `receiver/main.c`
+- `receiver/sle_server.c`
+- `receiver/cmd_queue.c`
+- `receiver/interpolator.c`
+- `receiver/dac8562.c`
+- `receiver/laser_ctrl.c`
+- `receiver/safety_monitor.c`
+
+## 6. 构建与烧录
+
+### 6.1 选择构建目标
+
+在仓库根目录执行：
+
+```bash
+python3 build.py menuconfig ws63-liteos-app
+```
+
+二选一配置：
+- 接收板：打开 `CONFIG_LASER_MARKER_RECEIVER`
+- 发射板：打开 `CONFIG_LASER_MARKER_TRANSMITTER`
+
+不要同时打开这两个选项。
+
+### 6.2 编译
+
+```bash
+python3 build.py ws63-liteos-app
+```
+
+需要完整清理时：
+
+```bash
+python3 build.py -c ws63-liteos-app
+```
+
+### 6.3 常用产物位置
+
+固件包：
+
+```text
+output/ws63/fwpkg/ws63-liteos-app/ws63-liteos-app_all.fwpkg
+```
+
+ELF：
+
+```text
+output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
+```
+
+### 6.4 烧录顺序建议
+
+1. 先烧接收板固件。
+2. 再烧发射板固件。
+3. 上电后先看两路 UART0 启动日志，再接上位机业务串口。
+
+## 7. 硬件与接口基线
+
+以 `common/config.h` 当前配置为准：
+
+### 接收板
+
+- SPI：`SPI0`
+- DAC CS：`GPIO10`
+- SPI CLK：`GPIO7`
+- SPI MOSI：`GPIO9`
+- 激光 PWM：`GPIO2 / PWM2`
+
+### 发射板
+
+- 业务串口：`UART1`
+- UART TX：`GPIO15`
+- UART RX：`GPIO16`
+- 波特率：`115200`
+
+## 8. 最小联调路径
+
+### 8.1 人工串口联调
+
+在串口工具里向发射板 UART1 逐行发送：
+
+```gcode
+$I
+G90
+M3 S200
+G1 X10 Y10 F6000
+G1 X20 Y10
+M5
+?
+```
+
+预期现象：
+- 每条业务命令返回 `ok`
+- 接收板振镜执行轨迹
+- `M3/M5` 控制激光开关
+- `?` 返回 `<Idle|...>` 或 `<Run|...>`
+
+### 8.2 自动测试
+
+先安装依赖：
+
+```bash
+pip install pyserial
+```
+
+如果你把 `tools/` 里的脚本单独拷到 Windows 目录运行，可以直接用下面的命令：
+
+```powershell
+py -3 .\uart_auto_test.py COM8 --tx-debug-port COM11 --rx-debug-port COM13 --suite smoke
+py -3 .\uart_auto_test.py COM8 --tx-debug-port COM11 --rx-debug-port COM13 --suite square
+py -3 .\uart_auto_test.py COM8 --tx-debug-port COM11 --rx-debug-port COM13 --suite repeat --rounds 20
+py -3 .\stress_test.py COM8 --tx-debug-port COM11 --rx-debug-port COM13 --suite repeat --rounds 20 --cycles 50 --report-json result.json
+```
+
+如果你在仓库根目录直接运行，推荐使用下面的路径写法：
+
+```bash
+python3 src/ws63_test/tools/uart_auto_test.py /dev/ttyUSB1 --tx-debug-port /dev/ttyUSB0 --rx-debug-port /dev/ttyUSB2 --suite smoke
+python3 src/ws63_test/tools/stress_test.py /dev/ttyUSB1 --tx-debug-port /dev/ttyUSB0 --rx-debug-port /dev/ttyUSB2 --suite repeat --rounds 20 --cycles 50 --report-json result.json
+```
+
+## 9. 推荐验收顺序
+
+建议每次交付前都按下面顺序回归：
+
+1. `smoke`
+2. `square`
+3. `repeat --rounds 20`
+4. `stress_test.py --suite repeat --rounds 20 --cycles 50`
+
+当前稳定基线：
+- `smoke` 通过
+- `square` 通过
+- `repeat --rounds 20` 通过
+- `stress_test.py --suite repeat --rounds 20 --cycles 50` 已完成 `50/50 PASS`
+
+## 10. 当前版本的关键工程结论
+
+这版工程已经把几个最容易在联调阶段出问题的点收住了：
+
+- 首条业务命令不再与初始 `ack=0` 冲突
+- 心跳会给业务命令让路，降低 SSAP 在途窗口争抢
+- 接收板 `Run/Idle` 状态语义已经修正
+- 接收板安全监控采用连续超时确认，减少单次抖动误停
+- 自动化脚本能处理残留 `Run`、`ok` 偶发缺失和状态查询重试
+
+## 11. 阅读源码建议顺序
+
+如果你要开始改代码，建议按这个顺序看：
+
+1. `common/protocol.h`
+2. `common/config.h`
+3. `transmitter/main.c`
+4. `transmitter/uart_handler.c`
+5. `transmitter/gcode_processor.c`
+6. `transmitter/sle_client.c`
+7. `receiver/main.c`
+8. `receiver/sle_server.c`
+9. `receiver/interpolator.c`
+10. `receiver/safety_monitor.c`
+
+## 12. 常见问题入口
+
+- 构建目标选错：先看 `Kconfig`
+- 烧录后完全不动：先看 `WS63_DEBUG_QUICKSTART.md`
+- 想定位为什么某条命令没执行：先看 `CODE_ARCHITECTURE.md`
+- 想验证当前固件是否还能交付：先跑 `tools/uart_auto_test.py` 和 `tools/stress_test.py`
