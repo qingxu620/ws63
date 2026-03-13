@@ -1,5 +1,0 @@
-{
-    "board": "arduino:avr:uno",
-    "sketch": "GCodeParserTest.ino",
-    "port": "COM5"
-}
