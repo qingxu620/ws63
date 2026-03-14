@@ -8,7 +8,7 @@
 - `receiver/`：接收板固件，负责 SLE Server/命令队列/插补/DAC/PWM/安全监控。
 
 配套支持目录：
-- `tools/`：Windows 或 Linux 上位机自动化测试脚本。
+- `tools/`：Windows 上位机自动化测试脚本。
 - `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
 
