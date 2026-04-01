@@ -9,6 +9,7 @@
 
 配套支持目录：
 - `tools/`：Windows 上位机自动化测试脚本。
+- `ai_studio/`：AI 智能创作中枢 PC 上位机原型，负责 AI 生图、轮廓提取、G-Code 生成和串口下发。
 - `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
 
@@ -85,6 +86,13 @@ src/ws63_test/
 ├── README.md
 ├── CODE_ARCHITECTURE.md
 ├── WS63_DEBUG_QUICKSTART.md
+├── ai_studio/
+│   ├── main.py
+│   ├── main_window.py
+│   ├── serial_worker.py
+│   ├── image_processing.py
+│   ├── gcode_generator.py
+│   └── ai_image_generator.py
 ├── common/
 │   ├── config.h
 │   ├── protocol.h
@@ -269,6 +277,22 @@ py -3 .\stress_test.py COM8 --tx-debug-port COM11 --rx-debug-port COM13 --suite 
 python3 src/ws63_test/tools/uart_auto_test.py /dev/ttyUSB1 --tx-debug-port /dev/ttyUSB0 --rx-debug-port /dev/ttyUSB2 --suite smoke
 python3 src/ws63_test/tools/stress_test.py /dev/ttyUSB1 --tx-debug-port /dev/ttyUSB0 --rx-debug-port /dev/ttyUSB2 --suite repeat --rounds 20 --cycles 50 --report-json result.json
 ```
+
+### 8.3 AI 智能创作中枢
+
+如果你要体验“AI 生图 -> 轮廓提取 -> G-Code -> 串口下发”的 P0 原型，可先安装：
+
+```bash
+pip install PySide6 opencv-python pyserial requests numpy
+```
+
+然后在仓库根目录运行：
+
+```bash
+python3 -m src.ws63_test.ai_studio.main
+```
+
+如果现场还没准备好真实 AI 接口，这个上位机会自动生成 mock 示例图，便于先联调图像处理和打标链路。
 
 ## 9. 推荐验收顺序
 

@@ -16,10 +16,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
 from typing import List, Optional, Sequence
+
+# 确保当前脚本目录在 sys.path 中，以便独立目录运行时也能 import uart_auto_test
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 import serial
 
@@ -31,8 +37,12 @@ from uart_auto_test import (
     TestFailure,
     TestResult,
     Ws63AutoTester,
+    apply_config_defaults,
+    load_config_file,
     resolve_suites,
     run_named_suite,
+    setup_file_logging,
+    windows_serial_hint,
 )
 
 
@@ -75,6 +85,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-going", action="store_true", help="Continue running after a failed cycle")
     parser.add_argument("--report-json", help="Write a machine-readable stress report to JSON")
     parser.add_argument("--verbose", action="store_true", help="Print every received line")
+    parser.add_argument(
+        "--log-dir",
+        default=None,
+        help="Directory to write timestamped log files (default: no file logging)",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to test_config.json (default: auto-detect in script directory)",
+    )
     return parser
 
 
@@ -119,6 +139,15 @@ def print_recent_debug_lines(debug_monitors: Sequence[DebugMonitor], stream: obj
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    # 加载配置文件
+    cfg = load_config_file(getattr(args, "config", None))
+    apply_config_defaults(args, cfg)
+
+    # 文件日志
+    if args.log_dir:
+        log_path = setup_file_logging(args.log_dir, prefix="ws63_stress")
+        print(f"Logging to: {log_path}")
 
     debug_monitors: List[DebugMonitor] = []
     tester: Optional[Ws63AutoTester] = None
@@ -196,7 +225,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (TestFailure, serial.SerialException, OSError) as exc:
         failure_detail = str(exc)
         exit_code = 1
-        print(f"[FAIL] {failure_detail}", file=sys.stderr)
+        if isinstance(exc, (serial.SerialException, OSError)) and sys.platform == "win32":
+            print(windows_serial_hint(args.port, exc), file=sys.stderr)
+        else:
+            print(f"[FAIL] {failure_detail}", file=sys.stderr)
         print_recent_debug_lines(debug_monitors)
     finally:
         recent_debug_lines = {

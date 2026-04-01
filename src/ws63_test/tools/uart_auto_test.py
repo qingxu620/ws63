@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import re
 import sys
 import threading
@@ -48,6 +50,97 @@ STATUS_QUERY_RESEND_INTERVAL_S = 0.5
 DEFAULT_BUSINESS_PORT = "COM8"
 DEFAULT_TX_DEBUG_PORT: Optional[str] = "COM11"
 DEFAULT_RX_DEBUG_PORT: Optional[str] = "COM13"
+
+# 配置文件名 — 放在脚本同目录，用于持久化端口设置
+CONFIG_FILE_NAME = "test_config.json"
+
+logger = logging.getLogger("ws63_test")
+
+
+def _script_dir() -> str:
+    """Return the directory that contains this script."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def load_config_file(config_path: Optional[str] = None) -> dict:
+    """Load test_config.json from *config_path* or the script directory.
+
+    Returns an empty dict if the file does not exist.
+    Supported keys:
+        business_port, tx_debug_port, rx_debug_port, baud, debug_baud,
+        no_tx_debug, no_rx_debug
+    """
+    if config_path is None:
+        config_path = os.path.join(_script_dir(), CONFIG_FILE_NAME)
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as fp:
+            cfg = json.load(fp)
+        logger.info("Loaded config from %s", config_path)
+        return cfg if isinstance(cfg, dict) else {}
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[WARN] Failed to load {config_path}: {exc}", file=sys.stderr)
+        return {}
+
+
+def apply_config_defaults(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply config-file values as defaults — CLI args take priority."""
+    mapping = {
+        "business_port": "port",
+        "tx_debug_port": "tx_debug_port",
+        "rx_debug_port": "rx_debug_port",
+        "baud": "baud",
+        "debug_baud": "debug_baud",
+        "no_tx_debug": "no_tx_debug",
+        "no_rx_debug": "no_rx_debug",
+    }
+    for cfg_key, attr in mapping.items():
+        if cfg_key in cfg:
+            # Only override if the user did NOT explicitly set the CLI arg
+            current = getattr(args, attr, None)
+            default_val = {
+                "port": DEFAULT_BUSINESS_PORT,
+                "tx_debug_port": DEFAULT_TX_DEBUG_PORT,
+                "rx_debug_port": DEFAULT_RX_DEBUG_PORT,
+                "baud": 115200,
+                "debug_baud": 115200,
+                "no_tx_debug": False,
+                "no_rx_debug": False,
+            }.get(attr)
+            if current == default_val:
+                setattr(args, attr, cfg[cfg_key])
+
+
+def setup_file_logging(log_dir: str, prefix: str = "ws63_test") -> str:
+    """Configure logging to write to a timestamped file in *log_dir*.
+
+    Returns the log file path.
+    """
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join(log_dir, f"{prefix}_{timestamp}.log")
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.DEBUG)
+    logger.info("Log file: %s", log_path)
+    return log_path
+
+
+def windows_serial_hint(port: str, exc: Exception) -> str:
+    """Return a human-readable troubleshooting hint for Windows COM port errors."""
+    lines = [
+        f"无法打开串口 {port}: {exc}",
+        "",
+        "排查建议 (Windows):",
+        f"  1. 打开 设备管理器 → 端口(COM和LPT)，确认 {port} 存在",
+        "  2. 确认没有其他程序 (串口助手/LaserGRBL) 占用该端口",
+        "  3. 如果端口号变了，请更新 test_config.json 或命令行参数",
+        "  4. 尝试拔插 USB 线后重新运行",
+        "  5. 确认 USB 转串口驱动已正确安装 (CH340/CP210x/FTDI)",
+    ]
+    return "\n".join(lines)
 
 
 class TestFailure(RuntimeError):
@@ -753,11 +846,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Interactively select business/debug serial ports before running",
     )
     parser.add_argument("--verbose", action="store_true", help="Print every received line")
+    parser.add_argument(
+        "--log-dir",
+        default=None,
+        help="Directory to write timestamped log files (default: no file logging)",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to test_config.json (default: auto-detect in script directory)",
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    # 加载配置文件 (test_config.json) 并用作默认值
+    cfg = load_config_file(getattr(args, "config", None))
+    apply_config_defaults(args, cfg)
+
+    # 文件日志
+    log_path: Optional[str] = None
+    if args.log_dir:
+        log_path = setup_file_logging(args.log_dir)
+        print(f"Logging to: {log_path}")
+
     args = resolve_ports(args)
 
     debug_monitors: List[DebugMonitor] = []
@@ -791,7 +905,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (TestFailure, serial.SerialException, OSError) as exc:
         failure_detail = str(exc)
         exit_code = 1
-        print(f"[FAIL] {failure_detail}", file=sys.stderr)
+        # Windows 串口打开失败时给出友好提示
+        if isinstance(exc, (serial.SerialException, OSError)) and sys.platform == "win32":
+            hint = windows_serial_hint(args.port, exc)
+            print(hint, file=sys.stderr)
+        else:
+            print(f"[FAIL] {failure_detail}", file=sys.stderr)
+        logger.error("Test failed: %s", failure_detail)
         for monitor in debug_monitors:
             print(f"Recent {monitor.label} lines ({monitor.port}):", file=sys.stderr)
             for line in monitor.recent_lines()[-20:]:
