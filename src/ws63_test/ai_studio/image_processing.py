@@ -165,7 +165,8 @@ def process_image_to_contours(
 
     height, width = gray.shape[:2]
     raw_paths: List[NormalizedPath] = []
-    preview = cv2.cvtColor(denoised_mask, cv2.COLOR_GRAY2BGR)
+    # 预览图使用白底黑线，更符合教育软件和草图式视觉风格。
+    preview = np.full((height, width, 3), 255, dtype=np.uint8)
 
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -181,7 +182,7 @@ def process_image_to_contours(
         path = _normalize_contour_points(simplified, width, height)
         if len(path) >= 2:
             raw_paths.append(path)
-            cv2.drawContours(preview, [simplified], -1, (0, 0, 255), 1)
+            cv2.drawContours(preview, [simplified], -1, (0, 0, 0), 1)
 
     if not raw_paths:
         raise ImageProcessingError("轮廓过小或过于稀疏，无法生成有效路径")
