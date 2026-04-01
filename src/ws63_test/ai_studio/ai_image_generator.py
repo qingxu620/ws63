@@ -17,9 +17,58 @@ import cv2
 import numpy as np
 import requests
 
+from .qt_compat import QtCore, Signal
+
 
 class AIImageGenerationError(RuntimeError):
     """AI 生图失败时抛出的异常。"""
+
+
+class AIGeneratorThread(QtCore.QThread):
+    """
+    AI 生图线程。
+
+    目的：
+    - 把网络请求从主 GUI 线程挪走，避免界面卡死；
+    - 通过信号把成功结果或错误返回给界面层。
+    """
+
+    success_signal = Signal(str)
+    error_signal = Signal(str)
+    started_signal = Signal(str)
+
+    def __init__(
+        self,
+        prompt: str,
+        output_path: str = "temp_ai_image.png",
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: float = 90.0,
+        parent: Optional[QtCore.QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.prompt = prompt
+        self.output_path = output_path
+        self.api_base = api_base
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+
+    def run(self) -> None:  # pragma: no cover - GUI 线程行为
+        self.started_signal.emit("AI 图像生成中，请稍候...")
+        try:
+            image_path = generate_image_from_text(
+                prompt=self.prompt,
+                output_path=self.output_path,
+                api_base=self.api_base,
+                api_key=self.api_key,
+                model=self.model,
+                timeout=self.timeout,
+            )
+            self.success_signal.emit(image_path)
+        except Exception as exc:
+            self.error_signal.emit(str(exc))
 
 
 def _write_base64_image(image_b64: str, output_path: Path) -> Path:
@@ -117,4 +166,3 @@ def generate_image_from_text(
         return str(_download_image(first_item["url"], output, timeout=timeout))
 
     raise AIImageGenerationError(f"AI 生图返回格式不受支持: {first_item}")
-

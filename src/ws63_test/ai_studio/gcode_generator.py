@@ -27,6 +27,43 @@ def _scale_point(point: Tuple[float, float], width_mm: float, height_mm: float) 
     return point[0] * width_mm, point[1] * height_mm
 
 
+def _fit_contours_to_work_area(
+    contours: Sequence[NormalizedPath],
+    width_mm: float,
+    height_mm: float,
+    margin_ratio: float = 0.08,
+) -> List[NormalizedPath]:
+    """
+    根据用户设定的物理尺寸再次做一次等比例适配。
+
+    原因：
+    - 图像处理阶段只知道“归一化画布”；
+    - 真实雕刻区域可能是 50x50，也可能是 80x50；
+    - 这里必须再按物理宽高比做一次 fit，防止图形被拉伸。
+    """
+
+    min_x, min_y, max_x, max_y = compute_bounding_box(contours)
+    src_w = max(max_x - min_x, 1e-6)
+    src_h = max(max_y - min_y, 1e-6)
+
+    usable_w = max(width_mm * (1.0 - 2.0 * margin_ratio), 1e-6)
+    usable_h = max(height_mm * (1.0 - 2.0 * margin_ratio), 1e-6)
+    scale = min(usable_w / src_w, usable_h / src_h)
+
+    dst_w = src_w * scale
+    dst_h = src_h * scale
+    offset_x = (width_mm - dst_w) * 0.5
+    offset_y = (height_mm - dst_h) * 0.5
+
+    fitted: List[NormalizedPath] = []
+    for path in contours:
+        placed: NormalizedPath = []
+        for x, y in path:
+            placed.append(((x - min_x) * scale + offset_x, (y - min_y) * scale + offset_y))
+        fitted.append(placed)
+    return fitted
+
+
 def generate_gcode(
     contours: Sequence[NormalizedPath],
     width_mm: float,
@@ -53,23 +90,25 @@ def generate_gcode(
     if power < 0:
         raise GCodeGenerationError("激光功率不能为负数")
 
+    fitted_contours = _fit_contours_to_work_area(contours, width_mm, height_mm)
+
     lines: List[str] = [
         "$I",
         "G90",
         "M5",
     ]
 
-    for path in contours:
+    for path in fitted_contours:
         if len(path) < 2:
             continue
 
-        start_x, start_y = _scale_point(path[0], width_mm, height_mm)
+        start_x, start_y = path[0]
         lines.append("M5")
         lines.append(f"G0 {_format_xy(start_x, start_y)}")
         lines.append(f"M3 S{int(power)}")
 
         for index, point in enumerate(path):
-            x_mm, y_mm = _scale_point(point, width_mm, height_mm)
+            x_mm, y_mm = point
             if index == 0:
                 # 第一段也按 G1 发出去，保证下位机统一走线性插补逻辑。
                 lines.append(f"G1 {_format_xy(x_mm, y_mm)} F{int(feed_rate)}")
@@ -103,11 +142,12 @@ def generate_preview_gcode(
     if not contours:
         raise GCodeGenerationError("轮廓为空，无法生成边界预览")
 
-    min_x, min_y, max_x, max_y = compute_bounding_box(contours)
-    x0 = min_x * width_mm
-    y0 = min_y * height_mm
-    x1 = max_x * width_mm
-    y1 = max_y * height_mm
+    fitted_contours = _fit_contours_to_work_area(contours, width_mm, height_mm)
+    min_x, min_y, max_x, max_y = compute_bounding_box(fitted_contours)
+    x0 = min_x
+    y0 = min_y
+    x1 = max_x
+    y1 = max_y
 
     return [
         "$I",
@@ -127,4 +167,3 @@ def save_gcode_file(lines: Iterable[str], output_path: str) -> str:
     output = Path(output_path).resolve()
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(output)
-
