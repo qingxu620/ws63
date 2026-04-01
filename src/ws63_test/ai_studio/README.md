@@ -1,8 +1,39 @@
 # AI 智能创作中枢
 
-这是 `ws63_test` 的 PC 端上位机原型，用于把“AI 生图 -> 图像轮廓提取 -> G-Code 生成 -> 串口下发到 WS63 发射板”串成一条最小闭环。
+`ai_studio` 是 `ws63_test` 的 PC 端教育类上位机。  
+它的目标不是替代底层双板固件，而是在现有 WS63 收发板能力之上，补齐一条更适合演示和教学的完整链路：
 
-## 目录结构建议
+`AI 生图 / 本地图导入 -> OpenCV 轮廓提取 -> G-Code 生成 -> 串口下发到 WS63 发射板`
+
+这份 README 同时承担两种作用：
+- 给项目成员快速理解当前阶段成果
+- 给后续 AI / 新同学提供“可直接接管”的上下文
+
+---
+
+## 当前阶段结算
+
+当前阶段可以视为 `P2 中期可演示版本`，已经具备以下能力：
+
+- 本地图导入链路已跑通
+- 中文路径图片读取已修复
+- OpenCV 轮廓提取、降噪、居中排版已接通
+- G-Code 生成与导出已接通
+- 串口逐行发送并等待 `ok` 的调度链路已接通
+- GUI 已完成教育类风格重构
+- 左侧工作流已改成三步骤标签页
+- AI 生图已接入 Google `Imagen 4 Fast`
+- AI 生图结果会自动进入轮廓提取和预览流程
+
+当前版本已经适合做：
+- 课堂演示
+- 比赛展示
+- 功能联调
+- 基础打标验证
+
+---
+
+## 目录结构
 
 ```text
 src/ws63_test/ai_studio/
@@ -17,74 +48,276 @@ src/ws63_test/ai_studio/
 └── main.py
 ```
 
-## 模块说明
+---
 
-- `ai_image_generator.py`
-  AI 生图接口。默认兼容 OpenAI 风格图片生成接口，未配置 API 时自动走 mock 图。
-- `image_processing.py`
-  基于 OpenCV 的轮廓提取模块，输出归一化路径。
-- `gcode_generator.py`
-  基于轮廓生成 WS63 当前可执行的 G-Code，并支持边界框预览。
-- `serial_worker.py`
-  基于 `pyserial + QThread` 的串口发送线程，逐行等待 `ok`。
-- `main_window.py`
-  主界面，负责把 AI、图像处理、G-Code 和串口调度串起来。
-- `main.py`
-  启动入口。
+## 模块职责
 
-## 依赖安装
+### `main.py`
+- GUI 启动入口
 
-建议使用独立虚拟环境：
+### `qt_compat.py`
+- 统一兼容 `PySide6 / PyQt5`
+
+### `main_window.py`
+- 主界面与交互编排中心
+- 当前左侧为三步骤标签页：
+  - `🔌 步骤一：连接`
+  - `🎨 步骤二：创作`
+  - `🚀 步骤三：雕刻`
+- 右侧为：
+  - 原图预览
+  - 轮廓预览
+  - 系统消息板
+
+### `ai_image_generator.py`
+- Google `Imagen 4 Fast` REST API 请求
+- 子线程 `AIGeneratorThread`
+- prompt engineering
+- base64 图片解析与本地落盘
+
+### `image_processing.py`
+- 中文路径图片读取
+- 灰度化、自适应阈值、形态学去噪
+- Canny + `findContours`
+- 轮廓归一化、整体居中、等比例 fit
+- 白底黑线轮廓预览图输出
+
+### `gcode_generator.py`
+- 将归一化轮廓映射到物理尺寸
+- 生成 WS63 当前链路兼容的 G-Code
+- 生成边框预览 G-Code
+- 导出 `.gcode`
+
+### `serial_worker.py`
+- `QThread + pyserial`
+- 逐行发送
+- 每行等待下位机 `ok`
+- 急停时发送 `M5` 与 `!`
+- 队列调度、进度回传、串口状态管理
+
+---
+
+## 当前真实运行逻辑
+
+### 1. 本地图导入模式
+1. 用户在 GUI 中导入图片
+2. `image_processing.py` 提取轮廓
+3. `gcode_generator.py` 生成 G-Code
+4. `serial_worker.py` 串口发送到 WS63 发射板
+
+### 2. AI 生图模式
+1. 用户输入 prompt
+2. `AIGeneratorThread` 调用 Imagen 4 Fast
+3. 生成图片保存为本地文件
+4. 自动进入同一条 OpenCV -> G-Code -> 串口链路
+
+---
+
+## AI 生图当前状态
+
+当前使用模型：
+
+- `imagen-4.0-fast-generate-001`
+
+当前提示词策略不是“极端雕刻约束”，而是“展示效果与轮廓提取折中版”。  
+附加提示词目前为：
+
+```text
+clean high-quality illustration, preserve the character's iconic appearance and canonical colors,
+clear black outlines, bright clean white background, high contrast, clear subject, minimal background clutter,
+visually appealing, suitable for contour extraction and laser engraving
+```
+
+设计意图：
+- 保留角色经典配色和展示效果
+- 保持背景干净、主体清晰
+- 给后续 OpenCV 轮廓提取留出足够对比度
+
+注意：
+- 这套提示词仍然是“折中策略”，不是最终最优
+- 如果目标偏展示，可继续放松约束
+- 如果目标偏雕刻成功率，可增加更硬的线稿约束
+
+---
+
+## 当前 GUI 状态
+
+当前 GUI 已完成以下改造：
+
+- 教育类明亮创客风视觉
+- Emoji 情感化标题和按钮
+- 三步骤标签页导航
+- 参数控件改成“点击后才能改值”
+- 串口未连接时，雕刻动作会被前置拦截
+
+已知 GUI 重点：
+- `步骤三：雕刻` 的内容较高，因此已经改成页内滚动思路
+- 如果后续 Windows 下仍有个别按钮字体裁切，优先检查：
+  - QSS 的 `padding / min-height`
+  - Tab 页内部是否为可滚动容器
+  - 系统缩放比例是否为 125% / 150%
+
+---
+
+## 当前与底层固件的接口约束
+
+当前上位机默认依赖底层满足以下行为：
+
+- 串口接收标准 G-Code 文本
+- 支持：
+  - `G0`
+  - `G1`
+  - `G90`
+  - `M3`
+  - `M5`
+  - `S`
+  - `F`
+- 每执行完一行后返回 `ok`
+
+如果底层协议变化，最先需要联动检查的文件是：
+- [serial_worker.py](/root/fbb_ws63/src/ws63_test/ai_studio/serial_worker.py)
+- [gcode_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/gcode_generator.py)
+
+---
+
+## 运行方式
+
+### 依赖安装
+
+推荐：
 
 ```bash
 pip install PySide6 opencv-python pyserial requests numpy
 ```
 
-如果你更习惯 `PyQt5`，也可以安装：
+兼容：
 
 ```bash
 pip install PyQt5 opencv-python pyserial requests numpy
 ```
 
-## 启动方式
+### 启动
 
-在仓库根目录执行：
+在仓库根目录运行：
 
 ```bash
 python3 -m src.ws63_test.ai_studio.main
 ```
 
-如果你进入 `src/ws63_test/ai_studio` 目录，也可以直接运行：
+---
 
-```bash
-python3 main.py
-```
+## 当前关键配置
 
-## AI 接口配置
+### AI Key
 
-当前默认读取以下环境变量：
+当前 `Imagen 4 Fast` 的 API Key 直接写在：
+- [ai_image_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/ai_image_generator.py)
 
-- `OPENAI_BASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_IMAGE_MODEL`
+这在联调阶段方便，但不是最终安全方案。  
+后续应迁移到：
 
-未配置时，不会报错退出，而是自动生成一张 mock 示例图，方便先联调下位机和轨迹链路。
+- 环境变量 `GOOGLE_API_KEY`
+- 或单独本地配置文件
 
-## 当前阶段定位
+### 串口
 
-这版更偏 P0 原型，目标是尽快把链路跑通：
+默认业务串口波特率：
+- `115200`
 
-1. 输入提示词
-2. 生成图片
-3. 提取轮廓
-4. 生成 G-Code
-5. 导出给 LaserGRBL，或直接串口发给 WS63 发射板
+当前串口发送策略：
+- 一次只发一行
+- 等 `ok` 再发下一行
 
-后续可继续扩展：
+这是为了稳定，不是为了极限速度。
 
-- 轨迹缩放、平移、旋转和居中
-- 图片上传而不仅是 AI 生图
-- 路径简化和 G2/G3 圆弧拟合
-- 灰度雕刻 / 光栅雕刻
-- Web 端与移动端适配
+---
 
+## 已完成问题修复记录
+
+当前已确认修过的关键问题包括：
+
+- Windows 中文路径图片无法读取
+- AI 请求阻塞 GUI
+- 未连接串口时仍能误下发任务
+- 参数框滚轮误触
+- 左侧控制区早期的缩放挤压问题
+- 轮廓预览图过浅，已改成白底深线
+
+---
+
+## 当前待办 / 下一步建议
+
+如果由新的 AI 或新同学继续接手，优先级建议如下：
+
+### P1：稳定性与可用性
+- 统一三个 Tab 页的滚动行为
+- 继续修整 Windows 高 DPI 下的按钮裁切问题
+- 把 API Key 从代码移到环境变量
+
+### P2：展示效果
+- 增加“展示模式 / 雕刻模式”双提示词模板
+- 增加生成尺寸、风格模板选择
+- 增加 AI 原图的缓存与历史记录
+
+### P3：打标友好优化
+- 更好的轮廓简化
+- 轮廓排序优化，减少空走
+- 更好的预览边界框交互
+
+### P4：平台扩展
+- Web 端适配
+- 手机端适配
+- 后续接入更丰富的创作工作流
+
+---
+
+## 给后续 AI 的接管提示
+
+如果你是后续接管本项目的 AI，请优先理解这几点：
+
+1. 这是一个“上位机前端项目”，不要误把重点放在 WS63 固件里。
+2. 当前主目标不是重写架构，而是继续增强：
+   - 教育场景体验
+   - AI 生图展示效果
+   - 打标成功率
+3. 当前最容易回归的问题有三类：
+   - Windows GUI 高 DPI 下按钮/Tab 裁切
+   - 图片路径和保存路径的 Unicode 问题
+   - AI 生图提示词过强或过弱导致展示/雕刻失衡
+4. 若改 AI 提示词，请同时考虑：
+   - 原图展示效果
+   - OpenCV 边缘提取效果
+   - 激光打标轮廓质量
+5. 若改串口逻辑，请不要破坏“逐行等待 ok”这个稳定性前提。
+
+---
+
+## 推荐接管顺序
+
+建议后续 AI 或开发者按以下顺序阅读：
+
+1. [main_window.py](/root/fbb_ws63/src/ws63_test/ai_studio/main_window.py)
+2. [ai_image_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/ai_image_generator.py)
+3. [image_processing.py](/root/fbb_ws63/src/ws63_test/ai_studio/image_processing.py)
+4. [gcode_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/gcode_generator.py)
+5. [serial_worker.py](/root/fbb_ws63/src/ws63_test/ai_studio/serial_worker.py)
+
+---
+
+## 当前结论
+
+`ai_studio` 已经不是最初的 P0 原型，而是一个：
+
+- 可运行
+- 可展示
+- 可串口直连 WS63
+- 可本地图导入
+- 可 AI 生图
+- 可自动生成 G-Code
+
+的阶段性可交付版本。
+
+下一阶段的重点不再是“从 0 到 1 打通链路”，而是：
+- 提升展示效果
+- 提升界面稳定性
+- 提升生成图对打标场景的适配质量

@@ -340,3 +340,42 @@ python3 -m src.ws63_test.ai_studio.main
 - 烧录后完全不动：先看 `WS63_DEBUG_QUICKSTART.md`
 - 想定位为什么某条命令没执行：先看 `CODE_ARCHITECTURE.md`
 - 想验证当前固件是否还能交付：先跑 `tools/uart_auto_test.py` 和 `tools/stress_test.py`
+
+## 13. 今日阶段结算
+
+截至今天，这个工程已经分成两条都可工作的主线：
+
+- 固件主线：`common + transmitter + receiver`
+  - 双板无线打标闭环已稳定
+  - `smoke / square / repeat / stress 50/50` 已通过
+- 上位机主线：`ai_studio`
+  - AI 生图 / 本地图导入 / 轮廓提取 / G-Code / 串口下发 已打通
+  - GUI 已完成教育类风格重构
+  - 左侧工作流已改成三步骤标签页
+  - 中文路径图片读取已修复
+  - 串口未连接误发送已修复
+
+当前最适合的工作方式是：
+- 固件层保持“稳定基线”，谨慎改动协议和安全逻辑
+- 上位机层继续迭代展示效果、图像处理效果和交互体验
+
+## 14. 发给下一个 AI 的最小文档包
+
+如果你后面要把项目交给新的 AI，建议最少上传下面 4 份文档：
+
+1. [README.md](/root/fbb_ws63/src/ws63_test/README.md)
+   作用：给它整个项目的总览、目录、构建方式和当前结论。
+2. [CODE_ARCHITECTURE.md](/root/fbb_ws63/src/ws63_test/CODE_ARCHITECTURE.md)
+   作用：让它快速知道核心源码在哪、数据怎么流、问题该从哪层查。
+3. [WS63_DEBUG_QUICKSTART.md](/root/fbb_ws63/src/ws63_test/WS63_DEBUG_QUICKSTART.md)
+   作用：让它理解你们现场怎么联调、怎么复现实机问题。
+4. [README.md](/root/fbb_ws63/src/ws63_test/ai_studio/README.md)
+   作用：让它直接接管 AI 上位机部分，知道当前阶段、风险点和下一步。
+
+如果你希望新 AI 直接开始改代码，再额外补这 5 个源码文件最有帮助：
+
+1. [main_window.py](/root/fbb_ws63/src/ws63_test/ai_studio/main_window.py)
+2. [ai_image_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/ai_image_generator.py)
+3. [image_processing.py](/root/fbb_ws63/src/ws63_test/ai_studio/image_processing.py)
+4. [gcode_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/gcode_generator.py)
+5. [serial_worker.py](/root/fbb_ws63/src/ws63_test/ai_studio/serial_worker.py)

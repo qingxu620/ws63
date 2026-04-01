@@ -364,3 +364,49 @@ PC 发出 G1
 - 改 `uart_handler.c` 的 `ok` 策略时，要注意上位机兼容性
 - 改 `safety_monitor.c` 时，要优先守住安全边界，不要只追求“压测更稳”
 
+## 9. 新增上位机层：`ai_studio`
+
+目前项目已经不再只有固件和测试脚本，还多了一条面向比赛展示和教学演示的 PC 上位机主线：
+
+```text
+Prompt / 本地图
+  -> ai_studio/ai_image_generator.py
+  -> ai_studio/image_processing.py
+  -> ai_studio/gcode_generator.py
+  -> ai_studio/serial_worker.py
+  -> WS63 发射板 UART1
+```
+
+这层的定位不是替代固件，而是：
+- 降低使用门槛
+- 提升演示效果
+- 为后续 Web / 移动端适配打基础
+
+当前 `ai_studio` 的关键文件是：
+- `main_window.py`：UI 和工作流编排
+- `ai_image_generator.py`：Imagen 4 Fast 生图
+- `image_processing.py`：图片转轮廓
+- `gcode_generator.py`：轮廓转 G-Code
+- `serial_worker.py`：串口发送和 `ok` 流控
+
+## 10. 给后续 AI 的源码接管建议
+
+如果后续 AI 要接管整个项目，不建议一上来就读所有源码。  
+更高效的顺序是：
+
+1. 先读 [README.md](/root/fbb_ws63/src/ws63_test/README.md)
+2. 再读 [README.md](/root/fbb_ws63/src/ws63_test/ai_studio/README.md)
+3. 然后读本文件建立固件脑图
+4. 最后根据任务只钻对应代码层
+
+如果任务偏固件联调，优先读：
+- `common/protocol.h`
+- `transmitter/uart_handler.c`
+- `transmitter/sle_client.c`
+- `receiver/sle_server.c`
+- `receiver/safety_monitor.c`
+
+如果任务偏上位机体验，优先读：
+- `ai_studio/main_window.py`
+- `ai_studio/image_processing.py`
+- `ai_studio/ai_image_generator.py`

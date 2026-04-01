@@ -1,8 +1,8 @@
 """
-Google Nano Banana 2 / Gemini 3.1 Flash Image 生图模块。
+Google Imagen 4 Fast 生图模块。
 
 本模块负责两件事：
-1. 在独立线程中调用 Gemini 3.1 Flash Image Preview REST API；
+1. 在独立线程中调用 Imagen 4 Fast REST API；
 2. 解析接口返回的 base64 图片，并保存到本地供后续轮廓提取使用。
 """
 
@@ -21,10 +21,11 @@ from .qt_compat import QtCore, Signal
 # 这里预留给用户填写真实的 Google API Key。
 API_KEY = "AIzaSyC6YrYENmDFJ4Jt1gbI6uUqBZad2EqGW4w"
 
-MODEL_NAME = "gemini-3.1-flash-image-preview"
+MODEL_NAME = "imagen-4.0-fast-generate-001"
 PROMPT_SUFFIX = (
-    ", black and white line art, clean white background, "
-    "vector style, highly detailed, suitable for laser engraving"
+    ", clean high-quality illustration, preserve the character's iconic appearance and canonical colors, "
+    "clear black outlines, bright clean white background, high contrast, clear subject, minimal background clutter, "
+    "visually appealing, suitable for contour extraction and laser engraving"
 )
 DEFAULT_TIMEOUT = 120.0
 
@@ -62,7 +63,7 @@ class AIGeneratorThread(QtCore.QThread):
         self.api_key = api_key
 
     def run(self) -> None:  # pragma: no cover - GUI 线程行为
-        self.started_signal.emit("正在连接 Gemini Nano Banana 2，请稍候...")
+        self.started_signal.emit("正在连接 Imagen 4 Fast，请稍候...")
         try:
             image_path = generate_image_from_text(
                 prompt=self.prompt,
@@ -90,22 +91,18 @@ def _resolve_api_key(override_key: Optional[str] = None) -> str:
 
 
 def _build_request_payload(prompt: str) -> dict[str, Any]:
-    """构造符合当前项目需求的 Gemini 图片生成请求体。"""
+    """构造符合当前项目需求的 Imagen 图片生成请求体。"""
 
     final_prompt = prompt.strip() + PROMPT_SUFFIX
     return {
-        "contents": [
+        "instances": [
             {
-                "parts": [
-                    {
-                        "text": final_prompt,
-                    }
-                ]
+                "prompt": final_prompt,
             }
         ],
-        # 官方文档说明可通过 responseModalities 强制只返回图片。
-        "generationConfig": {
-            "responseModalities": ["Image"],
+        "parameters": {
+            "sampleCount": 1,
+            "aspectRatio": "1:1",
         },
     }
 
@@ -130,35 +127,41 @@ def _extract_error_message(response: requests.Response) -> str:
 
 def _extract_image_part(payload: dict[str, Any]) -> tuple[str, str]:
     """
-    从 Gemini 返回 JSON 中提取第一张图片。
+    从 Imagen 返回 JSON 中提取第一张图片。
 
-    官方文档示例里图片数据位于：
-    candidates[0].content.parts[*].inlineData.data
+    官方文档说明 `predict` 会返回 `predictions[]`。
+    不同版本的返回体字段名可能略有差异，这里做兼容解析。
     """
 
-    prompt_feedback = payload.get("promptFeedback") or {}
-    block_reason = prompt_feedback.get("blockReason")
-    if block_reason:
-        raise AIImageGenerationError(f"请求被模型安全策略拦截: {block_reason}")
+    predictions = payload.get("predictions") or []
+    if not predictions:
+        raise AIImageGenerationError(f"Imagen 接口返回为空: {payload}")
 
-    text_fragments: list[str] = []
-    for candidate in payload.get("candidates") or []:
-        content = candidate.get("content") or {}
-        for part in content.get("parts") or []:
-            inline_data = part.get("inlineData") or part.get("inline_data")
-            if inline_data:
-                image_b64 = inline_data.get("data")
-                mime_type = inline_data.get("mimeType") or inline_data.get("mime_type") or "image/png"
-                if image_b64:
-                    return image_b64, mime_type
-            if part.get("text"):
-                text_fragments.append(str(part["text"]))
+    first_prediction = predictions[0]
+    if not isinstance(first_prediction, dict):
+        raise AIImageGenerationError(f"Imagen 返回格式不受支持: {first_prediction}")
 
-    if text_fragments:
-        preview_text = " ".join(text_fragments).strip()
-        raise AIImageGenerationError(f"接口未返回图片，只返回了文本: {preview_text[:160]}")
+    image_b64 = (
+        first_prediction.get("bytesBase64Encoded")
+        or first_prediction.get("bytes_base64_encoded")
+    )
+    mime_type = first_prediction.get("mimeType") or first_prediction.get("mime_type") or "image/png"
 
-    raise AIImageGenerationError("接口返回中未找到图片数据，请检查模型权限、配额或请求参数")
+    if not image_b64:
+        image_obj = first_prediction.get("image") or {}
+        if isinstance(image_obj, dict):
+            image_b64 = (
+                image_obj.get("bytesBase64Encoded")
+                or image_obj.get("bytes_base64_encoded")
+                or image_obj.get("imageBytes")
+                or image_obj.get("image_bytes")
+            )
+            mime_type = image_obj.get("mimeType") or image_obj.get("mime_type") or mime_type
+
+    if not image_b64:
+        raise AIImageGenerationError(f"Imagen 返回中未找到图片数据: {first_prediction}")
+
+    return image_b64, mime_type
 
 
 def _guess_suffix_from_mime(mime_type: str) -> str:
@@ -196,10 +199,10 @@ def generate_image_from_text(
     api_key: Optional[str] = None,
 ) -> str:
     """
-    调用 Gemini 3.1 Flash Image Preview REST API 生成图片。
+    调用 Imagen 4 Fast REST API 生成图片。
 
-    当前实现遵循 Google 官方 REST 文档，发送 `generateContent` 请求，
-    并从返回的 `inlineData.data` 中提取图片内容。
+    当前实现遵循 Google 官方 REST 文档，发送 `predict` 请求，
+    并从返回的 `predictions[]` 中提取图片内容。
     """
 
     prompt = prompt.strip()
@@ -209,7 +212,7 @@ def generate_image_from_text(
     resolved_api_key = _resolve_api_key(api_key)
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{MODEL_NAME}:generateContent?key={resolved_api_key}"
+        f"{MODEL_NAME}:predict?key={resolved_api_key}"
     )
     headers = {
         "Content-Type": "application/json",
@@ -219,17 +222,17 @@ def generate_image_from_text(
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=timeout)
     except requests.Timeout as exc:
-        raise AIImageGenerationError("Gemini 生图请求超时，请检查网络或稍后重试") from exc
+        raise AIImageGenerationError("Imagen 生图请求超时，请检查网络或稍后重试") from exc
     except requests.RequestException as exc:
-        raise AIImageGenerationError(f"Gemini 生图请求失败: {exc}") from exc
+        raise AIImageGenerationError(f"Imagen 生图请求失败: {exc}") from exc
 
     if not response.ok:
-        raise AIImageGenerationError(f"Gemini 生图接口返回错误: {_extract_error_message(response)}")
+        raise AIImageGenerationError(f"Imagen 生图接口返回错误: {_extract_error_message(response)}")
 
     try:
         data = response.json()
     except ValueError as exc:
-        raise AIImageGenerationError("Gemini 生图返回的 JSON 无法解析") from exc
+        raise AIImageGenerationError("Imagen 生图返回的 JSON 无法解析") from exc
 
     image_b64, mime_type = _extract_image_part(data)
     return _save_base64_image(image_b64, mime_type, output_path)

@@ -2,7 +2,7 @@
 主界面模块。
 
 本版面向教育和创客场景，采用明亮友好的卡片式布局：
-1. 左侧为控制面板，放入 QScrollArea，窗口缩放时不再挤压变形；
+1. 左侧为分步标签页式控制面板，按“连接 -> 创作 -> 雕刻”组织工作流；
 2. 右侧为展示区，上方看图、下方看消息；
 3. 保留 AI 生图、本地图导入、G-Code 生成、串口发送的完整闭环。
 """
@@ -38,7 +38,8 @@ QPushButton {
     background-color: #FFFFFF;
     border: 2px solid #E2E8F0;
     border-radius: 10px;
-    padding: 10px 16px;
+    padding: 8px 16px;
+    min-height: 36px;
     font-weight: bold;
     color: #4A5568;
 }
@@ -148,6 +149,50 @@ QProgressBar::chunk {
 
 QSplitter::handle {
     background-color: #DDE6F1;
+}
+
+QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+
+QTabWidget::tab-bar {
+    alignment: center;
+}
+
+QTabBar::tab {
+    background-color: #E4E7EB;
+    color: #7F8C8D;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-right: 4px;
+    margin-bottom: 10px;
+    font-weight: bold;
+    font-size: 13px;
+}
+
+QTabBar::tab:hover {
+    background-color: #D1D8E0;
+    color: #2C3E50;
+}
+
+QTabBar::tab:selected {
+    background-color: #4A90E2;
+    color: #FFFFFF;
+}
+
+QScrollArea#LeftTabScrollArea {
+    border: none;
+    background: transparent;
+}
+
+QScrollArea#LeftTabScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QPushButton#BtnAction {
+    min-height: 52px;
+    font-size: 15px;
 }
 """
 
@@ -282,30 +327,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.horizontal_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         root_layout.addWidget(self.horizontal_splitter)
 
-        left_scroll = self._build_left_scroll_area()
+        left_panel = self._build_left_panel()
         right_panel = self._build_right_panel()
 
-        self.horizontal_splitter.addWidget(left_scroll)
+        self.horizontal_splitter.addWidget(left_panel)
         self.horizontal_splitter.addWidget(right_panel)
         self.horizontal_splitter.setStretchFactor(0, 0)
         self.horizontal_splitter.setStretchFactor(1, 1)
         self.horizontal_splitter.setSizes([360, 1080])
 
-    def _build_left_scroll_area(self) -> QtWidgets.QScrollArea:
-        self.left_scroll = QtWidgets.QScrollArea()
-        self.left_scroll.setWidgetResizable(True)
-        self.left_scroll.setMinimumWidth(350)
-        self.left_scroll.setMaximumWidth(400)
-        self.left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.left_scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-        self.left_scroll.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
+    def _build_left_panel(self) -> QtWidgets.QWidget:
+        self.left_panel = QtWidgets.QWidget()
+        self.left_panel.setMinimumWidth(350)
+        self.left_panel.setMaximumWidth(400)
+        self.left_panel.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
 
-        self.left_container = QtWidgets.QWidget()
-        self.left_container.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
-        self.left_layout = QtWidgets.QVBoxLayout(self.left_container)
+        self.left_layout = QtWidgets.QVBoxLayout(self.left_panel)
         self.left_layout.setContentsMargins(0, 0, 0, 0)
-        self.left_layout.setSpacing(8)
+        self.left_layout.setSpacing(10)
 
         title = QtWidgets.QLabel("✨ AI 智能创作中枢")
         title.setStyleSheet("font-size:22px; font-weight:800; color:#2C3E50; padding: 6px 12px;")
@@ -316,14 +355,57 @@ class MainWindow(QtWidgets.QMainWindow):
         subtitle.setStyleSheet("font-size:13px; color:#7F8C8D; font-weight:normal; padding: 0 12px 8px 12px;")
         self.left_layout.addWidget(subtitle)
 
-        self.left_layout.addWidget(self._build_serial_card())
-        self.left_layout.addWidget(self._build_ai_card())
-        self.left_layout.addWidget(self._build_params_card())
-        self.left_layout.addWidget(self._build_action_card())
-        self.left_layout.addStretch(1)
+        self.left_layout.addWidget(self._build_left_tabs(), 1)
+        return self.left_panel
 
-        self.left_scroll.setWidget(self.left_container)
-        return self.left_scroll
+    def _create_left_tab_page(self, *widgets: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        for widget in widgets:
+            layout.addWidget(widget)
+        layout.addStretch(1)
+        return page
+
+    def _build_left_tabs(self) -> QtWidgets.QTabWidget:
+        self.left_tabs = QtWidgets.QTabWidget()
+        self.left_tabs.setDocumentMode(True)
+        self.left_tabs.setTabPosition(QtWidgets.QTabWidget.North)
+        self.left_tabs.setUsesScrollButtons(False)
+        self.left_tabs.tabBar().setElideMode(QtCore.Qt.ElideNone)
+        self.left_tabs.tabBar().setExpanding(False)
+        self.left_tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        serial_page = self._create_left_tab_page(self._build_serial_card())
+        ai_page = self._create_left_tab_page(self._build_ai_card())
+        machine_page = self._build_machine_scroll_page()
+
+        self.left_tabs.addTab(serial_page, "🔌 步骤一：连接")
+        self.left_tabs.addTab(ai_page, "🎨 步骤二：创作")
+        self.left_tabs.addTab(machine_page, "🚀 步骤三：雕刻")
+        return self.left_tabs
+
+    def _build_machine_scroll_page(self) -> QtWidgets.QScrollArea:
+        """步骤三内容较高，单独放入滚动区，避免卡片和按钮被挤压。"""
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("LeftTabScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
+        container_layout.addWidget(self._build_params_card())
+        container_layout.addWidget(self._build_action_card())
+        container_layout.addStretch(1)
+
+        scroll.setWidget(container)
+        return scroll
 
     def _build_right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
@@ -460,9 +542,11 @@ class MainWindow(QtWidgets.QMainWindow):
         card, layout = self._create_card("🕹️ 操作控制", "生成 G-Code、预览边界、开始雕刻或在紧急情况下立即停止。")
 
         self.generate_gcode_button = QtWidgets.QPushButton("生成 G-Code")
+        self.generate_gcode_button.setObjectName("BtnAction")
         self.generate_gcode_button.clicked.connect(self.on_generate_gcode)
 
         self.preview_button = QtWidgets.QPushButton("🎯 红光边框预览")
+        self.preview_button.setObjectName("BtnAction")
         self.preview_button.clicked.connect(self.on_preview_bbox)
 
         self.start_button = QtWidgets.QPushButton("🚀 开始激光雕刻")
@@ -470,6 +554,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_button.clicked.connect(self.on_start_engraving)
 
         self.export_button = QtWidgets.QPushButton("导出 G-Code 文件")
+        self.export_button.setObjectName("BtnAction")
         self.export_button.clicked.connect(self.on_export_gcode)
 
         self.emergency_button = QtWidgets.QPushButton("🛑 紧急停止")
@@ -482,6 +567,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.start_button,
             self.export_button,
             self.emergency_button,
+            height=52,
         )
 
         for button in (

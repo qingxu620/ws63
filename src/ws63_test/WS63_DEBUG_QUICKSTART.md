@@ -212,3 +212,46 @@ M5
 2. 再跑 `square`，确认位置回零和多段轨迹正常。
 3. 再跑 `repeat --rounds 20`，确认长链路往返稳定。
 4. 最后跑 `stress_test.py --suite repeat --rounds 20 --cycles 50`，作为交付留档结果。
+
+## 6. 如果要把问题交给 AI 排障
+
+如果你后面准备把项目交给新的 AI 来继续排障或接手开发，建议至少上传下面这些材料：
+
+### 最小文档集
+
+1. [README.md](/root/fbb_ws63/src/ws63_test/README.md)
+2. [CODE_ARCHITECTURE.md](/root/fbb_ws63/src/ws63_test/CODE_ARCHITECTURE.md)
+3. [WS63_DEBUG_QUICKSTART.md](/root/fbb_ws63/src/ws63_test/WS63_DEBUG_QUICKSTART.md)
+4. [README.md](/root/fbb_ws63/src/ws63_test/ai_studio/README.md)
+
+### 如果是固件问题，再补这些
+
+1. `common/config.h`
+2. `common/protocol.h`
+3. `transmitter/uart_handler.c`
+4. `transmitter/sle_client.c`
+5. `receiver/sle_server.c`
+6. `receiver/safety_monitor.c`
+
+### 如果是上位机问题，再补这些
+
+1. `ai_studio/main_window.py`
+2. `ai_studio/image_processing.py`
+3. `ai_studio/ai_image_generator.py`
+4. `ai_studio/serial_worker.py`
+5. `ai_studio/gcode_generator.py`
+
+### 最有价值的运行材料
+
+- 一份失败现场日志
+- 一张触发问题的原图
+- 一份生成后的轮廓预览图
+- 一份导出的 G-Code
+- 一份当前自动测试结果或报错截图
+
+这样新的 AI 才能快速判断问题到底在：
+- AI 生图
+- 图像处理
+- G-Code 生成
+- 串口发送
+- 还是双板固件
