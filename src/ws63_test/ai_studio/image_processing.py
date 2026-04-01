@@ -182,7 +182,8 @@ def process_image_to_contours(
         path = _normalize_contour_points(simplified, width, height)
         if len(path) >= 2:
             raw_paths.append(path)
-            cv2.drawContours(preview, [simplified], -1, (0, 0, 0), 1)
+            # 预览图适当加粗轮廓线，避免在白底和缩略显示时显得过浅。
+            cv2.drawContours(preview, [simplified], -1, (32, 32, 32), 2)
 
     if not raw_paths:
         raise ImageProcessingError("轮廓过小或过于稀疏，无法生成有效路径")

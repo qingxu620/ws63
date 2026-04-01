@@ -194,6 +194,52 @@ class ImageLabel(QtWidgets.QLabel):
         self._refresh_pixmap()
 
 
+class ClickToEditSpinBox(QtWidgets.QSpinBox):
+    """
+    更适合课堂演示的参数输入框。
+
+    设计目标：
+    - 只有用户左键点中后，才允许通过滚轮或键盘修改；
+    - 避免鼠标滑过参数区时误触发数值变化。
+    """
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(QtCore.Qt.ClickFocus)
+        self.setKeyboardTracking(False)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # pragma: no cover - GUI 事件
+        if self.hasFocus():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # pragma: no cover - GUI 事件
+        if event.button() == QtCore.Qt.LeftButton:
+            self.setFocus(QtCore.Qt.MouseFocusReason)
+        super().mousePressEvent(event)
+
+
+class ClickToEditDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+    """双精度版本，行为与 ClickToEditSpinBox 保持一致。"""
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(QtCore.Qt.ClickFocus)
+        self.setKeyboardTracking(False)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # pragma: no cover - GUI 事件
+        if self.hasFocus():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # pragma: no cover - GUI 事件
+        if event.button() == QtCore.Qt.LeftButton:
+            self.setFocus(QtCore.Qt.MouseFocusReason)
+        super().mousePressEvent(event)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -217,6 +263,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self.apply_stylesheet()
+        self._update_connection_ui(False)
         self.refresh_ports()
         self.append_log("欢迎使用 AI 智能创作中枢，准备开始创作吧。")
 
@@ -382,21 +429,21 @@ class MainWindow(QtWidgets.QMainWindow):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
 
-        self.width_spin = QtWidgets.QDoubleSpinBox()
+        self.width_spin = ClickToEditDoubleSpinBox()
         self.width_spin.setRange(1.0, 300.0)
         self.width_spin.setValue(50.0)
         self.width_spin.setSuffix(" mm")
 
-        self.height_spin = QtWidgets.QDoubleSpinBox()
+        self.height_spin = ClickToEditDoubleSpinBox()
         self.height_spin.setRange(1.0, 300.0)
         self.height_spin.setValue(50.0)
         self.height_spin.setSuffix(" mm")
 
-        self.feed_spin = QtWidgets.QSpinBox()
+        self.feed_spin = ClickToEditSpinBox()
         self.feed_spin.setRange(1, 100000)
         self.feed_spin.setValue(6000)
 
-        self.power_spin = QtWidgets.QSpinBox()
+        self.power_spin = ClickToEditSpinBox()
         self.power_spin.setRange(0, 1000)
         self.power_spin.setValue(200)
 
@@ -498,6 +545,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def apply_stylesheet(self) -> None:
         self.setStyleSheet(BRIGHT_MAKER_QSS)
 
+    def _update_connection_ui(self, connected: bool) -> None:
+        """根据串口状态更新相关按钮可用性，避免误操作。"""
+
+        self.preview_button.setEnabled(connected)
+        self.start_button.setEnabled(connected)
+        self.emergency_button.setEnabled(connected)
+
+    def _ensure_serial_connected(self, action_name: str) -> bool:
+        """在发起真实下发任务前做界面层前置校验。"""
+
+        if self.serial_thread.is_connected():
+            return True
+        message = f"请先连接串口，再执行“{action_name}”。"
+        self.append_log(f"[提示] {message}")
+        QtWidgets.QMessageBox.information(self, "请先连接设备", message)
+        return False
+
     def append_log(self, message: str) -> None:
         cursor = self.log_edit.textCursor()
         cursor.movePosition(QtGui.QTextCursor.End)
@@ -560,6 +624,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 self.serial_thread.connect_port(port, int(self.baud_combo.currentText()))
                 self.connect_button.setText("断开串口")
+                self._update_connection_ui(True)
                 self.append_log(f"串口连接成功：{port}")
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "串口错误", str(exc))
@@ -567,6 +632,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.serial_thread.disconnect_port()
             self.connect_button.setText("连接串口")
+            self._update_connection_ui(False)
             self.append_log("串口已断开。")
 
     def on_generate_image(self) -> None:
@@ -628,6 +694,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.current_contours:
             QtWidgets.QMessageBox.warning(self, "提示", "请先生成图像并提取轮廓")
             return
+        if not self._ensure_serial_connected("红光边框预览"):
+            return
         try:
             self.current_preview_lines = generate_preview_gcode(
                 self.current_contours,
@@ -651,6 +719,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.on_generate_gcode()
             if not self.current_gcode_lines:
                 return
+        if not self._ensure_serial_connected("激光雕刻"):
+            return
         try:
             self.serial_thread.enqueue_gcode(self.current_gcode_lines)
             self.append_log("已下发雕刻任务。")

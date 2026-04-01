@@ -57,6 +57,11 @@ class SerialWorkerThread(QtCore.QThread):
             self._connected = False
             raise RuntimeError(f"串口连接失败: {exc}") from exc
 
+    def is_connected(self) -> bool:
+        """返回当前串口连接状态，供界面层做前置校验。"""
+
+        return bool(self._connected and self._serial is not None and self._serial.is_open)
+
     def disconnect_port(self) -> None:
         if self._serial is not None:
             try:
@@ -70,6 +75,8 @@ class SerialWorkerThread(QtCore.QThread):
     def enqueue_gcode(self, gcode_lines: List[str]) -> None:
         if not gcode_lines:
             raise RuntimeError("G-Code 队列为空，无法发送")
+        if not self.is_connected():
+            raise RuntimeError("串口未连接，请先连接设备后再发送任务")
         self._command_queue.put(gcode_lines)
         self.status_signal.emit(f"已加入发送队列，共 {len(gcode_lines)} 行")
 
@@ -181,4 +188,3 @@ class SerialWorkerThread(QtCore.QThread):
                 if self._emergency_stop:
                     self._send_emergency_commands()
                     self._emergency_stop = False
-
