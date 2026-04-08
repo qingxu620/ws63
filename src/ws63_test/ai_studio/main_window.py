@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .ai_image_generator import AIGeneratorThread
-from .gcode_generator import generate_gcode, generate_preview_gcode, save_gcode_file
+from .gcode_generator import (
+    BOARD_WORK_AREA_X_MM,
+    BOARD_WORK_AREA_Y_MM,
+    generate_gcode,
+    generate_preview_gcode,
+    save_gcode_file,
+)
 from .image_processing import ImageProcessingError, NormalizedPath, process_image_to_contours
 from .qt_compat import QT_API, QtCore, QtGui, QtWidgets
 from .serial_worker import SerialWorkerThread
@@ -311,6 +317,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_connection_ui(False)
         self.refresh_ports()
         self.append_log("欢迎使用 AI 智能创作中枢，准备开始创作吧。")
+        self.append_log(
+            f"当前板卡工作区: X 0~{BOARD_WORK_AREA_X_MM:.1f} mm / Y 0~{BOARD_WORK_AREA_Y_MM:.1f} mm，"
+            "原点按 LaserGRBL 习惯位于工作区左下角。"
+        )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI 事件
         self.serial_thread.stop()
@@ -503,7 +513,13 @@ class MainWindow(QtWidgets.QMainWindow):
         return card
 
     def _build_params_card(self) -> QtWidgets.QFrame:
-        card, layout = self._create_card("⚙️ 雕刻参数", "调整作品尺寸、速度与功率，适配不同课堂材料和演示需求。")
+        card, layout = self._create_card(
+            "⚙️ 雕刻参数",
+            (
+                f"当前板子采用 LaserGRBL 常见的第一象限工作方式。"
+                f"有效幅面为 X 0~{BOARD_WORK_AREA_X_MM:.1f} mm / Y 0~{BOARD_WORK_AREA_Y_MM:.1f} mm。"
+            ),
+        )
 
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignLeft)
@@ -512,14 +528,16 @@ class MainWindow(QtWidgets.QMainWindow):
         form.setVerticalSpacing(10)
 
         self.width_spin = ClickToEditDoubleSpinBox()
-        self.width_spin.setRange(1.0, 300.0)
+        self.width_spin.setRange(1.0, BOARD_WORK_AREA_X_MM)
         self.width_spin.setValue(50.0)
         self.width_spin.setSuffix(" mm")
+        self.width_spin.setSingleStep(1.0)
 
         self.height_spin = ClickToEditDoubleSpinBox()
-        self.height_spin.setRange(1.0, 300.0)
+        self.height_spin.setRange(1.0, BOARD_WORK_AREA_Y_MM)
         self.height_spin.setValue(50.0)
         self.height_spin.setSuffix(" mm")
+        self.height_spin.setSingleStep(1.0)
 
         self.feed_spin = ClickToEditSpinBox()
         self.feed_spin.setRange(1, 100000)
@@ -536,6 +554,13 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("进给速度 F", self.feed_spin)
         form.addRow("激光功率 S", self.power_spin)
         layout.addLayout(form)
+
+        board_hint = QtWidgets.QLabel(
+            f"坐标说明：G-Code 输出保持正坐标，`G0 X0 Y0` 表示工作区原点，不是振镜中心。"
+        )
+        board_hint.setWordWrap(True)
+        board_hint.setStyleSheet("font-size:12px; font-weight:normal; color:#718096;")
+        layout.addWidget(board_hint)
         return card
 
     def _build_action_card(self) -> QtWidgets.QFrame:
@@ -774,6 +799,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         preview = "\n".join(self.current_gcode_lines[:20])
         self.append_log("G-Code 生成完成，预览前 20 行：")
+        self.append_log(
+            f"当前任务尺寸: {self.width_spin.value():.1f} x {self.height_spin.value():.1f} mm，"
+            "输出坐标保持第一象限正数，可直接按当前板卡逻辑使用。"
+        )
         self.append_log(preview)
 
     def on_preview_bbox(self) -> None:
@@ -795,7 +824,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         try:
             self.serial_thread.enqueue_gcode(self.current_preview_lines)
-            self.append_log("已下发红光边框预览任务。")
+            self.append_log("已下发红光边框预览任务，预览路径同样使用工作区正坐标。")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "串口发送失败", str(exc))
             self.append_log(f"[错误] {exc}")

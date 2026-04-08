@@ -84,6 +84,8 @@ src/ws63_test/ai_studio/
 
 ### `gcode_generator.py`
 - 将归一化轮廓映射到物理尺寸
+- 保持 LaserGRBL 习惯的第一象限正坐标输出
+- 按当前板卡幅面限制参数，默认工作区为 `100mm x 100mm`
 - 生成 WS63 当前链路兼容的 G-Code
 - 生成边框预览 G-Code
 - 导出 `.gcode`
@@ -229,6 +231,13 @@ python3 -m src.ws63_test.ai_studio.main
 - 等 `ok` 再发下一行
 
 这是为了稳定，不是为了极限速度。
+
+### 当前板卡坐标约定
+
+- 工作区原点采用 LaserGRBL 常见习惯：`X0 Y0` 位于工作区左下角
+- `ai_studio` 输出坐标保持第一象限正数
+- 当前默认适配幅面为 `100mm x 100mm`
+- 若用户输入尺寸超过该范围，GUI 和 G-Code 生成会直接拒绝，避免板端钳位后图形失真
 
 ---
 

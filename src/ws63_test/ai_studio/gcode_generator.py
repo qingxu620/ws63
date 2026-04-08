@@ -14,6 +14,9 @@ from typing import Iterable, List, Sequence, Tuple
 
 from .image_processing import NormalizedPath, compute_bounding_box
 
+BOARD_WORK_AREA_X_MM = 100.0
+BOARD_WORK_AREA_Y_MM = 100.0
+
 
 class GCodeGenerationError(RuntimeError):
     """G-Code 生成失败时抛出的异常。"""
@@ -64,6 +67,28 @@ def _fit_contours_to_work_area(
     return fitted
 
 
+def _validate_generation_params(
+    width_mm: float,
+    height_mm: float,
+    feed_rate: int | None = None,
+    power: int | None = None,
+) -> None:
+    if width_mm <= 0 or height_mm <= 0:
+        raise GCodeGenerationError("雕刻尺寸必须大于 0")
+    if width_mm > BOARD_WORK_AREA_X_MM:
+        raise GCodeGenerationError(
+            f"当前板子 X 方向工作区最大为 {BOARD_WORK_AREA_X_MM:.1f} mm，请缩小宽度参数"
+        )
+    if height_mm > BOARD_WORK_AREA_Y_MM:
+        raise GCodeGenerationError(
+            f"当前板子 Y 方向工作区最大为 {BOARD_WORK_AREA_Y_MM:.1f} mm，请缩小高度参数"
+        )
+    if feed_rate is not None and feed_rate <= 0:
+        raise GCodeGenerationError("进给速度必须大于 0")
+    if power is not None and power < 0:
+        raise GCodeGenerationError("激光功率不能为负数")
+
+
 def generate_gcode(
     contours: Sequence[NormalizedPath],
     width_mm: float,
@@ -78,17 +103,13 @@ def generate_gcode(
     - 头部: $I, G90
     - 每个轮廓起点: M5 + G0
     - 雕刻过程: M3 Sxxx + G1
-    - 尾部: M5 + G0 X0 Y0
+    - 整个图形在工作区内居中排版，但输出仍保持第一象限正坐标
+    - 尾部: M5 + G0 X0 Y0 (回工作区原点)
     """
 
     if not contours:
         raise GCodeGenerationError("轮廓为空，无法生成 G-Code")
-    if width_mm <= 0 or height_mm <= 0:
-        raise GCodeGenerationError("雕刻尺寸必须大于 0")
-    if feed_rate <= 0:
-        raise GCodeGenerationError("进给速度必须大于 0")
-    if power < 0:
-        raise GCodeGenerationError("激光功率不能为负数")
+    _validate_generation_params(width_mm, height_mm, feed_rate=feed_rate, power=power)
 
     fitted_contours = _fit_contours_to_work_area(contours, width_mm, height_mm)
 
@@ -137,10 +158,12 @@ def generate_preview_gcode(
     生成边界框预览 G-Code。
 
     预览时不开激光，只走最大外接矩形，用于现场确认雕刻范围。
+    输出坐标保持第一象限正坐标。
     """
 
     if not contours:
         raise GCodeGenerationError("轮廓为空，无法生成边界预览")
+    _validate_generation_params(width_mm, height_mm)
 
     fitted_contours = _fit_contours_to_work_area(contours, width_mm, height_mm)
     min_x, min_y, max_x, max_y = compute_bounding_box(fitted_contours)

@@ -65,7 +65,10 @@ static uint64_t g_last_status_report_ms = 0;
 static uint8_t sle_uuid_base[] = {0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
                                   0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-#define MAX_COORD_MM ((float)DAC_MAX / (float)BEILV)
+#define MIN_COORD_X_MM ((float)GALVO_X_MIN_MM)
+#define MAX_COORD_X_MM ((float)GALVO_X_MAX_MM)
+#define MIN_COORD_Y_MM ((float)GALVO_Y_MIN_MM)
+#define MAX_COORD_Y_MM ((float)GALVO_Y_MAX_MM)
 #define MIN_FEED_RATE_MM_MIN 0.1f
 #define MAX_FEED_RATE_MM_MIN ((float)G0_FEED_RATE)
 
@@ -135,8 +138,8 @@ static bool validate_motion_cmd(const motion_cmd_t *cmd, uint8_t *error_code)
     switch (cmd->cmd) {
         case CMD_G0_MOVE:
         case CMD_G1_MOVE:
-            if (!is_finite_in_range(cmd->target_x, 0.0f, MAX_COORD_MM) ||
-                !is_finite_in_range(cmd->target_y, 0.0f, MAX_COORD_MM) ||
+            if (!is_finite_in_range(cmd->target_x, MIN_COORD_X_MM, MAX_COORD_X_MM) ||
+                !is_finite_in_range(cmd->target_y, MIN_COORD_Y_MM, MAX_COORD_Y_MM) ||
                 !is_finite_in_range(cmd->feed_rate, MIN_FEED_RATE_MM_MIN, MAX_FEED_RATE_MM_MIN)) {
                 *error_code = STATUS_ERR_INVALID_PARAM;
                 return false;

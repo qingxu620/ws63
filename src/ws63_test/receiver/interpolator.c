@@ -19,20 +19,40 @@ static double g_current_y = 0.0;
 static volatile bool g_motion_active = false;
 
 /* ================= 坐标转换 ================= */
-static inline uint16_t mm_to_dac(double mm)
+static inline uint16_t mm_to_dac(double mm, double scale)
 {
-    double val = mm * BEILV;
-    if (val < 0)
-        val = 0;
-    if (val > DAC_MAX)
-        val = DAC_MAX;
-    return (uint16_t)val;
+    double val = mm * scale;
+    if (val < 0.0)
+        val = 0.0;
+    if (val > (double)DAC_MAX)
+        val = (double)DAC_MAX;
+    return (uint16_t)(val + 0.5);
 }
 
-/* 输入坐标下限保护: 负坐标统一钳到 0，避免内部坐标与 DAC 输出不一致 */
-static inline double clamp_non_negative_mm(double mm)
+static inline uint16_t x_mm_to_dac(double mm)
 {
-    return (mm < 0.0) ? 0.0 : mm;
+    return mm_to_dac(mm, BEILV_X);
+}
+
+static inline uint16_t y_mm_to_dac(double mm)
+{
+    return mm_to_dac(mm, BEILV_Y);
+}
+
+static inline double clamp_axis_mm(double mm, double min_mm, double max_mm)
+{
+    if (mm < min_mm) {
+        return min_mm;
+    }
+    if (mm > max_mm) {
+        return max_mm;
+    }
+    return mm;
+}
+
+static inline void write_current_position_to_dac(void)
+{
+    dac8562_write_xy(x_mm_to_dac(g_current_x), y_mm_to_dac(g_current_y));
 }
 
 static inline void interp_delay_us(unsigned int delay_us)
@@ -51,10 +71,10 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
 {
     g_motion_active = true;
 
-    double clamped_x = clamp_non_negative_mm(target_x);
-    double clamped_y = clamp_non_negative_mm(target_y);
+    double clamped_x = clamp_axis_mm(target_x, GALVO_X_MIN_MM, GALVO_X_MAX_MM);
+    double clamped_y = clamp_axis_mm(target_y, GALVO_Y_MIN_MM, GALVO_Y_MAX_MM);
     if (clamped_x != target_x || clamped_y != target_y) {
-        osal_printk("[interpolator] negative target clamped: (%.3f, %.3f)->(%.3f, %.3f)\r\n", target_x, target_y,
+        osal_printk("[interpolator] target clamped: (%.3f, %.3f)->(%.3f, %.3f)\r\n", target_x, target_y,
                     clamped_x, clamped_y);
     }
     target_x = clamped_x;
@@ -68,7 +88,7 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
     if (distance < STEP_NUM) {
         g_current_x = target_x;
         g_current_y = target_y;
-        dac8562_write_xy(mm_to_dac(g_current_x), mm_to_dac(g_current_y));
+        write_current_position_to_dac();
         g_motion_active = false;
         return;
     }
@@ -101,7 +121,7 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
         g_current_y += step_dy;
 
         /* 更新 DAC 输出 */
-        dac8562_write_xy(mm_to_dac(g_current_x), mm_to_dac(g_current_y));
+        write_current_position_to_dac();
 
         /* 延时拆分: 毫秒睡眠 + 微秒补偿 */
         interp_delay_us(delay_us);
@@ -119,7 +139,7 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
     /* 修正终点坐标 (消除浮点累积误差) */
     g_current_x = target_x;
     g_current_y = target_y;
-    dac8562_write_xy(mm_to_dac(g_current_x), mm_to_dac(g_current_y));
+    write_current_position_to_dac();
     safety_update_last_cmd_time();
     g_motion_active = false;
 }
@@ -144,7 +164,7 @@ void interpolator_set_origin(void)
 {
     g_current_x = 0.0;
     g_current_y = 0.0;
-    dac8562_write_xy(0, 0);
+    write_current_position_to_dac();
     g_motion_active = false;
 }
 
@@ -153,6 +173,7 @@ void interpolator_init(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_motion_active = false;
+    write_current_position_to_dac();
 }
 
 /* ================= 插补任务入口 ================= */

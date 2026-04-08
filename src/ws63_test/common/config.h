@@ -5,9 +5,22 @@
 #ifndef LASER_CONFIG_H
 #define LASER_CONFIG_H
 
-/* ================= 振镜/坐标配置 ================= */
-#define BEILV 100     /* 脉冲当量: 1mm 对应的 DAC 数值 */
-#define DAC_MAX 65535 /* DAC 最大值 (16-bit) */
+/* ================= 振镜/坐标配置 =================
+ * 坐标系约定:
+ * - 软件坐标原点 (0,0) 对应工作区角点，兼容 LaserGRBL 一类正坐标工作流
+ * - DAC 仍然按整幅面利用满量程，避免只用到一小段模拟输出范围
+ * - 若后级运放把 0~5V 平移为 -5~+5V，则 0mm 会落在物理负边界
+ */
+#define DAC_MAX 65535U
+#define GALVO_WORK_AREA_X_MM 100.0
+#define GALVO_WORK_AREA_Y_MM 100.0
+#define GALVO_X_MIN_MM 0.0
+#define GALVO_X_MAX_MM (GALVO_WORK_AREA_X_MM)
+#define GALVO_Y_MIN_MM 0.0
+#define GALVO_Y_MAX_MM (GALVO_WORK_AREA_Y_MM)
+#define BEILV_X ((double)DAC_MAX / GALVO_WORK_AREA_X_MM)
+#define BEILV_Y ((double)DAC_MAX / GALVO_WORK_AREA_Y_MM)
+#define BEILV BEILV_X /* 兼容历史单比例宏 */
 #define STEP_NUM 0.1  /* 插补最小距离 (mm) */
 
 /* ================= 速度配置 ================= */
@@ -24,12 +37,12 @@
 #define SLE_LASER_CLIENT_NAME "LaserTX"
 
 /* ================= 安全配置 ================= */
-#define SAFETY_SLE_TIMEOUT_MS 1000 /* 空闲链路 SLE 超时 (ms)，保留 >= 5 个心跳周期余量，避免压测偶发抖动误停光 */
+#define SAFETY_SLE_TIMEOUT_MS 1000        /* 空闲链路 SLE 超时 (ms)，保留 >= 5 个心跳周期余量，避免压测偶发抖动误停光 */
 #define SAFETY_SLE_TIMEOUT_ACTIVE_MS 1500 /* 运动/出光期间 SLE 超时 (ms)，配合连续超时确认避免误停光 */
-#define SAFETY_SLE_CONNECT_GRACE_MS 2500 /* 连接建立后等待首个业务包的宽限期 (ms) */
-#define SAFETY_CHECK_INTERVAL_MS 10      /* 安全检查周期 (ms) */
-#define SAFETY_TIMEOUT_CONFIRM_COUNT 3   /* 连续超时确认次数，避免单次调度抖动直接停光 */
-#define ACTIVITY_TIMEOUT_MS 200          /* 命令活动超时 → Idle 判定 (ms) */
+#define SAFETY_SLE_CONNECT_GRACE_MS 2500  /* 连接建立后等待首个业务包的宽限期 (ms) */
+#define SAFETY_CHECK_INTERVAL_MS 10       /* 安全检查周期 (ms) */
+#define SAFETY_TIMEOUT_CONFIRM_COUNT 3    /* 连续超时确认次数，避免单次调度抖动直接停光 */
+#define ACTIVITY_TIMEOUT_MS 200           /* 命令活动超时 → Idle 判定 (ms) */
 
 /* ================= 心跳配置 ================= */
 #define HEARTBEAT_INTERVAL_MS 200 /* 发射板心跳周期 (ms) */
