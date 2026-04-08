@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief 发射板主入口 — 创建 UART 和 SLE 任务
+ * @brief 发射板主入口 — 创建 UART / WiFi / SLE 任务
  */
 #include "app_init.h"
 #include "soc_osal.h"
@@ -11,6 +11,7 @@
 
 #include "gcode_processor.h"
 #include "uart_handler.h"
+#include "wifi_gcode_server.h"
 #include "sle_client.h"
 #include "crc16.h"
 #include "systick.h"
@@ -94,6 +95,11 @@ static void transmitter_entry(void)
     /* 1) 先初始化纯软件模块，再启动任务 */
     gcode_processor_init();
     uart_handler_init();
+#if LASER_WIFI_SOFTAP_ENABLE
+    if (wifi_gcode_server_init() != ERRCODE_SUCC) {
+        osal_printk("[transmitter] wifi gcode init failed\r\n");
+    }
+#endif
 
     osal_printk("[transmitter] init OK\r\n");
 
@@ -110,7 +116,19 @@ static void transmitter_entry(void)
         osal_kfree(task);
     }
 
-    /* 3) SLE 初始化任务:
+#if LASER_WIFI_SOFTAP_ENABLE
+    /* 3) WiFi 任务:
+     *    参考官方 SoftAP 例程新增 TCP 文本入口。
+     *    它与 UART 并行存在，但不替代原来的串口联调入口。 */
+    task = osal_kthread_create(task_wifi_gcode_entry, NULL, "wifi_gcode", TASK_STACK_SIZE_WIFI);
+    if (task != NULL) {
+        /* WiFi 侧只做上游接入，优先级保持低于 SLE/UART，避免抢占实时控制链路。 */
+        osal_kthread_set_priority(task, TASK_PRIO_WIFI);
+        osal_kfree(task);
+    }
+#endif
+
+    /* 4) SLE 初始化任务:
      *    独立拉起扫描/连接流程，避免阻塞入口线程 */
     task = osal_kthread_create(sle_init_task, NULL, "sle_init", TASK_STACK_SIZE_SLE);
     if (task != NULL) {
@@ -118,7 +136,7 @@ static void transmitter_entry(void)
         osal_kfree(task);
     }
 
-    /* 4) 心跳任务:
+    /* 5) 心跳任务:
      *    周期发送 CMD_HEARTBEAT，维持接收板安全看门狗 */
     task = osal_kthread_create(heartbeat_task, NULL, "hb", TASK_STACK_SIZE_DEFAULT);
     if (task != NULL) {

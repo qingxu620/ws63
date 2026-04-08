@@ -17,7 +17,7 @@ config LASER_MARKER_TRANSMITTER
     default n
     help
         Build the transmitter board firmware.
-        Includes: SLE Client, UART handler, G-Code parser,
+        Includes: SLE Client, UART/WiFi host ingress, G-Code parser,
         and Grbl protocol compatibility.
 
 if LASER_MARKER_RECEIVER
@@ -49,5 +49,40 @@ config LASER_UART_BUS
     default 1
     help
         UART bus number for receiving G-Code from host PC.
+
+config LASER_WIFI_SOFTAP_ENABLE
+    bool "Enable transmitter WiFi SoftAP/TCP ingress"
+    default y
+    help
+        Add a WiFi SoftAP plus TCP text command ingress on the transmitter.
+        This is an additional host entry and does not replace the existing
+        UART + SLE control path.
+
+config LASER_WIFI_SOFTAP_SSID
+    string "WiFi SoftAP SSID"
+    default "WS63_LaserTX"
+    help
+        SSID exposed by the transmitter SoftAP.
+
+config LASER_WIFI_SOFTAP_PSK
+    string "WiFi SoftAP password"
+    default "ws63laser"
+    help
+        WPA/WPA2-PSK password exposed by the transmitter SoftAP.
+        Keep at least 8 characters when encryption is enabled.
+
+config LASER_WIFI_SOFTAP_CHANNEL
+    int "WiFi SoftAP channel"
+    range 1 13
+    default 13
+    help
+        Radio channel used by the transmitter SoftAP.
+
+config LASER_WIFI_TCP_PORT
+    int "WiFi TCP G-Code port"
+    range 1 65535
+    default 5000
+    help
+        TCP server port used for the line-based WiFi G-Code ingress.
 
 endif # LASER_MARKER_TRANSMITTER

@@ -32,6 +32,47 @@
 #define UART_BAUD_RATE 115200
 #define CMD_QUEUE_SIZE 32 /* 命令队列深度 */
 
+/* ================= WiFi SoftAP / TCP 配置 =================
+ * 发射板新增一个 WiFi 文本入口，便于后续网页端或自研上位机接入。
+ * 它只是“额外入口”，不会替代现有 UART -> G-Code -> SLE 主链路。
+ * 由于发射板当前只有一份 G-Code 上下文状态机，建议同一时刻只使用
+ * UART 或 WiFi 其中一个上游入口，不要并发向两条入口同时发业务指令。
+ */
+#if defined(CONFIG_LASER_WIFI_SOFTAP_ENABLE)
+#define LASER_WIFI_SOFTAP_ENABLE 1
+#else
+#define LASER_WIFI_SOFTAP_ENABLE 0
+#endif
+
+#if defined(CONFIG_LASER_WIFI_SOFTAP_SSID)
+#define LASER_WIFI_SOFTAP_SSID CONFIG_LASER_WIFI_SOFTAP_SSID
+#else
+#define LASER_WIFI_SOFTAP_SSID "WS63_LaserTX"
+#endif
+
+#if defined(CONFIG_LASER_WIFI_SOFTAP_PSK)
+#define LASER_WIFI_SOFTAP_PSK CONFIG_LASER_WIFI_SOFTAP_PSK
+#else
+#define LASER_WIFI_SOFTAP_PSK "ws63laser"
+#endif
+
+#if defined(CONFIG_LASER_WIFI_SOFTAP_CHANNEL)
+#define LASER_WIFI_SOFTAP_CHANNEL CONFIG_LASER_WIFI_SOFTAP_CHANNEL
+#else
+#define LASER_WIFI_SOFTAP_CHANNEL 13
+#endif
+
+#if defined(CONFIG_LASER_WIFI_TCP_PORT)
+#define LASER_WIFI_TCP_PORT CONFIG_LASER_WIFI_TCP_PORT
+#else
+#define LASER_WIFI_TCP_PORT 5000
+#endif
+
+#define LASER_WIFI_SOFTAP_IP_ADDR_1 192
+#define LASER_WIFI_SOFTAP_IP_ADDR_2 168
+#define LASER_WIFI_SOFTAP_IP_ADDR_3 43
+#define LASER_WIFI_SOFTAP_IP_ADDR_4 1
+
 /* ================= SLE 配置 ================= */
 #define SLE_LASER_SERVER_NAME "LaserRX"
 #define SLE_LASER_CLIENT_NAME "LaserTX"
@@ -108,10 +149,12 @@
 /* ================= 任务配置 ================= */
 #define TASK_STACK_SIZE_DEFAULT 0x1000
 #define TASK_STACK_SIZE_SLE 0x2000
+#define TASK_STACK_SIZE_WIFI 0x2000
 #define TASK_PRIO_INTERPOLATOR 2 /* OSAL_TASK_PRIORITY_ABOVE_HIGH */
 #define TASK_PRIO_SAFETY 2
 #define TASK_PRIO_SLE 3 /* OSAL_TASK_PRIORITY_HIGH */
 #define TASK_PRIO_UART 3
+#define TASK_PRIO_WIFI 24
 #define TASK_PRIO_DEFAULT 24
 
 /* ================= 流控配置 ================= */

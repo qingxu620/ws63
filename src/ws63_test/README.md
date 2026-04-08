@@ -1,10 +1,10 @@
 # WS63 激光打标双板工程 README
 
-`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。
+`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 SoftAP + TCP 文本入口，方便后续网页端或自研上位机接入。
 
 当前目录包含三类核心工程模块：
 - `common/`：协议、CRC、全局配置，负责收发两端共享契约。
-- `transmitter/`：发射板固件，负责 UART/G-Code/SLE Client。
+- `transmitter/`：发射板固件，负责 UART/WiFi/G-Code/SLE Client。
 - `receiver/`：接收板固件，负责 SLE Server/命令队列/插补/DAC/PWM/安全监控。
 
 配套支持目录：
@@ -29,6 +29,7 @@
 | --- | --- | --- |
 | G-Code 基础 | `G0/G1/G90/G91/G92/M3/M4/M5/S/F/?/$I/$G` 的基本含义 | `transmitter/gcode_parser.c`、`transmitter/gcode_processor.c` |
 | 串口通信 | 上位机通过 UART1 给发射板逐行发文本指令 | `transmitter/uart_handler.c` |
+| WiFi 通信 | 发射板基于 SoftAP + TCP 暴露第二条文本 G-Code 入口 | `transmitter/wifi_gcode_server.c` |
 | SLE 通信 | 发射板是 Client，接收板是 Server，命令与状态通过 SSAP 特征值传输 | `transmitter/sle_client.c`、`receiver/sle_server.c` |
 | 坐标与功率输出 | X/Y 由 DAC8562 输出，激光功率由 PWM 输出 | `receiver/dac8562.c`、`receiver/laser_ctrl.c` |
 | 插补与执行 | 接收板消费命令队列并执行线性插补 | `receiver/interpolator.c` |
@@ -43,9 +44,9 @@
 一套完整链路里各节点的职责如下：
 
 ```text
-LaserGRBL / 串口工具
+LaserGRBL / 串口工具 / 自研 TCP 客户端
     |
-    | UART1 文本 G-Code
+    | UART1 或 WiFi TCP 文本 G-Code
     v
 发射板 transmitter
     |
@@ -101,6 +102,7 @@ src/ws63_test/
 ├── transmitter/
 │   ├── main.c
 │   ├── uart_handler.c
+│   ├── wifi_gcode_server.c
 │   ├── gcode_parser.c
 │   ├── gcode_processor.c
 │   └── sle_client.c
@@ -135,6 +137,7 @@ src/ws63_test/
 
 职责：
 - 接收上位机 UART1 的 G-Code 文本
+- 接收上位机 WiFi TCP 的 G-Code 文本
 - 做 Grbl 兼容应答
 - 生成 `motion_cmd_t`
 - 通过 SLE 可靠下发给接收板
@@ -143,6 +146,7 @@ src/ws63_test/
 关键文件：
 - `transmitter/main.c`
 - `transmitter/uart_handler.c`
+- `transmitter/wifi_gcode_server.c`
 - `transmitter/gcode_parser.c`
 - `transmitter/gcode_processor.c`
 - `transmitter/sle_client.c`
@@ -231,6 +235,14 @@ output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
 - UART TX：`GPIO15`
 - UART RX：`GPIO16`
 - 波特率：`115200`
+- WiFi SoftAP：默认 `WS63_LaserTX`
+- WiFi 密码：默认 `ws63laser`
+- WiFi TCP 端口：默认 `5000`
+- WiFi IP：默认 `192.168.43.1`
+
+使用说明：
+- UART 与 WiFi 都是发射板的上游入口，二者都通向同一套 `G-Code -> motion_cmd_t -> SLE` 控制链路。
+- 当前发射板内部仍然只有一份 G-Code 上下文状态机，建议同一时刻只选 `UART` 或 `WiFi` 其中一种入口，不要并发发送业务命令。
 
 ## 8. 最小联调路径
 
@@ -254,7 +266,34 @@ M5
 - `M3/M5` 控制激光开关
 - `?` 返回 `<Idle|...>` 或 `<Run|...>`
 
-### 8.2 自动测试
+### 8.2 WiFi TCP 联调
+
+发射板启动后，若 WiFi 初始化正常，日志中会出现类似：
+
+```text
+[wifi gcode] wifi init ready
+[wifi gcode] softap ready ssid=WS63_LaserTX ip=192.168.43.1 port=5000 channel=13
+[wifi gcode] tcp listen ready on port 5000
+```
+
+PC 连接到发射板 SoftAP 后，可用任意行式 TCP 客户端向 `192.168.43.1:5000` 发送和串口相同的文本 G-Code，例如：
+
+```gcode
+$I
+G90
+M3 S200
+G1 X10 Y10 F6000
+M5
+?
+```
+
+预期与 UART 一致：
+- 建连后会先收到 `WS63 Laser Marker WiFi` 和 `Grbl 1.1f ['$' for help]`
+- 每条命令回 `ok`
+- `?` 返回位置与运行状态
+- 真正的运动命令仍由发射板转成 `motion_cmd_t` 后通过 SLE 发往接收板
+
+### 8.3 自动测试
 
 先安装依赖：
 
@@ -278,7 +317,7 @@ python3 src/ws63_test/tools/uart_auto_test.py /dev/ttyUSB1 --tx-debug-port /dev/
 python3 src/ws63_test/tools/stress_test.py /dev/ttyUSB1 --tx-debug-port /dev/ttyUSB0 --rx-debug-port /dev/ttyUSB2 --suite repeat --rounds 20 --cycles 50 --report-json result.json
 ```
 
-### 8.3 AI 智能创作中枢
+### 8.4 AI 智能创作中枢
 
 如果你要体验“AI 生图 -> 轮廓提取 -> G-Code -> 串口下发”的 P0 原型，可先安装：
 
@@ -327,12 +366,13 @@ python3 -m src.ws63_test.ai_studio.main
 2. `common/config.h`
 3. `transmitter/main.c`
 4. `transmitter/uart_handler.c`
-5. `transmitter/gcode_processor.c`
-6. `transmitter/sle_client.c`
-7. `receiver/main.c`
-8. `receiver/sle_server.c`
-9. `receiver/interpolator.c`
-10. `receiver/safety_monitor.c`
+5. `transmitter/wifi_gcode_server.c`
+6. `transmitter/gcode_processor.c`
+7. `transmitter/sle_client.c`
+8. `receiver/main.c`
+9. `receiver/sle_server.c`
+10. `receiver/interpolator.c`
+11. `receiver/safety_monitor.c`
 
 ## 12. 常见问题入口
 

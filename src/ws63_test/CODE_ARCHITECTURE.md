@@ -15,9 +15,9 @@
 整体链路如下：
 
 ```text
-PC / LaserGRBL
-  -> UART1 文本命令
-  -> transmitter/uart_handler
+PC / LaserGRBL / 自研 TCP 客户端
+  -> UART1 或 WiFi TCP 文本命令
+  -> transmitter/uart_handler 或 transmitter/wifi_gcode_server
   -> transmitter/gcode_processor
   -> common/motion_cmd_t
   -> transmitter/sle_client
@@ -79,38 +79,46 @@ PC / LaserGRBL
 
 ## 3. 模块 2：`transmitter` 发射板控制层
 
-发射板的角色不是执行器，而是“无线桥接控制器”。它一边面对上位机的串口协议，一边面对接收板的无线协议。
+发射板的角色不是执行器，而是“无线桥接控制器”。它一边面对上位机的串口/WiFi 文本协议，一边面对接收板的无线协议。
 
 ### 3.1 发射板任务模型
 
-发射板由三个任务组成：
+发射板由四个任务组成：
 
 | 任务 | 入口 | 作用 |
 | --- | --- | --- |
 | UART 接收任务 | `task_uart_rx_entry()` | 读取 UART1 文本命令并处理 |
+| WiFi 接收任务 | `task_wifi_gcode_entry()` | 拉起 SoftAP 并监听 TCP 文本命令 |
 | SLE 初始化任务 | `sle_init_task()` | 扫描、连接、服务发现 |
 | 心跳任务 | `heartbeat_task()` | 周期发送 `CMD_HEARTBEAT` 保活 |
 
-主入口在 `transmitter/main.c` 中创建这三个任务。
+主入口在 `transmitter/main.c` 中创建这些任务。
 
 ### 3.2 发射板主链路
 
-#### 第 1 段：上位机命令进入 UART
+#### 第 1 段：上位机命令进入 UART / WiFi TCP
 
 入口文件：`transmitter/uart_handler.c`
+补充入口：`transmitter/wifi_gcode_server.c`
 
 职责：
 - 初始化 UART1 引脚与驱动
-- 按行接收 G-Code
+- 参考官方 SoftAP 例程拉起发射板 WiFi 热点
+- 通过 TCP 按行接收 G-Code
 - 处理 `?` 实时状态查询
 - 处理 `$I` / `$G` 等本地 Grbl 命令
 - 对真实业务命令执行“解析 -> 下发 -> 等 ACK -> 回复 ok”
 
 这里的关键思想是：
-- 发射板不是收到一行就立刻回 `ok`
+- 无论来自 UART 还是 WiFi，发射板都不是收到一行就立刻回 `ok`
 - 而是尽量等到接收板确认入队之后再回 `ok`
 
 这样做的好处是上位机更容易获得可靠反馈，代价是链路拥塞时 `ok` 会变慢。
+
+当前实现还有一个边界需要明确：
+- 发射板内部的 G-Code 上下文仍是一份共享状态机。
+- 因此当前更适合“同一时刻只选一个上游入口”。
+- 如果未来需要做 UART 与 WiFi 并发主机控制，建议再抽出统一的入口仲裁层。
 
 #### 第 2 段：G-Code 解析与命令组帧
 
@@ -160,15 +168,17 @@ PC / LaserGRBL
 
 1. `transmitter/main.c`
 2. `transmitter/uart_handler.c`
-3. `transmitter/gcode_processor.c`
-4. `transmitter/sle_client.c`
-5. `transmitter/gcode_parser.c`
+3. `transmitter/wifi_gcode_server.c`
+4. `transmitter/gcode_processor.c`
+5. `transmitter/sle_client.c`
+6. `transmitter/gcode_parser.c`
 
 ### 3.4 发射板典型问题与定位入口
 
 | 现象 | 先看哪里 |
 | --- | --- |
 | 串口有输入但没回 `ok` | `uart_handler.c` |
+| WiFi 已连上但没回 `ok` | `wifi_gcode_server.c` |
 | `?` 一直读不到状态 | `uart_handler.c` + `sle_client.c` |
 | 发射板显示已连接但命令不执行 | `sle_client.c` + `receiver/sle_server.c` |
 | `busy` / `pending` 飙高 | `sle_client.c` 心跳与业务写请求控制 |

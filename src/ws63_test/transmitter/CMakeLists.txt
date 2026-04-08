@@ -11,6 +11,7 @@ set(SOURCES "${SOURCES}"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcode_processor.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/sle_client.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/uart_handler.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/wifi_gcode_server.c"
     PARENT_SCOPE)
 
 # 头文件搜索路径
