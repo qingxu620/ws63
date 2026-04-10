@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WS63 WiFi 控制台</title>
+  <meta name="description" content="WS63 激光打标 WiFi G-Code 控制台">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2333;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --accent: #58a6ff;
+      --accent-glow: rgba(88, 166, 255, 0.15);
+      --green: #3fb950;
+      --red: #f85149;
+      --orange: #d29922;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+      --radius: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #10151d 0%, #1a2236 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), #a371f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header .version {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    /* Layout */
+    .container {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      padding: 16px 24px;
+      max-width: 1400px;
+      margin: 0 auto;
+      min-height: calc(100vh - 64px);
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+
+    /* Connection Panel */
+    .connect-panel {
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .connect-body {
+      padding: 16px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .input-row label {
+      font-size: 12px;
+      color: var(--text-dim);
+      min-width: 40px;
+      display: flex;
+      align-items: center;
+    }
+
+    .input-row input {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-row input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: var(--font);
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+
+    .btn-primary:hover {
+      background: #79c0ff;
+    }
+
+    .btn-danger {
+      background: var(--red);
+      color: #fff;
+    }
+
+    .btn-danger:hover {
+      background: #ff6e6a;
+    }
+
+    .btn-success {
+      background: var(--green);
+      color: #000;
+    }
+
+    .btn-success:hover {
+      background: #56d364;
+    }
+
+    .btn-warn {
+      background: var(--orange);
+      color: #000;
+    }
+
+    .btn-warn:hover {
+      background: #e3b341;
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-block {
+      width: 100%;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    /* Status Indicators */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-green {
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+    }
+
+    .dot-red {
+      background: var(--red);
+    }
+
+    .dot-gray {
+      background: #484f58;
+    }
+
+    .dot-orange {
+      background: var(--orange);
+      box-shadow: 0 0 6px var(--orange);
+    }
+
+    .status-label {
+      color: var(--text-dim);
+    }
+
+    .status-val {
+      color: var(--text);
+      font-family: var(--mono);
+      font-weight: 500;
+    }
+
+    /* Status Card */
+    .status-panel {
+      grid-column: 1;
+      grid-row: 2;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .status-section {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-section:last-child {
+      border-bottom: none;
+    }
+
+    .status-section h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    /* Command & Log area */
+    .main-area {
+      grid-column: 2;
+      grid-row: 1 / 3;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Command input */
+    .cmd-panel .cmd-body {
+      padding: 16px;
+    }
+
+    .cmd-input-wrap {
+      display: flex;
+      gap: 8px;
+    }
+
+    .cmd-input-wrap input {
+      flex: 1;
+      padding: 10px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      outline: none;
+    }
+
+    .cmd-input-wrap input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* GCode text area */
+    .gcode-area {
+      margin-top: 12px;
+    }
+
+    .gcode-area textarea {
+      width: 100%;
+      height: 120px;
+      padding: 10px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      resize: vertical;
+      outline: none;
+      line-height: 1.6;
+    }
+
+    .gcode-area textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .gcode-area .btn-row {
+      justify-content: flex-end;
+    }
+
+    /* Quick buttons */
+    .quick-btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .quick-btns .btn {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    /* Log panel */
+    .log-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 300px;
+    }
+
+    .log-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+      background: var(--bg);
+      max-height: 500px;
+    }
+
+    .log-body .log-line {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-body .log-sent {
+      color: var(--accent);
+    }
+
+    .log-body .log-ok {
+      color: var(--green);
+    }
+
+    .log-body .log-err {
+      color: var(--red);
+    }
+
+    .log-body .log-status {
+      color: var(--orange);
+    }
+
+    .log-body .log-info {
+      color: var(--text-dim);
+    }
+
+    /* Progress bar */
+    .progress-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--green));
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge-connected {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--green);
+    }
+
+    .badge-disconnected {
+      background: rgba(248, 81, 73, 0.15);
+      color: var(--red);
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+
+      .connect-panel {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .status-panel {
+        grid-column: 1;
+        grid-row: 2;
+      }
+
+      .main-area {
+        grid-column: 1;
+        grid-row: 3;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h1>⚡ WS63 WiFi 控制台</h1>
+    <span class="version">v1.0 · G-Code over TCP</span>
+    <span id="connBadge" class="badge badge-disconnected" style="margin-left:auto">未连接</span>
+  </div>
+
+  <div class="container">
+    <!-- LEFT: Connection -->
+    <div class="panel connect-panel">
+      <div class="panel-header">连接</div>
+      <div class="connect-body">
+        <div class="input-row">
+          <label>IP</label>
+          <input type="text" id="hostInput" value="192.168.43.1" placeholder="板端 IP">
+        </div>
+        <div class="input-row">
+          <label>端口</label>
+          <input type="number" id="portInput" value="5000" style="width:90px">
+        </div>
+        <div class="btn-row">
+          <button id="btnConnect" class="btn btn-primary btn-block" onclick="doConnect()">连接</button>
+          <button id="btnDisconnect" class="btn btn-danger" onclick="doDisconnect()" disabled>断开</button>
+        </div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-warn btn-block" onclick="doEstop()">🛑 急停 M5</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LEFT: Status -->
+    <div class="panel status-panel">
+      <div class="panel-header">状态</div>
+      <div class="status-section">
+        <h3>运动状态</h3>
+        <div class="status-grid">
+          <div class="status-item"><span class="dot" id="dotMotion"></span><span class="status-label">状态</span></div>
+          <div class="status-item"><span class="status-val" id="valMotionState">—</span></div>
+          <div class="status-item"><span class="status-label">X</span></div>
+          <div class="status-item"><span class="status-val" id="valX">—</span></div>
+          <div class="status-item"><span class="status-label">Y</span></div>
+          <div class="status-item"><span class="status-val" id="valY">—</span></div>
+        </div>
+      </div>
+      <div class="status-section">
+        <h3>WiFi 状态</h3>
+        <div class="status-grid">
+          <div class="status-item"><span class="status-label">模式</span></div>
+          <div class="status-item"><span class="status-val" id="valMode">—</span></div>
+          <div class="status-item"><span class="status-label">SSID</span></div>
+          <div class="status-item"><span class="status-val" id="valSSID">—</span></div>
+          <div class="status-item"><span class="status-label">IP</span></div>
+          <div class="status-item"><span class="status-val" id="valIP">—</span></div>
+          <div class="status-item"><span class="dot" id="dotNet"></span><span class="status-label">网络</span></div>
+          <div class="status-item"><span class="dot" id="dotTCP"></span><span class="status-label">TCP</span></div>
+          <div class="status-item"><span class="dot" id="dotSLE"></span><span class="status-label">SLE</span></div>
+          <div class="status-item"><span class="dot" id="dotCli"></span><span class="status-label">客户端</span></div>
+        </div>
+      </div>
+      <div class="status-section">
+        <h3>任务进度</h3>
+        <div id="jobStatus" style="font-size:12px;color:var(--text-dim);">无任务</div>
+        <div class="progress-bar">
+          <div class="progress-bar-fill" id="jobProgress" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="status-section" style="flex:0">
+        <button class="btn btn-outline btn-sm btn-block" onclick="refreshStatus()">🔄 刷新状态</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: Command + Logs -->
+    <div class="main-area">
+      <div class="panel cmd-panel">
+        <div class="panel-header">命令</div>
+        <div class="cmd-body">
+          <div class="cmd-input-wrap">
+            <input type="text" id="cmdInput" placeholder="输入 G-Code 命令，如 G1 X10 Y10 F6000"
+              onkeydown="if(event.key==='Enter')sendCmd()">
+            <button class="btn btn-primary" onclick="sendCmd()">发送</button>
+          </div>
+          <div class="gcode-area">
+            <textarea id="gcodeText"
+              placeholder="多行 G-Code，每行一条&#10;G90&#10;M3 S200&#10;G1 X10 Y10 F6000&#10;G1 X20 Y10&#10;M5"></textarea>
+            <div class="btn-row">
+              <button class="btn btn-success btn-sm" onclick="sendJob()">▶ 发送任务</button>
+              <button class="btn btn-outline btn-sm" onclick="doSmoke()">🧪 Smoke 测试</button>
+            </div>
+          </div>
+          <div class="quick-btns">
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('$I')">$I</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('$CAP?')">$CAP?</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('$WIFI?')">$WIFI?</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('$G')">$G</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('?')">?</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('G90')">G90</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('G92')">G92</button>
+            <button class="btn btn-outline btn-sm" onclick="sendQuick('M5')">M5</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel log-panel">
+        <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
+          <span>日志</span>
+          <button class="btn btn-outline btn-sm" onclick="clearLogs()" style="padding:4px 10px">清空</button>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    let logCursor = 0;
+    let pollTimer = null;
+    let isConnected = false;
+
+    // --- DOM helpers ---
+    const $ = id => document.getElementById(id);
+
+    function setDot(id, on) {
+      const el = $(id);
+      el.className = 'dot ' + (on ? 'dot-green' : 'dot-gray');
+    }
+
+    function appendLog(line) {
+      const body = $('logBody');
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      if (line.startsWith('> ')) {
+        div.classList.add('log-sent');
+      } else if (line === 'ok') {
+        div.classList.add('log-ok');
+      } else if (line.startsWith('error')) {
+        div.classList.add('log-err');
+      } else if (line.startsWith('<')) {
+        div.classList.add('log-status');
+      } else if (line.startsWith('[')) {
+        div.classList.add('log-info');
+      }
+      div.textContent = line;
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    }
+
+    async function clearLogs() {
+      try {
+        const r = await api('POST', '/api/logs/clear');
+        $('logBody').innerHTML = '';
+        logCursor = r.cursor || 0;
+      } catch (e) {
+        appendLog('❌ 清空日志失败: ' + e.message);
+      }
+    }
+
+    function updateBadge(connected) {
+      const b = $('connBadge');
+      if (connected) {
+        b.className = 'badge badge-connected';
+        b.textContent = '已连接';
+      } else {
+        b.className = 'badge badge-disconnected';
+        b.textContent = '未连接';
+      }
+    }
+
+    function updateWifiStatus(ws) {
+      if (!ws) {
+        ['valMode', 'valSSID', 'valIP'].forEach(id => $(id).textContent = '—');
+        ['dotNet', 'dotTCP', 'dotSLE', 'dotCli'].forEach(id => setDot(id, false));
+        return;
+      }
+      $('valMode').textContent = ws.mode || '—';
+      $('valSSID').textContent = ws.ssid || '—';
+      $('valIP').textContent = ws.ip || '—';
+      setDot('dotNet', ws.net_ready);
+      setDot('dotTCP', ws.tcp_listening);
+      setDot('dotSLE', ws.sle_ready);
+      setDot('dotCli', ws.client_connected);
+    }
+
+    function updateMotionStatus(ms) {
+      if (!ms) {
+        $('valMotionState').textContent = '—';
+        $('valX').textContent = '—';
+        $('valY').textContent = '—';
+        $('dotMotion').className = 'dot dot-gray';
+        return;
+      }
+      $('valMotionState').textContent = ms.state || '—';
+      $('valX').textContent = (ms.x !== undefined ? ms.x.toFixed(3) : '—');
+      $('valY').textContent = (ms.y !== undefined ? ms.y.toFixed(3) : '—');
+      $('dotMotion').className = 'dot ' + (ms.state === 'Idle' ? 'dot-green' : 'dot-orange');
+    }
+
+    function updateJobStatus(jp) {
+      if (!jp) {
+        $('jobStatus').textContent = '无任务';
+        $('jobProgress').style.width = '0%';
+        return;
+      }
+      const pct = jp.total > 0 ? Math.round(jp.sent / jp.total * 100) : 0;
+      $('jobProgress').style.width = pct + '%';
+      if (jp.status === 'running') {
+        $('jobStatus').textContent = `执行中 ${jp.sent}/${jp.total}`;
+      } else if (jp.status === 'done') {
+        $('jobStatus').textContent = `完成 ${jp.sent}/${jp.total}`;
+      } else if (jp.status === 'error') {
+        $('jobStatus').textContent = `错误: ${jp.error}`;
+      }
+    }
+
+    // --- API calls ---
+    async function api(method, path, body) {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const resp = await fetch(API + path, opts);
+      return resp.json();
+    }
+
+    async function doConnect() {
+      const host = $('hostInput').value.trim();
+      const port = parseInt($('portInput').value) || 5000;
+      $('btnConnect').disabled = true;
+      $('btnConnect').textContent = '连接中...';
+      await clearLogs();
+      updateMotionStatus(null);
+      updateJobStatus(null);
+      try {
+        const r = await api('POST', '/api/connect', { host, port });
+        if (r.ok) {
+          isConnected = true;
+          updateBadge(true);
+          $('btnDisconnect').disabled = false;
+          (r.intro || []).forEach(l => appendLog(l));
+          updateWifiStatus(r.wifi_status);
+          startPolling();
+        } else {
+          appendLog('❌ 连接失败: ' + (r.error || ''));
+        }
+      } catch (e) {
+        appendLog('❌ 请求失败: ' + e.message);
+      }
+      $('btnConnect').disabled = false;
+      $('btnConnect').textContent = '连接';
+    }
+
+    async function doDisconnect() {
+      stopPolling();
+      try { await api('POST', '/api/disconnect'); } catch (e) { }
+      isConnected = false;
+      updateBadge(false);
+      $('btnDisconnect').disabled = true;
+      updateWifiStatus(null);
+      updateMotionStatus(null);
+      updateJobStatus(null);
+      logCursor = 0;
+      appendLog('🔌 已断开');
+    }
+
+    async function sendCmd() {
+      const line = $('cmdInput').value.trim();
+      if (!line) return;
+      $('cmdInput').value = '';
+      try {
+        const r = await api('POST', '/api/send-line', { line });
+        if (r.status) updateMotionStatus(r.status);
+        if (r.wifi_status) updateWifiStatus(r.wifi_status);
+      } catch (e) {
+        appendLog('❌ ' + e.message);
+      }
+    }
+
+    function sendQuick(line) {
+      $('cmdInput').value = line;
+      sendCmd();
+    }
+
+    async function sendJob() {
+      const text = $('gcodeText').value.trim();
+      if (!text) return;
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+      try {
+        const r = await api('POST', '/api/send-job', { lines });
+        if (r.ok) appendLog('▶ 任务已提交 (' + r.total + ' 行)');
+        else appendLog('❌ ' + (r.error || ''));
+      } catch (e) {
+        appendLog('❌ ' + e.message);
+      }
+    }
+
+    async function doSmoke() {
+      try {
+        const r = await api('POST', '/api/preset/smoke');
+        if (r.ok) appendLog('🧪 Smoke 测试已提交');
+        else appendLog('❌ ' + (r.error || ''));
+      } catch (e) {
+        appendLog('❌ ' + e.message);
+      }
+    }
+
+    async function doEstop() {
+      try {
+        const r = await api('POST', '/api/send-line', { line: 'M5' });
+        appendLog('🛑 急停 M5 已发送');
+        // 自动查一次状态
+        setTimeout(refreshStatus, 500);
+      } catch (e) {
+        appendLog('❌ 急停失败: ' + e.message);
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await api('GET', '/api/status');
+        isConnected = r.connected;
+        updateBadge(r.connected);
+        updateWifiStatus(r.wifi_status);
+        updateMotionStatus(r.motion_status);
+        updateJobStatus(r.job_progress);
+        $('btnDisconnect').disabled = !r.connected;
+      } catch (e) { }
+    }
+
+    async function pollLogs() {
+      try {
+        const r = await api('GET', '/api/logs?since=' + logCursor);
+        if (r.lines && r.lines.length > 0) {
+          r.lines.forEach(appendLog);
+          logCursor = r.cursor;
+        }
+      } catch (e) { }
+    }
+
+    function startPolling() {
+      stopPolling();
+      pollTimer = setInterval(async () => {
+        await pollLogs();
+        await refreshStatus();
+      }, 800);
+    }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    // Init
+    window.addEventListener('load', () => {
+      refreshStatus();
+    });
+  </script>
+</body>
+
+</html>

@@ -116,6 +116,11 @@ src/ws63_test/
 │   ├── laser_ctrl.c
 │   └── safety_monitor.c
 └── tools/
+    ├── wifi_client.py
+    ├── wifi_console.py
+    ├── wifi_console.html
+    ├── wifi_test.py
+    ├── wifi_bridge.py
     ├── uart_auto_test.py
     └── stress_test.py
 ```
@@ -328,6 +333,44 @@ M5
 - `$CAP?` 返回当前作品能力画像，适合比赛现场快速证明当前链路支持项
 - `$WIFI?` 返回当前 WiFi 模式、IP、TCP 监听状态、客户端连接状态以及 SLE 就绪状态
 - 真正的运动命令仍由发射板转成 `motion_cmd_t` 后通过 SLE 发往接收板
+
+### 8.2.1 WiFi 小工具
+
+`tools/` 目录额外提供了 3 个面向 WiFi TCP 入口的小工具。它们都复用同一套
+`WifiGcodeClient` 传输层，并且 Python 运行时不依赖第三方包。
+
+本地网页控制台：
+
+```bash
+python3 src/ws63_test/tools/wifi_console.py
+python3 src/ws63_test/tools/wifi_console.py --web-port 9000
+```
+
+说明：
+- 浏览器打开 `http://localhost:8080`（或自定义端口）
+- 页面会轮询刷新运动状态和 `$WIFI?` 状态，不是一次连接后的静态缓存
+- “清空日志”会同时清空页面和后端会话日志，后续轮询不会回灌旧内容
+- “急停”当前仍发送 `M5`，不额外引入新的板端实时停机协议
+
+TCP 通用验证工具：
+
+```bash
+python3 src/ws63_test/tools/wifi_test.py --host 192.168.43.1 --suite smoke
+python3 src/ws63_test/tools/wifi_test.py --host 192.168.43.1 --suite all --cycles 10 --report-json result.json
+```
+
+轻量桥接脚本：
+
+```bash
+python3 src/ws63_test/tools/wifi_bridge.py --host 192.168.43.1 --file demo.gcode
+python3 src/ws63_test/tools/wifi_bridge.py --host 192.168.43.1 --interactive
+cat commands.txt | python3 src/ws63_test/tools/wifi_bridge.py --host 192.168.43.1
+```
+
+说明：
+- 交互模式默认会生成一份会话日志
+- 若传 `--log-file`，则使用指定日志路径
+- 文件模式和管道模式默认不自动生成日志
 
 ### 8.3 自动测试
 

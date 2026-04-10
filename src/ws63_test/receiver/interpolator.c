@@ -74,8 +74,8 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
     double clamped_x = clamp_axis_mm(target_x, GALVO_X_MIN_MM, GALVO_X_MAX_MM);
     double clamped_y = clamp_axis_mm(target_y, GALVO_Y_MIN_MM, GALVO_Y_MAX_MM);
     if (clamped_x != target_x || clamped_y != target_y) {
-        osal_printk("[interpolator] target clamped: (%.3f, %.3f)->(%.3f, %.3f)\r\n", target_x, target_y,
-                    clamped_x, clamped_y);
+        osal_printk("[interpolator] target clamped: (%.3f, %.3f)->(%.3f, %.3f)\r\n", target_x, target_y, clamped_x,
+                    clamped_y);
     }
     target_x = clamped_x;
     target_y = clamped_y;
