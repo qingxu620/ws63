@@ -32,6 +32,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
  * @param  response 输出回复文本
  * @param  resp_size 回复缓冲大小
  * @return true=是$命令并已处理
+ * @note   当前额外支持 `$CAP?`，便于比赛演示时快速查看作品能力画像
  */
 bool grbl_process_dollar(const char *line, char *response, int resp_size);
 

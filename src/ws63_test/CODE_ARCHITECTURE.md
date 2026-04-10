@@ -15,7 +15,7 @@
 整体链路如下：
 
 ```text
-PC / LaserGRBL / 自研 TCP 客户端
+PC / LaserGRBL / 自研 TCP 客户端 / 网页端
   -> UART1 或 WiFi TCP 文本命令
   -> transmitter/uart_handler 或 transmitter/wifi_gcode_server
   -> transmitter/gcode_processor
@@ -88,7 +88,7 @@ PC / LaserGRBL / 自研 TCP 客户端
 | 任务 | 入口 | 作用 |
 | --- | --- | --- |
 | UART 接收任务 | `task_uart_rx_entry()` | 读取 UART1 文本命令并处理 |
-| WiFi 接收任务 | `task_wifi_gcode_entry()` | 拉起 SoftAP 并监听 TCP 文本命令 |
+| WiFi 接收任务 | `task_wifi_gcode_entry()` | 按配置拉起 SoftAP 或 STA，并监听 TCP 文本命令 |
 | SLE 初始化任务 | `sle_init_task()` | 扫描、连接、服务发现 |
 | 心跳任务 | `heartbeat_task()` | 周期发送 `CMD_HEARTBEAT` 保活 |
 
@@ -103,9 +103,10 @@ PC / LaserGRBL / 自研 TCP 客户端
 
 职责：
 - 初始化 UART1 引脚与驱动
-- 参考官方 SoftAP 例程拉起发射板 WiFi 热点
+- 参考官方 SoftAP / STA 例程拉起发射板热点或连接现有路由器
 - 通过 TCP 按行接收 G-Code
 - 处理 `?` 实时状态查询
+- 处理 `$WIFI?` 链路状态查询
 - 处理 `$I` / `$G` 等本地 Grbl 命令
 - 对真实业务命令执行“解析 -> 下发 -> 等 ACK -> 回复 ok”
 
@@ -119,6 +120,10 @@ PC / LaserGRBL / 自研 TCP 客户端
 - 发射板内部的 G-Code 上下文仍是一份共享状态机。
 - 因此当前更适合“同一时刻只选一个上游入口”。
 - 如果未来需要做 UART 与 WiFi 并发主机控制，建议再抽出统一的入口仲裁层。
+
+当前 WiFi 模块还额外做了两件更偏工程化的事情：
+- 统一注册 WiFi 事件回调，记录 SoftAP 客户端接入/离开、STA 连接/断开。
+- 对外暴露 `wifi_gcode_server_get_status()` 快照接口，方便后续网页端、BLE 助手或调试界面直接复用。
 
 #### 第 2 段：G-Code 解析与命令组帧
 

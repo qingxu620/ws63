@@ -66,28 +66,6 @@ if SAMPLE_SUPPORT_MY_USART
     source "application/samples/User/usart/Kconfig"
 endif
 
-# --- 激光打标机 (ws63_test) ---
-config LASER_MARKER_RECEIVER
-    bool
-    prompt "Build Laser Marker Receiver (接收板)"
-    default n
-    depends on ENABLE_USER_SAMPLE
-    select SPI_SUPPORT_MASTER
-    help
-        Build the receiver board firmware for laser marker.
-        Includes: SLE Server, DAC8562, interpolation engine,
-        laser PWM, and safety monitor.
-
-config LASER_MARKER_TRANSMITTER
-    bool
-    prompt "Build Laser Marker Transmitter (发射板)"
-    default n
-    depends on ENABLE_USER_SAMPLE
-    help
-        Build the transmitter board firmware for laser marker.
-        Includes: SLE Client, UART handler, G-Code parser,
-        and Grbl protocol compatibility.
-
 # 以后如果你增加了 OLED，就在下面继续添加：
 # config SAMPLE_SUPPORT_MY_OLED
 # ... 依此类推

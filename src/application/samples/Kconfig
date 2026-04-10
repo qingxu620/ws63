@@ -74,5 +74,17 @@ config ENABLE_NFC_SAMPLE
 if ENABLE_NFC_SAMPLE
 osource "application/samples/nfc/Kconfig"
 endif
+config ENABLE_LASER_MARKER_SAMPLE
+    bool
+    prompt "Enable the Sample of WS63 Laser Marker."
+    default n
+    depends on SAMPLE_ENABLE
+    help
+        This option means enable the WS63 Laser Marker sample.
+
+if ENABLE_LASER_MARKER_SAMPLE
+source "ws63_test/Kconfig"
+endif
+
 # 注册你的 User 配置菜单
 source "application/samples/User/Kconfig"

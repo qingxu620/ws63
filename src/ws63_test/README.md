@@ -1,6 +1,6 @@
 # WS63 激光打标双板工程 README
 
-`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 SoftAP + TCP 文本入口，方便后续网页端或自研上位机接入。
+`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 TCP 文本入口，支持 `SoftAP` 直连和 `STA` 入网两种模式，方便后续网页端或自研上位机接入。
 
 当前目录包含三类核心工程模块：
 - `common/`：协议、CRC、全局配置，负责收发两端共享契约。
@@ -10,6 +10,7 @@
 配套支持目录：
 - `tools/`：Windows 上位机自动化测试脚本。
 - `ai_studio/`：AI 智能创作中枢 PC 上位机原型，负责 AI 生图、轮廓提取、G-Code 生成和串口下发。
+- `COMPETITION_SPRINT_PLAN.md`：基于当前工程状态整理的两个月比赛冲刺方案。
 - `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
 
@@ -29,7 +30,7 @@
 | --- | --- | --- |
 | G-Code 基础 | `G0/G1/G90/G91/G92/M3/M4/M5/S/F/?/$I/$G` 的基本含义 | `transmitter/gcode_parser.c`、`transmitter/gcode_processor.c` |
 | 串口通信 | 上位机通过 UART1 给发射板逐行发文本指令 | `transmitter/uart_handler.c` |
-| WiFi 通信 | 发射板基于 SoftAP + TCP 暴露第二条文本 G-Code 入口 | `transmitter/wifi_gcode_server.c` |
+| WiFi 通信 | 发射板基于 SoftAP / STA + TCP 暴露第二条文本 G-Code 入口 | `transmitter/wifi_gcode_server.c` |
 | SLE 通信 | 发射板是 Client，接收板是 Server，命令与状态通过 SSAP 特征值传输 | `transmitter/sle_client.c`、`receiver/sle_server.c` |
 | 坐标与功率输出 | X/Y 由 DAC8562 输出，激光功率由 PWM 输出 | `receiver/dac8562.c`、`receiver/laser_ctrl.c` |
 | 插补与执行 | 接收板消费命令队列并执行线性插补 | `receiver/interpolator.c` |
@@ -183,7 +184,16 @@ python3 build.py menuconfig ws63-liteos-app
 - 接收板：打开 `CONFIG_LASER_MARKER_RECEIVER`
 - 发射板：打开 `CONFIG_LASER_MARKER_TRANSMITTER`
 
-不要同时打开这两个选项。
+固定硬件映射：
+- 接收板固定使用 `SPI0 + GPIO10(CS) + PWM2`
+- 发射板固定使用 `UART1(GPIO15/16)`
+
+如果选择发射板，还可以继续确认 WiFi 相关选项：
+- `CONFIG_LASER_WIFI_SOFTAP_ENABLE`：是否启用 WiFi 入口
+- `CONFIG_LASER_WIFI_MODE_SOFTAP`：发射板自己开热点，适合比赛现场直连
+- `CONFIG_LASER_WIFI_MODE_STA`：发射板连接现有路由器/手机热点，适合电脑和手机在同一局域网下访问
+
+`SoftAP` 和 `STA` 在菜单里是二选一。
 
 ### 6.2 编译
 
@@ -235,10 +245,18 @@ output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
 - UART TX：`GPIO15`
 - UART RX：`GPIO16`
 - 波特率：`115200`
-- WiFi SoftAP：默认 `WS63_LaserTX`
-- WiFi 密码：默认 `ws63laser`
 - WiFi TCP 端口：默认 `5000`
+- WiFi 模式：`SoftAP` 或 `STA`，由 `menuconfig` 选择
+
+当选择 `SoftAP` 模式时：
+- WiFi 热点：默认 `WS63_LaserTX`
+- WiFi 密码：默认 `ws63laser`
 - WiFi IP：默认 `192.168.43.1`
+
+当选择 `STA` 模式时：
+- 目标热点 SSID：由 `CONFIG_LASER_WIFI_STA_SSID` 指定
+- 目标热点密码：由 `CONFIG_LASER_WIFI_STA_PSK` 指定
+- 发射板 IP：由目标路由器/手机热点的 DHCP 分配，以上电日志为准
 
 使用说明：
 - UART 与 WiFi 都是发射板的上游入口，二者都通向同一套 `G-Code -> motion_cmd_t -> SLE` 控制链路。
@@ -273,13 +291,28 @@ M5
 ```text
 [wifi gcode] wifi init ready
 [wifi gcode] softap ready ssid=WS63_LaserTX ip=192.168.43.1 port=5000 channel=13
-[wifi gcode] tcp listen ready on port 5000
+[wifi gcode] tcp listen ready mode=SoftAP ip=192.168.43.1 port=5000
 ```
 
-PC 连接到发射板 SoftAP 后，可用任意行式 TCP 客户端向 `192.168.43.1:5000` 发送和串口相同的文本 G-Code，例如：
+如果你启用的是 `STA` 模式，日志会变成类似：
+
+```text
+[wifi gcode] wifi init ready
+[wifi gcode] sta enabled, target ssid=YourRouterSSID
+[wifi gcode] sta ready ssid=YourRouterSSID ip=192.168.1.123 port=5000
+[wifi gcode] tcp listen ready mode=STA ip=192.168.1.123 port=5000
+```
+
+联调方式：
+- `SoftAP`：PC 先连接发射板热点，再访问 `192.168.43.1:5000`
+- `STA`：PC 和发射板先接入同一路由器/手机热点，再访问日志里的发射板 IP 和 `5000` 端口
+
+可用任意行式 TCP 客户端向发射板发送和串口相同的文本 G-Code，例如：
 
 ```gcode
 $I
+$CAP?
+$WIFI?
 G90
 M3 S200
 G1 X10 Y10 F6000
@@ -289,8 +322,11 @@ M5
 
 预期与 UART 一致：
 - 建连后会先收到 `WS63 Laser Marker WiFi` 和 `Grbl 1.1f ['$' for help]`
+- 还会看到 `[MSG:WiFi SoftAP ...]` 或 `[MSG:WiFi STA ...]`
 - 每条命令回 `ok`
 - `?` 返回位置与运行状态
+- `$CAP?` 返回当前作品能力画像，适合比赛现场快速证明当前链路支持项
+- `$WIFI?` 返回当前 WiFi 模式、IP、TCP 监听状态、客户端连接状态以及 SLE 就绪状态
 - 真正的运动命令仍由发射板转成 `motion_cmd_t` 后通过 SLE 发往接收板
 
 ### 8.3 自动测试

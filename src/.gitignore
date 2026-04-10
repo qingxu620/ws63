@@ -1,0 +1,11 @@
+.cache/
+output/
+build/config/target_config/ws63/menuconfig/acore/*.config.old
+build/config/target_config/ws63/menuconfig/acore/*.config
+mconfig.h
+
+__pycache__/
+*.pyc
+
+ws63_test/temp_ai_image.png
+ws63_test/temp_contours_preview.png

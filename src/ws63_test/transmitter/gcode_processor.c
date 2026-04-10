@@ -208,6 +208,10 @@ bool grbl_process_dollar(const char *line, char *response, int resp_size)
     } else if (strcmp(line, "$G") == 0) {
         snprintf(response, resp_size, "[GC:G0 G54 G17 G21 G%d G94 M%d T0 F%d S%d]\r\nok\r\n", g_absolute_mode ? 90 : 91,
                  g_laser_enabled ? 3 : 5, (int)g_feed_rate, (int)g_laser_power);
+    } else if ((strcmp(line, "$CAP") == 0) || (strcmp(line, "$CAP?") == 0)) {
+        snprintf(response, resp_size,
+                 "[CAP:MCU=WS63,OS=LiteOS,ROLE=TX,SLE=1,WIFI=%d,UART=1,AI=1,SAFE=1,AUTO=1,BLE=0]\r\nok\r\n",
+                 LASER_WIFI_SOFTAP_ENABLE ? 1 : 0);
     } else {
         snprintf(response, resp_size, "ok\r\n");
     }

@@ -10,10 +10,10 @@
 
 已修复：
 1. 文档与默认硬件配置已对齐（`GPIO10/PWM2/UART1`）。
-2. 发射板新增参考官方例程实现的 `WiFi SoftAP + TCP` 文本入口，且不影响原串口基线。
+2. 发射板新增参考官方例程实现的 `WiFi TCP` 文本入口，支持 `SoftAP/STA` 两种模式，且不影响原串口基线。
 3. 接收侧新增命令参数校验（坐标范围、速度有限值、非法命令拒收）。
 4. `ack_seq` 语义与注释已统一为“已接收(入队)最新序号”。
-5. `Kconfig` 与 `common/config.h` 已打通（关键总线/通道/CS 可由 `CONFIG_*` 覆盖）。
+5. `Kconfig` 与 `common/config.h` 已打通，当前默认硬件映射已固定并与文档保持一致。
 6. 发射板首条业务命令不再使用 `seq=0`，避免初始 `ack=0` 误判。
 7. 发射板心跳会给业务命令让路，降低 SSAP 在途窗口争抢。
 8. 接收板 `Run/Idle` 判定已修正，不再把“激光开但不动”长期报成 `Run`。
@@ -79,7 +79,7 @@ output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
 以 `common/config.h` 为准：
 
 - 接收板：`SPI0 + GPIO10(CS)` 驱动 DAC，`GPIO2/PWM2` 控激光
-- 发射板：`UART1(GPIO15/16)` 接上位机，或使用其 `WiFi SoftAP + TCP` 入口
+- 发射板：`UART1(GPIO15/16)` 接上位机，或使用其 `WiFi TCP` 入口（`SoftAP` / `STA` 二选一）
 
 ## 2. 一张图看全链路（GCode -> 振镜/激光）
 
@@ -136,7 +136,8 @@ LaserGRBL/上位机/网页端
 - `[uart] task started`
 - `[laser tx] scanning...`
 - 若开启 WiFi，还应看到 `[wifi gcode] wifi init ready`
-- 以及 `[wifi gcode] softap ready ...`
+- 以及 `[wifi gcode] softap ready ...` 或 `[wifi gcode] sta ready ...`
+- 之后还应看到 `[wifi gcode] tcp listen ready mode=... ip=... port=5000`
 
 若这一步不对，先别看协议，先修初始化。
 
@@ -169,13 +170,19 @@ Windows 现场联调默认映射可参考：
 - 接收板调试串口：`COM13`
 
 ### C2. 发射板 WiFi 通不通
-- 查看发射板日志是否出现 `softap ready ssid=WS63_LaserTX ip=192.168.43.1 port=5000`
-- PC 连接发射板热点后，确认拿到 `192.168.43.x` 网段地址
-- 用 TCP 客户端连接 `192.168.43.1:5000`
+- 若是 `SoftAP` 模式：
+  - 查看发射板日志是否出现 `softap ready ssid=WS63_LaserTX ip=192.168.43.1 port=5000`
+  - PC 连接发射板热点后，确认拿到 `192.168.43.x` 网段地址
+  - 用 TCP 客户端连接 `192.168.43.1:5000`
+- 若是 `STA` 模式：
+  - 查看发射板日志是否出现 `sta ready ssid=... ip=... port=5000`
+  - 确认 PC 和发射板处于同一路由器/手机热点下
+  - 用 TCP 客户端连接日志里的发射板 IP 和 `5000` 端口
 - 建连后应立即收到：
   - `WS63 Laser Marker WiFi`
   - `Grbl 1.1f ['$' for help]`
-- 之后发送 `?` 或 `$I`，应获得与串口入口一致的回复
+- 之后发送 `?`、`$I` 或 `$WIFI?`，应获得与串口入口一致的回复
+- `$WIFI?` 会额外返回当前模式、IP、TCP 监听状态和 SLE 就绪状态
 
 注意：
 - 当前发射板内部仍是一份共享 G-Code 状态机，建议同一时刻只使用 `UART` 或 `WiFi` 其中一个入口。
@@ -222,7 +229,11 @@ M5
 - `M3/M5` 控制激光开关
 - `?` 返回位置与状态
 
-如果改走 WiFi，只需要把同样的文本命令发到 `192.168.43.1:5000`，其余行为与串口入口一致。
+如果改走 WiFi：
+- `SoftAP` 模式下，把同样的文本命令发到 `192.168.43.1:5000`
+- `STA` 模式下，把同样的文本命令发到启动日志里打印出来的发射板 IP 和 `5000` 端口
+
+其余行为与串口入口一致。
 
 ## 5. 推荐验收顺序
 

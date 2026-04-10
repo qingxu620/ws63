@@ -2,87 +2,93 @@
 # @brief    WS63 Laser Marker Kconfig
 #===============================================================================
 
+choice
+    prompt "Board Role (板卡角色)"
+    depends on ENABLE_LASER_MARKER_SAMPLE
+
 config LASER_MARKER_RECEIVER
-    bool
-    prompt "Build Laser Marker Receiver (接收板)"
-    default n
-    help
-        Build the receiver board firmware.
-        Includes: SLE Server, DAC8562 driver, interpolation engine,
-        laser PWM control, and safety monitor.
+    bool "Support Receiver Board (接收板)."
+    select SPI_SUPPORT_MASTER
 
 config LASER_MARKER_TRANSMITTER
-    bool
-    prompt "Build Laser Marker Transmitter (发射板)"
-    default n
-    help
-        Build the transmitter board firmware.
-        Includes: SLE Client, UART/WiFi host ingress, G-Code parser,
-        and Grbl protocol compatibility.
+    bool "Support Transmitter Board (发射板)."
+
+endchoice
 
 if LASER_MARKER_RECEIVER
+menu "Receiver Configuration (接收配置)"
 
-config LASER_DAC_SPI_BUS
-    int "DAC8562 SPI Bus Number"
-    default 0
-    help
-        SPI bus number connected to DAC8562.
+comment "Fixed pins: SPI0 / GPIO10 / PWM2（固定接线）"
 
-config LASER_DAC_CS_PIN
-    int "DAC8562 CS GPIO Pin"
-    default 10
-    help
-        GPIO pin number for DAC8562 chip select.
-
-config LASER_PWM_CHANNEL
-    int "Laser PWM Channel"
-    default 2
-    help
-        PWM channel number for laser power control.
-
-endif # LASER_MARKER_RECEIVER
+endmenu
+endif
 
 if LASER_MARKER_TRANSMITTER
+menu "Transmitter Configuration (发射配置)"
 
-config LASER_UART_BUS
-    int "UART Bus for G-Code"
-    default 1
-    help
-        UART bus number for receiving G-Code from host PC.
+comment "Fixed UART: UART1 / GPIO15-16（固定串口）"
 
 config LASER_WIFI_SOFTAP_ENABLE
-    bool "Enable transmitter WiFi SoftAP/TCP ingress"
+    bool
+    prompt "Support WiFi (启用WiFi)."
     default y
     help
-        Add a WiFi SoftAP plus TCP text command ingress on the transmitter.
-        This is an additional host entry and does not replace the existing
-        UART + SLE control path.
+        This option means enable WiFi function on Transmitter.
+
+if LASER_WIFI_SOFTAP_ENABLE
+menu "WiFi Configuration (WiFi设置)"
+
+choice
+    prompt "WiFi Mode (模式)"
+    default LASER_WIFI_MODE_SOFTAP
+
+config LASER_WIFI_MODE_SOFTAP
+    bool "Support WiFi SoftAP Mode (热点模式)."
+
+config LASER_WIFI_MODE_STA
+    bool "Support WiFi STA Mode (联网模式)."
+
+endchoice
 
 config LASER_WIFI_SOFTAP_SSID
-    string "WiFi SoftAP SSID"
+    string
+    prompt "Set SoftAP SSID (热点名)."
     default "WS63_LaserTX"
-    help
-        SSID exposed by the transmitter SoftAP.
+    depends on LASER_WIFI_MODE_SOFTAP
 
 config LASER_WIFI_SOFTAP_PSK
-    string "WiFi SoftAP password"
+    string
+    prompt "Set SoftAP Password (热点密码)."
     default "ws63laser"
-    help
-        WPA/WPA2-PSK password exposed by the transmitter SoftAP.
-        Keep at least 8 characters when encryption is enabled.
+    depends on LASER_WIFI_MODE_SOFTAP
 
 config LASER_WIFI_SOFTAP_CHANNEL
-    int "WiFi SoftAP channel"
+    int
+    prompt "Choose SoftAP Channel (信道)."
     range 1 13
     default 13
-    help
-        Radio channel used by the transmitter SoftAP.
+    depends on LASER_WIFI_MODE_SOFTAP
+
+config LASER_WIFI_STA_SSID
+    string
+    prompt "Set STA SSID (路由器名)."
+    default "YourRouterSSID"
+    depends on LASER_WIFI_MODE_STA
+
+config LASER_WIFI_STA_PSK
+    string
+    prompt "Set STA Password (路由器密码)."
+    default "routerpass"
+    depends on LASER_WIFI_MODE_STA
 
 config LASER_WIFI_TCP_PORT
-    int "WiFi TCP G-Code port"
+    int
+    prompt "Choose TCP Port (端口)."
     range 1 65535
     default 5000
-    help
-        TCP server port used for the line-based WiFi G-Code ingress.
 
-endif # LASER_MARKER_TRANSMITTER
+endmenu
+endif
+
+endmenu
+endif

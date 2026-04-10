@@ -118,7 +118,7 @@ static void transmitter_entry(void)
 
 #if LASER_WIFI_SOFTAP_ENABLE
     /* 3) WiFi 任务:
-     *    参考官方 SoftAP 例程新增 TCP 文本入口。
+     *    参考官方 SoftAP / STA 例程新增 TCP 文本入口。
      *    它与 UART 并行存在，但不替代原来的串口联调入口。 */
     task = osal_kthread_create(task_wifi_gcode_entry, NULL, "wifi_gcode", TASK_STACK_SIZE_WIFI);
     if (task != NULL) {

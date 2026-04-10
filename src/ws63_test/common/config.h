@@ -32,8 +32,8 @@
 #define UART_BAUD_RATE 115200
 #define CMD_QUEUE_SIZE 32 /* 命令队列深度 */
 
-/* ================= WiFi SoftAP / TCP 配置 =================
- * 发射板新增一个 WiFi 文本入口，便于后续网页端或自研上位机接入。
+/* ================= WiFi / TCP 配置 =================
+ * 发射板新增一个 WiFi 文本入口，便于后续网页端、电脑端或手机端接入。
  * 它只是“额外入口”，不会替代现有 UART -> G-Code -> SLE 主链路。
  * 由于发射板当前只有一份 G-Code 上下文状态机，建议同一时刻只使用
  * UART 或 WiFi 其中一个上游入口，不要并发向两条入口同时发业务指令。
@@ -43,6 +43,14 @@
 #else
 #define LASER_WIFI_SOFTAP_ENABLE 0
 #endif
+
+#if defined(CONFIG_LASER_WIFI_MODE_STA)
+#define LASER_WIFI_STA_MODE_ENABLED 1
+#else
+#define LASER_WIFI_STA_MODE_ENABLED 0
+#endif
+
+#define LASER_WIFI_SOFTAP_MODE_ENABLED (!LASER_WIFI_STA_MODE_ENABLED)
 
 #if defined(CONFIG_LASER_WIFI_SOFTAP_SSID)
 #define LASER_WIFI_SOFTAP_SSID CONFIG_LASER_WIFI_SOFTAP_SSID
@@ -62,11 +70,31 @@
 #define LASER_WIFI_SOFTAP_CHANNEL 13
 #endif
 
+#if defined(CONFIG_LASER_WIFI_STA_SSID)
+#define LASER_WIFI_STA_SSID CONFIG_LASER_WIFI_STA_SSID
+#else
+#define LASER_WIFI_STA_SSID "YourRouterSSID"
+#endif
+
+#if defined(CONFIG_LASER_WIFI_STA_PSK)
+#define LASER_WIFI_STA_PSK CONFIG_LASER_WIFI_STA_PSK
+#else
+#define LASER_WIFI_STA_PSK "routerpass"
+#endif
+
 #if defined(CONFIG_LASER_WIFI_TCP_PORT)
 #define LASER_WIFI_TCP_PORT CONFIG_LASER_WIFI_TCP_PORT
 #else
 #define LASER_WIFI_TCP_PORT 5000
 #endif
+
+#define LASER_WIFI_SOFTAP_IFNAME "ap0"
+#define LASER_WIFI_STA_IFNAME "wlan0"
+#define LASER_WIFI_STA_SCAN_TIMEOUT_MS 5000
+#define LASER_WIFI_STA_CONNECT_TIMEOUT_MS 5000
+#define LASER_WIFI_STA_DHCP_TIMEOUT_MS 15000
+#define LASER_WIFI_STA_RETRY_DELAY_MS 2000
+#define LASER_WIFI_SOCKET_POLL_TIMEOUT_MS 1000
 
 #define LASER_WIFI_SOFTAP_IP_ADDR_1 192
 #define LASER_WIFI_SOFTAP_IP_ADDR_2 168
@@ -113,35 +141,19 @@
  * =========================================================================== */
 
 /* --- 接收板: SPI0 (DAC8562) --- */
-#if defined(CONFIG_LASER_DAC_SPI_BUS)
-#define DAC_SPI_BUS CONFIG_LASER_DAC_SPI_BUS
-#else
 #define DAC_SPI_BUS 0 /* SPI 总线编号 */
-#endif
 #define DAC_SPI_CLK_PIN 7  /* GPIO7  — Pin 31 — SPI0_SCK  */
 #define DAC_SPI_MOSI_PIN 9 /* GPIO9  — Pin 33 — SPI0_OUT  */
-#if defined(CONFIG_LASER_DAC_CS_PIN)
-#define DAC_CS_PIN CONFIG_LASER_DAC_CS_PIN
-#else
 #define DAC_CS_PIN 10 /* GPIO10 — Pin 34 — 手动 GPIO */
-#endif
 #define DAC_SPI_PIN_MODE 3 /* PIN_MODE_3 = 复用信号3 (SPI0) */
 
 /* --- 接收板: PWM (激光控制) --- */
-#if defined(CONFIG_LASER_PWM_CHANNEL)
-#define LASER_PWM_CHANNEL CONFIG_LASER_PWM_CHANNEL
-#else
 #define LASER_PWM_CHANNEL 2 /* PWM2 通道 */
-#endif
 #define LASER_PWM_PIN 2      /* GPIO2  — Pin 24 — PWM2     */
 #define LASER_PWM_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (PWM) */
 
 /* --- 发射板: UART1 (上位机) --- */
-#if defined(CONFIG_LASER_UART_BUS)
-#define LASER_UART_BUS CONFIG_LASER_UART_BUS
-#else
 #define LASER_UART_BUS 1 /* UART1 */
-#endif
 #define LASER_UART_TX_PIN 15  /* GPIO15 — Pin 9  — UART1_TXD */
 #define LASER_UART_RX_PIN 16  /* GPIO16 — Pin 10 — UART1_RXD */
 #define LASER_UART_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (UART1) */
