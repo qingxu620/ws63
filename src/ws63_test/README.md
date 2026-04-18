@@ -1,6 +1,6 @@
 # WS63 激光打标双板工程 README
 
-`src/ws63_test` 是一套面向 WS63 的双板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 TCP 文本入口，支持 `SoftAP` 直连和 `STA` 入网两种模式，方便后续网页端或自研上位机接入。
+`src/ws63_test` 是一套面向 WS63 的多板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 TCP 文本入口，支持 `SoftAP` 直连和 `STA` 入网两种模式，方便后续网页端或自研上位机接入。
 
 当前目录包含三类核心工程模块：
 - `common/`：协议、CRC、全局配置，负责收发两端共享契约。
@@ -9,7 +9,7 @@
 
 配套支持目录：
 - `tools/`：Windows 上位机自动化测试脚本。
-- `ai_studio/`：AI 智能创作中枢 PC 上位机原型，负责 AI 生图、轮廓提取、G-Code 生成和串口下发。
+- `ai_studio/`：AI 智能创作中枢 PC 上位机，负责 AI 生图、轮廓提取、G-Code 生成，以及通过串口或 WiFi 下发到发射板。
 - `COMPETITION_SPRINT_PLAN.md`：基于当前工程状态整理的两个月比赛冲刺方案。
 - `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
@@ -232,6 +232,36 @@ output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
 2. 再烧发射板固件。
 3. 上电后先看两路 UART0 启动日志，再接上位机业务串口。
 
+### 6.5 当前功能逐条落地顺序
+
+如果你们已经把 `UART` 链路全部验证完成，下一阶段建议不要同时铺太多新点，直接按下面顺序把
+`WiFi TCP` 能力落地。这样做的好处是：每一步都能独立验收，失败时也容易定位在哪一层。
+
+推荐顺序：
+
+| 步骤 | 现在要做什么 | 推荐做法 | 通过标准 |
+| --- | --- | --- | --- |
+| 1 | 固定 WiFi 调试模式 | 第一轮优先选 `SoftAP`，避免把问题混到路由器、DHCP、局域网里 | 发射板配置为 `CONFIG_LASER_MARKER_TRANSMITTER=y` + `CONFIG_LASER_WIFI_SOFTAP_ENABLE=y` + `CONFIG_LASER_WIFI_MODE_SOFTAP=y` |
+| 2 | 只确认板端 WiFi 是否成功启动 | 上电后先只看发射板日志，不急着连 PC | 日志里出现 `wifi init ready`、`softap ready ...`、`tcp listen ready ...` |
+| 3 | 只确认 PC 到发射板 TCP 能连通 | PC 连 `WS63_LaserTX`，再用 `wifi_bridge.py --host 192.168.43.1 -i` | 能看到 `WS63 Laser Marker WiFi`、`Grbl 1.1f ...` 欢迎语 |
+| 4 | 确认 WiFi 入口真的打到了现有控制链路 | 先发查询命令，再发最短动作命令 | `$WIFI?` 返回 `SLE=1`，`G90` / `M5` / `?` 都能正常回复 |
+| 5 | 复用串口已验证过的最小动作集 | 只发 `G90`、`G92`、`M3 S200`、`G1 X10 Y10 F6000`、`M5` | 每条返回 `ok`，接收板有动作，激光开关受控 |
+| 6 | 用自动化脚本做 WiFi smoke | 先跑 `python3 src/ws63_test/tools/wifi_test.py --host 192.168.43.1 --suite smoke` | `intro_check / wifi_status / smoke` 全部 `PASS` |
+| 7 | 再做稳定性和展示入口 | 跑 `--suite all --cycles 5`，然后切到 `ai_studio` 的 `WiFi TCP` 模式 | 自动化通过，AI 上位机也能通过 WiFi 成功发任务 |
+
+额外建议：
+- 第一轮先不要调 `STA`，因为 `SoftAP` 路径最短，最适合把“板端 WiFi 服务是否真跑起来”先确认掉。
+- 第一轮先不要让 `UART` 和 `WiFi` 同时发业务命令，当前发射板内部仍是同一份 G-Code 状态机。
+- 如果第 2 步都没过，先不要看 Python 脚本；如果第 3 步过了但第 4 步没过，优先看 `SLE` 是否连上。
+
+建议直接用下面这组命令作为 WiFi 第一轮验收基线：
+
+```bash
+python3 src/ws63_test/tools/wifi_bridge.py --host 192.168.43.1 -i
+python3 src/ws63_test/tools/wifi_test.py --host 192.168.43.1 --suite smoke
+python3 src/ws63_test/tools/wifi_test.py --host 192.168.43.1 --suite all --cycles 5
+```
+
 ## 7. 硬件与接口基线
 
 以 `common/config.h` 当前配置为准：
@@ -256,7 +286,12 @@ output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf
 当选择 `SoftAP` 模式时：
 - WiFi 热点：默认 `WS63_LaserTX`
 - WiFi 密码：默认 `ws63laser`
+- WiFi 信道：默认 `13`
 - WiFi IP：默认 `192.168.43.1`
+
+补充说明：
+- 若手机或电脑搜不到 `WS63_LaserTX`，优先检查当前 `SoftAP` 信道。
+- 默认 `13` 信道在部分地区或部分网卡配置下可能不会显示，建议第一轮联调用 `1`、`6` 或 `11`，优先推荐 `6`。
 
 当选择 `STA` 模式时：
 - 目标热点 SSID：由 `CONFIG_LASER_WIFI_STA_SSID` 指定
@@ -298,6 +333,15 @@ M5
 [wifi gcode] softap ready ssid=WS63_LaserTX ip=192.168.43.1 port=5000 channel=13
 [wifi gcode] tcp listen ready mode=SoftAP ip=192.168.43.1 port=5000
 ```
+
+如果你在手机或电脑上搜不到 `WS63_LaserTX`，但日志已经出现上面这几行，优先不要怀疑 WiFi 初始化失败，而是先看最后的 `channel=13`。
+
+建议处理顺序：
+- 保持 `SoftAP` 模式不变
+- 在 `menuconfig` 里把 `Choose SoftAP Channel (信道)` 从 `13` 改成 `6`
+- 重新编译并重新烧录发射板
+- 再次确认日志变成 `channel=6`
+- 然后重新在手机或电脑上搜索 `WS63_LaserTX`
 
 如果你启用的是 `STA` 模式，日志会变成类似：
 
@@ -398,7 +442,7 @@ python3 src/ws63_test/tools/stress_test.py /dev/ttyUSB1 --tx-debug-port /dev/tty
 
 ### 8.4 AI 智能创作中枢
 
-如果你要体验“AI 生图 -> 轮廓提取 -> G-Code -> 串口下发”的 P0 原型，可先安装：
+如果你要体验“AI 生图 -> 轮廓提取 -> G-Code -> 串口或 WiFi 下发”的比赛版上位机，可先安装：
 
 ```bash
 pip install PySide6 opencv-python pyserial requests numpy
@@ -468,11 +512,11 @@ python3 -m src.ws63_test.ai_studio.main
   - 双板无线打标闭环已稳定
   - `smoke / square / repeat / stress 50/50` 已通过
 - 上位机主线：`ai_studio`
-  - AI 生图 / 本地图导入 / 轮廓提取 / G-Code / 串口下发 已打通
-  - GUI 已完成教育类风格重构
+  - AI 生图 / 本地图导入 / 轮廓提取 / G-Code / 串口或 WiFi 下发 已打通
+  - GUI 已完成比赛版连接切换与一键流程改造
   - 左侧工作流已改成三步骤标签页
   - 中文路径图片读取已修复
-  - 串口未连接误发送已修复
+  - 设备未连接误发送已修复
 
 当前最适合的工作方式是：
 - 固件层保持“稳定基线”，谨慎改动协议和安全逻辑

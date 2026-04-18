@@ -31,6 +31,9 @@ from wifi_client import (
 
 logger = logging.getLogger("wifi_test")
 
+# 留出更宽松的 TCP teardown 窗口，降低测试项切换时踩到旧会话尾声的概率。
+TEST_RECONNECT_SETTLE_S = 0.8
+
 # ---------------------------------------------------------------------------
 # 测试结果
 # ---------------------------------------------------------------------------
@@ -64,14 +67,33 @@ def run_intro_check(client: WifiGcodeClient, timeout: float) -> TestResult:
     """验证建连后欢迎信息格式。"""
     start = time.monotonic()
     try:
-        intro = client.read_intro(timeout=timeout)
-        if not intro:
-            raise TestFailure("no intro lines received")
-        has_grbl = any("Grbl" in l for l in intro)
-        has_ws63 = any("WS63" in l for l in intro)
-        if not has_grbl or not has_ws63:
-            raise TestFailure(f"intro missing expected markers: {intro}")
-        return TestResult("intro_check", True, f"{len(intro)} lines", time.monotonic() - start)
+        retried_after_busy = False
+
+        while True:
+            intro = client.read_intro(timeout=timeout)
+            if not intro:
+                raise TestFailure("no intro lines received")
+
+            intro_busy = any(("busy another upstream host" in l) or (l == "error:busy") for l in intro)
+            if intro_busy:
+                if retried_after_busy:
+                    raise TestFailure(f"intro busy after retry: {intro}")
+                logger.warning("intro_check got busy, retry once after a short delay")
+                retried_after_busy = True
+                client.close()
+                time.sleep(0.3)
+                client.reconnect(timeout=timeout)
+                continue
+
+            has_grbl = any("Grbl" in l for l in intro)
+            has_ws63 = any("WS63" in l for l in intro)
+            if not has_grbl or not has_ws63:
+                raise TestFailure(f"intro missing expected markers: {intro}")
+
+            detail = f"{len(intro)} lines"
+            if retried_after_busy:
+                detail += " (recovered after busy retry)"
+            return TestResult("intro_check", True, detail, time.monotonic() - start)
     except (TimeoutError_, ConnectionError_, TestFailure) as exc:
         return TestResult("intro_check", False, str(exc), time.monotonic() - start)
 
@@ -263,19 +285,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     for cycle in range(1, args.cycles + 1):
         cycle_label = f"[{cycle}/{args.cycles}] " if args.cycles > 1 else ""
-        client = WifiGcodeClient()
+        for test_name in test_names:
+            client = WifiGcodeClient()
 
-        # 连接
-        try:
-            client.connect(args.host, args.port, timeout=args.timeout)
-        except ConnectionError_ as exc:
-            logger.error("%sconnect failed: %s", cycle_label, exc)
-            all_results.append({"cycle": cycle, "name": "connect", "passed": False, "detail": str(exc), "elapsed_s": 0})
-            exit_code = 1
-            continue
+            try:
+                client.connect(args.host, args.port, timeout=args.timeout)
+            except ConnectionError_ as exc:
+                logger.error("%sconnect failed before %s: %s", cycle_label, test_name, exc)
+                all_results.append(
+                    {
+                        "cycle": cycle,
+                        "name": test_name,
+                        "passed": False,
+                        "detail": f"connect failed: {exc}",
+                        "elapsed_s": 0,
+                    }
+                )
+                exit_code = 1
+                continue
 
-        try:
-            for test_name in test_names:
+            try:
                 logger.info("%srunning: %s", cycle_label, test_name)
                 result = run_named_test(client, test_name, args.rounds, args.timeout)
                 d = result.to_dict()
@@ -289,8 +318,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 if not result.passed:
                     exit_code = 1
-        finally:
-            client.close()
+            finally:
+                client.close()
+                # Give the board a short window to observe the TCP teardown and
+                # return to the listen state before the next test reconnects.
+                time.sleep(TEST_RECONNECT_SETTLE_S)
 
     # 汇总
     passed = sum(1 for r in all_results if r.get("passed"))

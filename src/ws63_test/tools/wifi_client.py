@@ -135,6 +135,8 @@ class WifiGcodeClient:
         self._log_lock = threading.Lock()
         self._on_line: Optional[Callable[[str], None]] = None
         self._connected = False
+        self._last_host: Optional[str] = None
+        self._last_port: int = 0
 
     # -- 连接管理 -----------------------------------------------------------
 
@@ -157,7 +159,17 @@ class WifiGcodeClient:
         self._sock = sock
         self._recv_buf.clear()
         self._connected = True
+        self._last_host = host
+        self._last_port = port
         logger.info("connected to %s:%d", host, port)
+
+    def reconnect(self, timeout: float = DEFAULT_TIMEOUT) -> None:
+        """重连到上一次成功连接过的主机。"""
+        if self._last_host is None or self._last_port <= 0:
+            raise ConnectionError_("no previous endpoint to reconnect")
+        if self._connected:
+            self.close()
+        self.connect(self._last_host, self._last_port, timeout=timeout)
 
     def close(self) -> None:
         """优雅断开连接。"""
@@ -252,11 +264,16 @@ class WifiGcodeClient:
         """
         lines: List[str] = []
         while True:
-            line = self._read_line(timeout=timeout)
+            try:
+                line = self._read_line(timeout=timeout)
+            except ConnectionError_:
+                if lines:
+                    return lines
+                raise
             if line is None:
                 break
             lines.append(line)
-            if "One upstream host at a time" in line:
+            if ("One upstream host at a time" in line) or (line == "error:busy"):
                 break
         return lines
 

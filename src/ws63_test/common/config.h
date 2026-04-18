@@ -94,7 +94,11 @@
 #define LASER_WIFI_STA_CONNECT_TIMEOUT_MS 5000
 #define LASER_WIFI_STA_DHCP_TIMEOUT_MS 15000
 #define LASER_WIFI_STA_RETRY_DELAY_MS 2000
-#define LASER_WIFI_SOCKET_POLL_TIMEOUT_MS 1000
+/*
+ * TCP 会话切换抖动主要出现在“客户端刚断开，下一次连接已发起”的窗口期。
+ * 这里把 socket 轮询周期收紧到 200ms，缩短板端感知断链和回到监听/拒绝 busy 的延迟。
+ */
+#define LASER_WIFI_SOCKET_POLL_TIMEOUT_MS 200
 
 #define LASER_WIFI_SOFTAP_IP_ADDR_1 192
 #define LASER_WIFI_SOFTAP_IP_ADDR_2 168

@@ -4,7 +4,8 @@
 本版面向教育和创客场景，采用明亮友好的卡片式布局：
 1. 左侧为分步标签页式控制面板，按“连接 -> 创作 -> 雕刻”组织工作流；
 2. 右侧为展示区，上方看图、下方看消息；
-3. 保留 AI 生图、本地图导入、G-Code 生成、串口发送的完整闭环。
+3. 保留 AI 生图、本地图导入、G-Code 生成、设备发送的完整闭环；
+4. 比赛版可在同一界面切换“串口 UART”或“WiFi TCP”两种下发方式。
 """
 
 from __future__ import annotations
@@ -202,6 +203,27 @@ QPushButton#BtnAction {
 }
 """
 
+PROMPT_TEMPLATES = [
+    (
+        "创客徽章",
+        "适合比赛展示的圆形徽章，强调芯片、无线连接与激光雕刻元素。",
+        "设计一个创客比赛徽章图案，主体包含芯片、电路线、激光光束和简洁机械元素，"
+        "线稿插画风格，主体居中，白底，高对比，适合激光雕刻轮廓提取",
+    ),
+    (
+        "校园吉祥物",
+        "适合演示 AI 生图能力，兼顾可爱感和轮廓稳定性。",
+        "画一个校园创客吉祥物，小动物戴护目镜并拿着小型电路板，表情自信，"
+        "卡通线稿风格，主体完整，背景极简，适合激光雕刻",
+    ),
+    (
+        "工业铭牌",
+        "适合展示工程产品感，图形规整、容易稳定出 G-Code。",
+        "设计一个工业设备铭牌图案，包含几何边框、型号标记区、芯片和激光符号，"
+        "简洁硬朗的技术线稿风格，布局规整，白底高对比，适合激光雕刻",
+    ),
+]
+
 
 class ImageLabel(QtWidgets.QLabel):
     """用于显示图片的白底预览画布。"""
@@ -303,6 +325,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_gcode_lines: List[str] = []
         self.current_preview_lines: List[str] = []
         self.ai_thread: Optional[AIGeneratorThread] = None
+        self._pending_auto_generate = False
+        self._pending_auto_send = False
 
         self.serial_thread = SerialWorkerThread(self)
         self.serial_thread.log_signal.connect(self.append_log)
@@ -387,7 +411,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_tabs.tabBar().setExpanding(False)
         self.left_tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
-        serial_page = self._create_left_tab_page(self._build_serial_card())
+        serial_page = self._create_left_tab_page(self._build_connection_card())
         ai_page = self._create_left_tab_page(self._build_ai_card())
         machine_page = self._build_machine_scroll_page()
 
@@ -458,38 +482,90 @@ class MainWindow(QtWidgets.QMainWindow):
         for widget in widgets:
             widget.setMinimumHeight(height)
 
-    def _build_serial_card(self) -> QtWidgets.QFrame:
-        card, layout = self._create_card("🔌 串口连接", "连接发射板业务串口，默认使用 115200 波特率。")
+    def _build_connection_card(self) -> QtWidgets.QFrame:
+        card, layout = self._create_card("🔌 设备连接", "比赛版支持实物串口 UART 与 WiFi TCP 两种设备接入方式。")
+
+        self.transport_combo = QtWidgets.QComboBox()
+        self.transport_combo.addItem("串口 UART", "serial")
+        self.transport_combo.addItem("WiFi TCP", "wifi")
+        self.transport_combo.currentIndexChanged.connect(self.on_transport_mode_changed)
+        self._apply_min_height(self.transport_combo)
+        layout.addWidget(QtWidgets.QLabel("连接方式"))
+        layout.addWidget(self.transport_combo)
 
         self.port_combo = QtWidgets.QComboBox()
         self.refresh_ports_button = QtWidgets.QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
-
         self._apply_min_height(self.port_combo, self.refresh_ports_button)
-
-        port_label = QtWidgets.QLabel("可用串口")
-        layout.addWidget(port_label)
-        port_row = QtWidgets.QHBoxLayout()
-        port_row.setSpacing(8)
-        port_row.addWidget(self.port_combo, 1)
-        port_row.addWidget(self.refresh_ports_button)
-        layout.addLayout(port_row)
 
         self.baud_combo = QtWidgets.QComboBox()
         self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
         self.baud_combo.setCurrentText("115200")
         self._apply_min_height(self.baud_combo)
-        layout.addWidget(QtWidgets.QLabel("波特率"))
-        layout.addWidget(self.baud_combo)
 
-        self.connect_button = QtWidgets.QPushButton("连接串口")
-        self.connect_button.clicked.connect(self.toggle_serial_connection)
+        self.serial_config_widget = QtWidgets.QWidget()
+        serial_layout = QtWidgets.QVBoxLayout(self.serial_config_widget)
+        serial_layout.setContentsMargins(0, 0, 0, 0)
+        serial_layout.setSpacing(8)
+        port_label = QtWidgets.QLabel("可用串口")
+        serial_layout.addWidget(port_label)
+        port_row = QtWidgets.QHBoxLayout()
+        port_row.setSpacing(8)
+        port_row.addWidget(self.port_combo, 1)
+        port_row.addWidget(self.refresh_ports_button)
+        serial_layout.addLayout(port_row)
+        serial_layout.addWidget(QtWidgets.QLabel("波特率"))
+        serial_layout.addWidget(self.baud_combo)
+        layout.addWidget(self.serial_config_widget)
+
+        self.wifi_host_edit = QtWidgets.QLineEdit("192.168.43.1")
+        self.wifi_port_spin = ClickToEditSpinBox()
+        self.wifi_port_spin.setRange(1, 65535)
+        self.wifi_port_spin.setValue(5000)
+        self._apply_min_height(self.wifi_host_edit, self.wifi_port_spin)
+
+        self.wifi_config_widget = QtWidgets.QWidget()
+        wifi_layout = QtWidgets.QFormLayout(self.wifi_config_widget)
+        wifi_layout.setContentsMargins(0, 0, 0, 0)
+        wifi_layout.setHorizontalSpacing(12)
+        wifi_layout.setVerticalSpacing(8)
+        wifi_layout.addRow("设备 IP", self.wifi_host_edit)
+        wifi_layout.addRow("TCP 端口", self.wifi_port_spin)
+        layout.addWidget(self.wifi_config_widget)
+
+        self.connect_button = QtWidgets.QPushButton("连接设备")
+        self.connect_button.clicked.connect(self.toggle_device_connection)
         self._apply_min_height(self.connect_button)
         layout.addWidget(self.connect_button)
+
+        self.connection_summary_label = QtWidgets.QLabel("当前未连接设备。")
+        self.connection_summary_label.setWordWrap(True)
+        self.connection_summary_label.setStyleSheet("font-size:12px; font-weight:normal; color:#718096;")
+        layout.addWidget(self.connection_summary_label)
+
+        self.on_transport_mode_changed()
         return card
 
     def _build_ai_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("🎨 AI 创作区", "输入提示词生成图像，或直接导入本地图片进行雕刻。")
+
+        self.template_combo = QtWidgets.QComboBox()
+        for name, description, prompt in PROMPT_TEMPLATES:
+            self.template_combo.addItem(name, {"description": description, "prompt": prompt})
+        self.template_combo.currentIndexChanged.connect(self.on_prompt_template_changed)
+        self._apply_min_height(self.template_combo)
+        layout.addWidget(QtWidgets.QLabel("比赛模板"))
+        layout.addWidget(self.template_combo)
+
+        self.template_hint_label = QtWidgets.QLabel()
+        self.template_hint_label.setWordWrap(True)
+        self.template_hint_label.setStyleSheet("font-size:12px; font-weight:normal; color:#718096;")
+        layout.addWidget(self.template_hint_label)
+
+        self.apply_template_button = QtWidgets.QPushButton("填入模板提示词")
+        self.apply_template_button.clicked.connect(self.apply_selected_template)
+        self._apply_min_height(self.apply_template_button)
+        layout.addWidget(self.apply_template_button)
 
         layout.addWidget(QtWidgets.QLabel("创意描述"))
         self.prompt_edit = QtWidgets.QTextEdit()
@@ -505,11 +581,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_min_height(self.generate_image_button)
         layout.addWidget(self.generate_image_button)
 
+        self.competition_flow_button = QtWidgets.QPushButton("⚡ 一键比赛流程")
+        self.competition_flow_button.setObjectName("BtnStart")
+        self.competition_flow_button.clicked.connect(self.on_start_competition_flow)
+        self._apply_min_height(self.competition_flow_button)
+        layout.addWidget(self.competition_flow_button)
+
         self.import_image_button = QtWidgets.QPushButton("📁 导入本地图片")
         self.import_image_button.setObjectName("BtnLocal")
         self.import_image_button.clicked.connect(self.on_import_local_image)
         self._apply_min_height(self.import_image_button)
         layout.addWidget(self.import_image_button)
+
+        self.competition_hint_label = QtWidgets.QLabel(
+            "比赛流程会自动执行：AI 生图 -> 轮廓提取 -> G-Code 生成 -> 发送到当前设备。"
+        )
+        self.competition_hint_label.setWordWrap(True)
+        self.competition_hint_label.setStyleSheet("font-size:12px; font-weight:normal; color:#718096;")
+        layout.addWidget(self.competition_hint_label)
+
+        self.on_prompt_template_changed()
         return card
 
     def _build_params_card(self) -> QtWidgets.QFrame:
@@ -644,7 +735,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return panel, image_label
 
     def _build_log_card(self) -> QtWidgets.QFrame:
-        card, layout = self._create_card("📝 系统消息板", "这里会显示串口收发、G-Code 预览和任务运行状态，便于教学演示。")
+        card, layout = self._create_card("📝 系统消息板", "这里会显示串口或 WiFi 收发、G-Code 预览和任务运行状态，便于比赛演示。")
 
         self.log_edit = QtWidgets.QTextEdit()
         self.log_edit.setReadOnly(True)
@@ -656,22 +747,53 @@ class MainWindow(QtWidgets.QMainWindow):
     def apply_stylesheet(self) -> None:
         self.setStyleSheet(BRIGHT_MAKER_QSS)
 
+    def _current_transport_mode(self) -> str:
+        return str(self.transport_combo.currentData() or "serial")
+
     def _update_connection_ui(self, connected: bool) -> None:
-        """根据串口状态更新相关按钮可用性，避免误操作。"""
+        """根据设备连接状态更新相关按钮可用性，避免误操作。"""
 
-        self.preview_button.setEnabled(connected)
-        self.start_button.setEnabled(connected)
-        self.emergency_button.setEnabled(connected)
+        mode = self._current_transport_mode()
+        if hasattr(self, "preview_button"):
+            self.preview_button.setEnabled(connected)
+        if hasattr(self, "start_button"):
+            self.start_button.setEnabled(connected)
+        if hasattr(self, "emergency_button"):
+            self.emergency_button.setEnabled(connected)
+        self.transport_combo.setEnabled(not connected)
+        self.serial_config_widget.setVisible(mode == "serial")
+        self.wifi_config_widget.setVisible(mode == "wifi")
+        self.port_combo.setEnabled((mode == "serial") and (not connected))
+        self.baud_combo.setEnabled((mode == "serial") and (not connected))
+        self.refresh_ports_button.setEnabled((mode == "serial") and (not connected))
+        self.wifi_host_edit.setEnabled((mode == "wifi") and (not connected))
+        self.wifi_port_spin.setEnabled((mode == "wifi") and (not connected))
+        if connected:
+            self.connect_button.setText("断开设备")
+            self.connection_summary_label.setText(
+                f"当前已通过{'WiFi TCP' if mode == 'wifi' else '串口 UART'}连接：{self.serial_thread.connection_description()}"
+            )
+        else:
+            self.connect_button.setText("连接设备")
+            if mode == "wifi":
+                self.connection_summary_label.setText("当前选择 WiFi TCP，可直连发射板 SoftAP 或 STA 地址。")
+            else:
+                self.connection_summary_label.setText("当前选择串口 UART，可连接发射板业务串口。")
 
-    def _ensure_serial_connected(self, action_name: str) -> bool:
+    def _ensure_device_connected(self, action_name: str) -> bool:
         """在发起真实下发任务前做界面层前置校验。"""
 
         if self.serial_thread.is_connected():
             return True
-        message = f"请先连接串口，再执行“{action_name}”。"
+        mode_name = "WiFi TCP" if self._current_transport_mode() == "wifi" else "串口 UART"
+        message = f"请先连接设备（当前模式：{mode_name}），再执行“{action_name}”。"
         self.append_log(f"[提示] {message}")
         QtWidgets.QMessageBox.information(self, "请先连接设备", message)
         return False
+
+    def on_transport_mode_changed(self) -> None:
+        self.serial_thread.set_transport_mode(self._current_transport_mode())
+        self._update_connection_ui(self.serial_thread.is_connected())
 
     def append_log(self, message: str) -> None:
         cursor = self.log_edit.textCursor()
@@ -698,11 +820,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_ai_generating(self, generating: bool) -> None:
         self.generate_image_button.setDisabled(generating)
+        self.competition_flow_button.setDisabled(generating)
+        self.apply_template_button.setDisabled(generating)
+        self.template_combo.setDisabled(generating)
         self.import_image_button.setDisabled(generating)
         if generating:
             self.generate_image_button.setText("✨ 生成中...")
+            self.competition_flow_button.setText("⚡ 比赛流程执行中...")
         else:
             self.generate_image_button.setText("✨ 魔法生成图像")
+            self.competition_flow_button.setText("⚡ 一键比赛流程")
+
+    def _current_template_payload(self) -> dict:
+        payload = self.template_combo.currentData()
+        return payload if isinstance(payload, dict) else {}
+
+    def on_prompt_template_changed(self) -> None:
+        payload = self._current_template_payload()
+        description = payload.get("description", "选择一套更适合比赛演示和轮廓提取的模板。")
+        self.template_hint_label.setText(f"模板说明：{description}")
+
+    def apply_selected_template(self) -> None:
+        payload = self._current_template_payload()
+        prompt = str(payload.get("prompt", "")).strip()
+        if not prompt:
+            return
+        self.prompt_edit.setPlainText(prompt)
+        self.append_log(f"已载入比赛模板：{self.template_combo.currentText()}")
 
     def _load_image_into_pipeline(self, image_path: str, source_name: str) -> None:
         try:
@@ -726,32 +870,79 @@ class MainWindow(QtWidgets.QMainWindow):
         self.append_log(f"{source_name}加载完成：{image_path}")
         self.append_log(f"轮廓提取完成，共 {len(contours)} 条路径，已完成降噪与居中排版。")
 
-    def toggle_serial_connection(self) -> None:
-        if self.connect_button.text() == "连接串口":
-            port = self.port_combo.currentText().strip()
-            if not port:
-                QtWidgets.QMessageBox.warning(self, "提示", "请先选择可用串口")
+    def _generate_gcode_for_current_contours(self, announce_preview: bool = True) -> bool:
+        if not self.current_contours:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先生成图像并提取轮廓")
+            return False
+        try:
+            self.current_gcode_lines = generate_gcode(
+                self.current_contours,
+                width_mm=self.width_spin.value(),
+                height_mm=self.height_spin.value(),
+                feed_rate=self.feed_spin.value(),
+                power=self.power_spin.value(),
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "G-Code 生成失败", str(exc))
+            self.append_log(f"[错误] {exc}")
+            return False
+
+        if announce_preview:
+            preview = "\n".join(self.current_gcode_lines[:20])
+            self.append_log("G-Code 生成完成，预览前 20 行：")
+            self.append_log(
+                f"当前任务尺寸: {self.width_spin.value():.1f} x {self.height_spin.value():.1f} mm，"
+                "输出坐标保持第一象限正数，可直接按当前板卡逻辑使用。"
+            )
+            self.append_log(preview)
+        else:
+            self.append_log("比赛流程已自动完成 G-Code 生成。")
+        return True
+
+    def toggle_device_connection(self) -> None:
+        if self.serial_thread.is_connected():
+            self.serial_thread.disconnect_transport()
+            self._update_connection_ui(False)
+            self.append_log("设备连接已断开。")
+            return
+
+        if self._current_transport_mode() == "wifi":
+            host = self.wifi_host_edit.text().strip()
+            if not host:
+                QtWidgets.QMessageBox.warning(self, "提示", "请输入发射板 WiFi IP 地址")
                 return
             try:
-                self.serial_thread.connect_port(port, int(self.baud_combo.currentText()))
-                self.connect_button.setText("断开串口")
+                self.serial_thread.connect_wifi(host, int(self.wifi_port_spin.value()))
                 self._update_connection_ui(True)
-                self.append_log(f"串口连接成功：{port}")
+                self.append_log(f"WiFi 连接成功：{host}:{self.wifi_port_spin.value()}")
             except Exception as exc:
-                QtWidgets.QMessageBox.critical(self, "串口错误", str(exc))
+                QtWidgets.QMessageBox.critical(self, "WiFi 错误", str(exc))
                 self.append_log(f"[错误] {exc}")
-        else:
-            self.serial_thread.disconnect_port()
-            self.connect_button.setText("连接串口")
-            self._update_connection_ui(False)
-            self.append_log("串口已断开。")
+            return
+
+        port = self.port_combo.currentText().strip()
+        if not port:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先选择可用串口")
+            return
+        try:
+            self.serial_thread.connect_port(port, int(self.baud_combo.currentText()))
+            self._update_connection_ui(True)
+            self.append_log(f"串口连接成功：{port}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "串口错误", str(exc))
+            self.append_log(f"[错误] {exc}")
 
     def on_generate_image(self) -> None:
+        self._start_ai_generation(auto_generate=False, auto_send=False)
+
+    def _start_ai_generation(self, auto_generate: bool, auto_send: bool) -> None:
         prompt = self.prompt_edit.toPlainText().strip()
         if not prompt:
             QtWidgets.QMessageBox.warning(self, "提示", "请输入 AI 提示词")
             return
 
+        self._pending_auto_generate = auto_generate
+        self._pending_auto_send = auto_send
         self._set_ai_generating(True)
         self.ai_thread = AIGeneratorThread(prompt=prompt, parent=self)
         self.ai_thread.started_signal.connect(self.append_log)
@@ -760,6 +951,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ai_thread.finished.connect(lambda: self._set_ai_generating(False))
         self.ai_thread.finished.connect(self.ai_thread.deleteLater)
         self.ai_thread.start()
+
+    def on_start_competition_flow(self) -> None:
+        if not self._ensure_device_connected("一键比赛流程"):
+            return
+        self.append_log(
+            f"比赛流程启动：模板={self.template_combo.currentText()}，设备={self.serial_thread.connection_description()}。"
+        )
+        self._start_ai_generation(auto_generate=True, auto_send=True)
 
     def on_import_local_image(self) -> None:
         image_path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -773,43 +972,41 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_image_into_pipeline(image_path, "本地图片")
 
     def on_ai_image_generated(self, image_path: str) -> None:
+        auto_generate = self._pending_auto_generate
+        auto_send = self._pending_auto_send
+        self._pending_auto_generate = False
+        self._pending_auto_send = False
         self.append_log(f"AI 图像生成完成：{image_path}")
         self._load_image_into_pipeline(image_path, "AI 图像")
+        if not auto_generate:
+            return
+        if not self._generate_gcode_for_current_contours(announce_preview=False):
+            return
+        if not auto_send:
+            return
+        if not self._ensure_device_connected("比赛流程自动发送"):
+            return
+        try:
+            self.serial_thread.enqueue_gcode(self.current_gcode_lines)
+            self.append_log("比赛流程已自动下发任务。")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "任务发送失败", str(exc))
+            self.append_log(f"[错误] {exc}")
 
     def on_ai_image_error(self, message: str) -> None:
+        self._pending_auto_generate = False
+        self._pending_auto_send = False
         QtWidgets.QMessageBox.critical(self, "生成失败", message)
         self.append_log(f"[错误] {message}")
 
     def on_generate_gcode(self) -> None:
-        if not self.current_contours:
-            QtWidgets.QMessageBox.warning(self, "提示", "请先生成图像并提取轮廓")
-            return
-        try:
-            self.current_gcode_lines = generate_gcode(
-                self.current_contours,
-                width_mm=self.width_spin.value(),
-                height_mm=self.height_spin.value(),
-                feed_rate=self.feed_spin.value(),
-                power=self.power_spin.value(),
-            )
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "G-Code 生成失败", str(exc))
-            self.append_log(f"[错误] {exc}")
-            return
-
-        preview = "\n".join(self.current_gcode_lines[:20])
-        self.append_log("G-Code 生成完成，预览前 20 行：")
-        self.append_log(
-            f"当前任务尺寸: {self.width_spin.value():.1f} x {self.height_spin.value():.1f} mm，"
-            "输出坐标保持第一象限正数，可直接按当前板卡逻辑使用。"
-        )
-        self.append_log(preview)
+        self._generate_gcode_for_current_contours(announce_preview=True)
 
     def on_preview_bbox(self) -> None:
         if not self.current_contours:
             QtWidgets.QMessageBox.warning(self, "提示", "请先生成图像并提取轮廓")
             return
-        if not self._ensure_serial_connected("红光边框预览"):
+        if not self._ensure_device_connected("红光边框预览"):
             return
         try:
             self.current_preview_lines = generate_preview_gcode(
@@ -826,7 +1023,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.serial_thread.enqueue_gcode(self.current_preview_lines)
             self.append_log("已下发红光边框预览任务，预览路径同样使用工作区正坐标。")
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "串口发送失败", str(exc))
+            QtWidgets.QMessageBox.critical(self, "任务发送失败", str(exc))
             self.append_log(f"[错误] {exc}")
 
     def on_start_engraving(self) -> None:
@@ -834,13 +1031,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.on_generate_gcode()
             if not self.current_gcode_lines:
                 return
-        if not self._ensure_serial_connected("激光雕刻"):
+        if not self._ensure_device_connected("激光雕刻"):
             return
         try:
             self.serial_thread.enqueue_gcode(self.current_gcode_lines)
             self.append_log("已下发雕刻任务。")
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "串口发送失败", str(exc))
+            QtWidgets.QMessageBox.critical(self, "任务发送失败", str(exc))
             self.append_log(f"[错误] {exc}")
 
     def on_export_gcode(self) -> None:
@@ -862,12 +1059,15 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             saved = save_gcode_file(self.current_gcode_lines, output_path)
             self.append_log(f"G-Code 已导出：{saved}")
-            self.append_log("如果现场不直接走串口，可把该文件导入 LaserGRBL 作为后备方案。")
+            self.append_log("如果现场不直接走应用内串口或 WiFi，可把该文件导入 LaserGRBL 作为后备方案。")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "导出失败", str(exc))
             self.append_log(f"[错误] {exc}")
 
     def on_emergency_stop(self) -> None:
+        if not self.serial_thread.is_connected():
+            self.append_log("[提示] 当前未连接设备，急停命令未发送。")
+            return
         self.serial_thread.emergency_stop()
         self.append_log("已触发急停。")
 

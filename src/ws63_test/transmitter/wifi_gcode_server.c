@@ -25,7 +25,11 @@
 #define WIFI_GCODE_LOG "[wifi gcode]"
 #define WIFI_GCODE_RX_LINE_MAX 128
 #define WIFI_GCODE_RX_BUF_SIZE 256
-#define WIFI_GCODE_LISTEN_BACKLOG 1
+/*
+ * 仍然只允许一个有效上游会话，但把 backlog 略微放大，避免短时间重连/多端探测时，
+ * 连接在来得及被 accept+busy 拒绝前就被 TCP 栈直接丢掉。
+ */
+#define WIFI_GCODE_LISTEN_BACKLOG 4
 #define WIFI_GCODE_RETRY_DELAY_MS 1000
 #define WIFI_GCODE_STA_SCAN_AP_LIMIT 32
 #define WIFI_GCODE_POLL_SLICE_MS 100
@@ -728,7 +732,41 @@ static int wifi_open_server_socket(void)
     return listen_sock;
 }
 
-static void wifi_handle_client_session(int client_sock)
+static void wifi_reject_busy_client(int client_sock)
+{
+    wifi_send_log(client_sock, "\r\nWS63 Laser Marker WiFi\r\n");
+    wifi_send_log(client_sock, "[MSG:busy another upstream host is connected]\r\n");
+    wifi_send_log(client_sock, "error:busy\r\n");
+}
+
+static void wifi_reject_pending_clients(int listen_sock)
+{
+    while (wifi_is_network_ready()) {
+        int ready = wifi_wait_socket_readable(listen_sock, 0);
+        if (ready <= 0) {
+            return;
+        }
+
+        {
+            int pending_sock;
+            struct sockaddr_in pending_addr;
+            socklen_t pending_addr_len = sizeof(pending_addr);
+
+            memset(&pending_addr, 0, sizeof(pending_addr));
+            pending_sock = accept(listen_sock, (struct sockaddr *)&pending_addr, &pending_addr_len);
+            if (pending_sock < 0) {
+                osal_printk(WIFI_GCODE_LOG " accept extra client failed errno=%d\r\n", errno);
+                return;
+            }
+
+            osal_printk(WIFI_GCODE_LOG " reject extra client: upstream already occupied\r\n");
+            wifi_reject_busy_client(pending_sock);
+            lwip_close(pending_sock);
+        }
+    }
+}
+
+static void wifi_handle_client_session(int listen_sock, int client_sock)
 {
     char line_buf[WIFI_GCODE_RX_LINE_MAX];
     uint8_t recv_buf[WIFI_GCODE_RX_BUF_SIZE];
@@ -746,6 +784,8 @@ static void wifi_handle_client_session(int client_sock)
     wifi_send_log(client_sock, "[MSG:One upstream host at a time]\r\n");
 
     while (wifi_is_network_ready()) {
+        wifi_reject_pending_clients(listen_sock);
+
         int ready = wifi_wait_socket_readable(client_sock, LASER_WIFI_SOCKET_POLL_TIMEOUT_MS);
         if (ready < 0) {
             osal_printk(WIFI_GCODE_LOG " client poll failed errno=%d\r\n", errno);
@@ -757,7 +797,12 @@ static void wifi_handle_client_session(int client_sock)
 
         {
             int recv_bytes = recv(client_sock, recv_buf, sizeof(recv_buf), 0);
-            if (recv_bytes <= 0) {
+            if (recv_bytes == 0) {
+                osal_printk(WIFI_GCODE_LOG " client closed by peer\r\n");
+                break;
+            }
+            if (recv_bytes < 0) {
+                osal_printk(WIFI_GCODE_LOG " client recv failed errno=%d\r\n", errno);
                 break;
             }
             wifi_process_rx_stream(client_sock, recv_buf, recv_bytes, line_buf, &line_pos, &line_overflow);
@@ -799,7 +844,7 @@ static void wifi_run_tcp_server_loop(void)
 
             g_wifi_status.client_connected = true;
             osal_printk(WIFI_GCODE_LOG " client connected\r\n");
-            wifi_handle_client_session(client_sock);
+            wifi_handle_client_session(listen_sock, client_sock);
             g_wifi_status.client_connected = false;
             lwip_close(client_sock);
             osal_printk(WIFI_GCODE_LOG " client disconnected\r\n");

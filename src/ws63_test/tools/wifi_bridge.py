@@ -229,6 +229,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for line in intro:
             print(f"  {line}")
 
+        if any(("busy another upstream host" in line) or (line == "error:busy") for line in intro):
+            print("\n当前板端已有其他上游客户端连接，请先断开旧连接后再重试。")
+            return 1
+
         # 自动查一次 $WIFI?
         try:
             ws = client.query_wifi_status(timeout=3)
