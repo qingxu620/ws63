@@ -29,6 +29,8 @@ static uint64_t g_last_activity_time = 0;
 static double g_report_x = 0.0;
 static double g_report_y = 0.0;
 
+static void fill_cmd_header(motion_cmd_t *cmd, uint8_t type);
+
 void gcode_processor_init(void)
 {
     g_feed_rate = DEFAULT_FEED_RATE;
@@ -41,6 +43,21 @@ void gcode_processor_init(void)
     g_last_activity_time = 0;
     g_report_x = 0.0;
     g_report_y = 0.0;
+}
+
+void gcode_processor_build_emergency_stop(motion_cmd_t *out_cmd)
+{
+    if (out_cmd == NULL) {
+        return;
+    }
+
+    fill_cmd_header(out_cmd, CMD_EMERGENCY_STOP);
+    out_cmd->laser_pwr = 0;
+    motion_cmd_set_crc(out_cmd);
+
+    g_laser_enabled = false;
+    g_laser_power = 0.0;
+    g_last_activity_time = uapi_systick_get_ms();
 }
 
 static void fill_cmd_header(motion_cmd_t *cmd, uint8_t type)
@@ -210,7 +227,7 @@ bool grbl_process_dollar(const char *line, char *response, int resp_size)
                  g_laser_enabled ? 3 : 5, (int)g_feed_rate, (int)g_laser_power);
     } else if ((strcmp(line, "$CAP") == 0) || (strcmp(line, "$CAP?") == 0)) {
         snprintf(response, resp_size,
-                 "[CAP:MCU=WS63,OS=LiteOS,ROLE=TX,SLE=1,WIFI=%d,UART=1,AI=1,SAFE=1,AUTO=1,BLE=0]\r\nok\r\n",
+                 "[CAP:MCU=WS63,OS=LiteOS,ROLE=TX,SLE=1,WIFI=%d,UART=1,AI=1,SAFE=1,ESTOP=1,AUTO=1,BLE=0]\r\nok\r\n",
                  LASER_WIFI_SOFTAP_ENABLE ? 1 : 0);
     } else {
         snprintf(response, resp_size, "ok\r\n");

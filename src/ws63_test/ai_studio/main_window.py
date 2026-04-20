@@ -206,8 +206,8 @@ QPushButton#BtnAction {
 PROMPT_TEMPLATES = [
     (
         "创客徽章",
-        "适合比赛展示的圆形徽章，强调芯片、无线连接与激光雕刻元素。",
-        "设计一个创客比赛徽章图案，主体包含芯片、电路线、激光光束和简洁机械元素，"
+        "适合作品展示的圆形徽章，强调芯片、无线连接与激光雕刻元素。",
+        "设计一个创客徽章图案，主体包含芯片、电路线、激光光束和简洁机械元素，"
         "线稿插画风格，主体居中，白底，高对比，适合激光雕刻轮廓提取",
     ),
     (
@@ -313,6 +313,43 @@ class ClickToEditDoubleSpinBox(QtWidgets.QDoubleSpinBox):
         super().mousePressEvent(event)
 
 
+class ClickToSelectComboBox(QtWidgets.QComboBox):
+    """
+    默认忽略滚轮，只有展开下拉列表后才允许滚轮切换。
+
+    设计目标：
+    - 防止鼠标经过时误改连接方式、串口或波特率；
+    - 用户必须先点击控件，明确进入选择动作。
+    """
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(QtCore.Qt.ClickFocus)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # pragma: no cover - GUI 事件
+        if self.view().isVisible():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
+class EditableBaudComboBox(ClickToSelectComboBox):
+    """可手动输入波特率，同时保留常见预设值。"""
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        self.setDuplicatesEnabled(False)
+        self.addItems(["115200", "230400", "460800", "921600"])
+        self.setCurrentText("115200")
+
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("输入自定义波特率")
+            line_edit.setValidator(QtGui.QIntValidator(1, 10000000, line_edit))
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -412,7 +449,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         serial_page = self._create_left_tab_page(self._build_connection_card())
-        ai_page = self._create_left_tab_page(self._build_ai_card())
+        ai_page = self._build_left_scroll_page(self._build_ai_card())
         machine_page = self._build_machine_scroll_page()
 
         self.left_tabs.addTab(serial_page, "🔌 步骤一：连接")
@@ -420,26 +457,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_tabs.addTab(machine_page, "🚀 步骤三：雕刻")
         return self.left_tabs
 
-    def _build_machine_scroll_page(self) -> QtWidgets.QScrollArea:
-        """步骤三内容较高，单独放入滚动区，避免卡片和按钮被挤压。"""
+    def _build_left_scroll_page(self, *widgets: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+        """为左侧高内容页提供统一的纵向滚动能力，避免控件被压缩。"""
 
         scroll = QtWidgets.QScrollArea()
         scroll.setObjectName("LeftTabScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         container = QtWidgets.QWidget()
         container_layout = QtWidgets.QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(8)
-        container_layout.addWidget(self._build_params_card())
-        container_layout.addWidget(self._build_action_card())
+        for widget in widgets:
+            container_layout.addWidget(widget)
         container_layout.addStretch(1)
 
         scroll.setWidget(container)
         return scroll
+
+    def _build_machine_scroll_page(self) -> QtWidgets.QScrollArea:
+        """步骤三内容较高，单独放入滚动区，避免卡片和按钮被挤压。"""
+
+        return self._build_left_scroll_page(
+            self._build_params_card(),
+            self._build_action_card(),
+        )
 
     def _build_right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
@@ -485,7 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_connection_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("🔌 设备连接", "比赛版支持实物串口 UART 与 WiFi TCP 两种设备接入方式。")
 
-        self.transport_combo = QtWidgets.QComboBox()
+        self.transport_combo = ClickToSelectComboBox()
         self.transport_combo.addItem("串口 UART", "serial")
         self.transport_combo.addItem("WiFi TCP", "wifi")
         self.transport_combo.currentIndexChanged.connect(self.on_transport_mode_changed)
@@ -493,14 +539,12 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("连接方式"))
         layout.addWidget(self.transport_combo)
 
-        self.port_combo = QtWidgets.QComboBox()
+        self.port_combo = ClickToSelectComboBox()
         self.refresh_ports_button = QtWidgets.QPushButton("刷新串口")
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
         self._apply_min_height(self.port_combo, self.refresh_ports_button)
 
-        self.baud_combo = QtWidgets.QComboBox()
-        self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
-        self.baud_combo.setCurrentText("115200")
+        self.baud_combo = EditableBaudComboBox()
         self._apply_min_height(self.baud_combo)
 
         self.serial_config_widget = QtWidgets.QWidget()
@@ -554,7 +598,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.template_combo.addItem(name, {"description": description, "prompt": prompt})
         self.template_combo.currentIndexChanged.connect(self.on_prompt_template_changed)
         self._apply_min_height(self.template_combo)
-        layout.addWidget(QtWidgets.QLabel("比赛模板"))
+        layout.addWidget(QtWidgets.QLabel("创作模板"))
         layout.addWidget(self.template_combo)
 
         self.template_hint_label = QtWidgets.QLabel()
@@ -791,6 +835,21 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "请先连接设备", message)
         return False
 
+    def _current_baud_rate(self) -> Optional[int]:
+        text = self.baud_combo.currentText().strip()
+        if not text:
+            QtWidgets.QMessageBox.warning(self, "提示", "请输入有效的波特率。")
+            return None
+        try:
+            value = int(text)
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "提示", "波特率必须是正整数。")
+            return None
+        if value <= 0:
+            QtWidgets.QMessageBox.warning(self, "提示", "波特率必须大于 0。")
+            return None
+        return value
+
     def on_transport_mode_changed(self) -> None:
         self.serial_thread.set_transport_mode(self._current_transport_mode())
         self._update_connection_ui(self.serial_thread.is_connected())
@@ -837,7 +896,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_prompt_template_changed(self) -> None:
         payload = self._current_template_payload()
-        description = payload.get("description", "选择一套更适合比赛演示和轮廓提取的模板。")
+        description = payload.get("description", "选择一套更适合当前创作方向和轮廓提取的模板。")
         self.template_hint_label.setText(f"模板说明：{description}")
 
     def apply_selected_template(self) -> None:
@@ -846,7 +905,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not prompt:
             return
         self.prompt_edit.setPlainText(prompt)
-        self.append_log(f"已载入比赛模板：{self.template_combo.currentText()}")
+        self.append_log(f"已载入模板：{self.template_combo.currentText()}")
 
     def _load_image_into_pipeline(self, image_path: str, source_name: str) -> None:
         try:
@@ -924,10 +983,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not port:
             QtWidgets.QMessageBox.warning(self, "提示", "请先选择可用串口")
             return
+        baud_rate = self._current_baud_rate()
+        if baud_rate is None:
+            return
         try:
-            self.serial_thread.connect_port(port, int(self.baud_combo.currentText()))
+            self.serial_thread.connect_port(port, baud_rate)
             self._update_connection_ui(True)
-            self.append_log(f"串口连接成功：{port}")
+            self.append_log(f"串口连接成功：{port} @ {baud_rate}")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "串口错误", str(exc))
             self.append_log(f"[错误] {exc}")

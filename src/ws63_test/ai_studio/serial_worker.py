@@ -9,7 +9,7 @@
 - 独立 QThread 处理发送任务；
 - 一条 G-Code 一条 G-Code 地发；
 - 每发一条必须等待下位机返回 ok；
-- 支持急停，串口模式发送 ``M5 + !``，WiFi 模式发送 ``M5``。
+- 支持急停，串口模式发送 ``M5 + !``，WiFi 模式发送 ``!``。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import queue
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import serial
 from serial import Serial
@@ -30,7 +30,7 @@ _TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 
-from wifi_client import ConnectionError_, TimeoutError_, WifiGcodeClient  # type: ignore
+from wifi_client import ConnectionError_, TimeoutError_, WifiGcodeClient, parse_status_line  # type: ignore
 
 
 class SerialWorkerThread(QtCore.QThread):
@@ -40,6 +40,7 @@ class SerialWorkerThread(QtCore.QThread):
     status_signal = Signal(str)
     progress_signal = Signal(int)
     ports_signal = Signal(list)
+    telemetry_signal = Signal(dict)
     finished_signal = Signal(bool, str)
 
     def __init__(self, parent: Optional[QtCore.QObject] = None) -> None:
@@ -53,6 +54,9 @@ class SerialWorkerThread(QtCore.QThread):
         self._wait_ok_timeout = 8.0
         self._transport_mode = "serial"
         self._connection_desc = ""
+        self._sending = False
+        self._status_poll_interval = 1.0
+        self._last_status_poll_at = 0.0
 
     @staticmethod
     def list_available_ports() -> List[str]:
@@ -94,6 +98,7 @@ class SerialWorkerThread(QtCore.QThread):
             self._transport_mode = "serial"
             self._connected = True
             self._connection_desc = f"{port_name} @ {baud_rate}"
+            self._last_status_poll_at = 0.0
             self.status_signal.emit(f"串口已连接: {port_name} @ {baud_rate}")
         except serial.SerialException as exc:
             self._serial = None
@@ -102,6 +107,10 @@ class SerialWorkerThread(QtCore.QThread):
             raise RuntimeError(f"串口连接失败: {exc}") from exc
 
     def _on_wifi_log_line(self, line: str) -> None:
+        if line in ("> ?", "> $WIFI?"):
+            return
+        if line.startswith("<") or line.startswith("[WIFI:"):
+            return
         if line.startswith("> "):
             self.log_signal.emit(f"[TX] {line[2:]}")
             return
@@ -128,6 +137,7 @@ class SerialWorkerThread(QtCore.QThread):
         self._transport_mode = "wifi"
         self._connected = True
         self._connection_desc = f"{host}:{port}"
+        self._last_status_poll_at = 0.0
         self.status_signal.emit(f"WiFi 已连接: {host}:{port}")
 
     def is_connected(self) -> bool:
@@ -154,7 +164,11 @@ class SerialWorkerThread(QtCore.QThread):
         self._wifi_client = None
         self._connected = False
         self._connection_desc = ""
+        self._sending = False
         self.status_signal.emit("设备连接已断开")
+
+    def is_sending(self) -> bool:
+        return self._sending
 
     def enqueue_gcode(self, gcode_lines: List[str]) -> None:
         if not gcode_lines:
@@ -223,13 +237,91 @@ class SerialWorkerThread(QtCore.QThread):
 
         raise RuntimeError("等待下位机 ok 超时")
 
+    def _query_serial_status(self, timeout: float = 1.0) -> Dict[str, object]:
+        if self._serial is None or not self._connected:
+            raise RuntimeError("串口未连接，无法查询状态")
+
+        self._serial.write(b"?\n")
+        self._serial.flush()
+
+        deadline = time.monotonic() + timeout
+        buffer = ""
+        while time.monotonic() < deadline:
+            chunk = self._serial.read(self._serial.in_waiting or 1)
+            if not chunk:
+                time.sleep(0.01)
+                continue
+
+            try:
+                text = chunk.decode("utf-8", errors="replace")
+            except Exception:
+                text = repr(chunk)
+            buffer += text
+
+            normalized = buffer.replace("\r", "\n")
+            parts = normalized.split("\n")
+            if normalized.endswith("\n"):
+                lines = parts[:-1]
+                buffer = ""
+            else:
+                lines = parts[:-1]
+                buffer = parts[-1]
+
+            for raw_line in lines:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                parsed = parse_status_line(line)
+                if parsed is not None:
+                    return parsed
+                if line.lower().startswith("error"):
+                    raise RuntimeError(f"状态查询失败: {line}")
+
+        raise RuntimeError("状态查询超时")
+
+    def query_live_status(self) -> Dict[str, object]:
+        if not self.is_connected():
+            raise RuntimeError("设备未连接，无法查询状态")
+
+        snapshot: Dict[str, object] = {
+            "transport": self._transport_mode,
+            "endpoint": self._connection_desc,
+        }
+
+        if self._transport_mode == "wifi":
+            if self._wifi_client is None:
+                raise RuntimeError("WiFi 未连接，无法查询状态")
+            snapshot.update(self._wifi_client.query_status(timeout=1.0))
+            try:
+                snapshot["wifi"] = self._wifi_client.query_wifi_status(timeout=1.0)
+            except Exception:
+                pass
+            return snapshot
+
+        snapshot.update(self._query_serial_status(timeout=1.0))
+        return snapshot
+
+    def _poll_live_status_if_needed(self) -> None:
+        if not self.is_connected() or self._sending:
+            return
+
+        now = time.monotonic()
+        if (now - self._last_status_poll_at) < self._status_poll_interval:
+            return
+
+        self._last_status_poll_at = now
+        try:
+            self.telemetry_signal.emit(self.query_live_status())
+        except Exception:
+            pass
+
     def _send_emergency_commands(self) -> None:
         if not self.is_connected():
             return
         if self._transport_mode == "wifi":
             try:
                 if self._wifi_client is not None:
-                    self._wifi_client.send_line("M5", timeout=2.0)
+                    self._wifi_client.send_line("!", timeout=2.0)
             except Exception as exc:  # pragma: no cover - 网络环境相关
                 self.log_signal.emit(f"[ERR] WiFi 急停指令发送失败: {exc}")
             return
@@ -275,6 +367,7 @@ class SerialWorkerThread(QtCore.QThread):
                 try:
                     job = self._command_queue.get(timeout=0.2)
                 except queue.Empty:
+                    self._poll_live_status_if_needed()
                     continue
 
                 if not self.is_connected():
@@ -282,15 +375,20 @@ class SerialWorkerThread(QtCore.QThread):
                     continue
 
                 self._emergency_stop = False
+                self._sending = True
                 self.progress_signal.emit(0)
                 if self._transport_mode == "wifi":
                     self.status_signal.emit("开始通过 WiFi 发送 G-Code")
                 else:
                     self.status_signal.emit("开始通过串口发送 G-Code")
                 self._send_job(job)
+                self._sending = False
                 self.progress_signal.emit(100)
+                self._last_status_poll_at = 0.0
+                self._poll_live_status_if_needed()
                 self.finished_signal.emit(True, "任务执行完成")
             except Exception as exc:  # pragma: no cover - 运行时相关
+                self._sending = False
                 self.finished_signal.emit(False, str(exc))
                 if self._emergency_stop:
                     self._send_emergency_commands()

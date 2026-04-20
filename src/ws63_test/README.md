@@ -10,17 +10,20 @@
 配套支持目录：
 - `tools/`：Windows 上位机自动化测试脚本。
 - `ai_studio/`：AI 智能创作中枢 PC 上位机，负责 AI 生图、轮廓提取、G-Code 生成，以及通过串口或 WiFi 下发到发射板。
-- `COMPETITION_SPRINT_PLAN.md`：基于当前工程状态整理的两个月比赛冲刺方案。
-- `WS63_DEBUG_QUICKSTART.md`：现场联调与排障手册。
+- `PROJECT_CAPABILITY_FEASIBILITY_PLAN.md`：汇总当前已实现能力、提升方向可行性与项目推进计划，适合对外说明与内部规划。
+- `WS63_DEBUG_QUICKSTART.md`：统一的现场联调、安卓手机网络方案、主备切换与验收手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
+- `tools/WIFI_DEBUG_MANUAL.md`：WiFi 工具链、网页控制台与自动化脚本的专用调试手册。
 
 ## 1. 你会先用到哪些文档
 
 如果你是第一次接手这个工程，建议按下面顺序看：
 
 1. 先看本 README：搞清楚工程目标、目录、编译烧录、验收路径。
-2. 再看 [WS63_DEBUG_QUICKSTART.md](./WS63_DEBUG_QUICKSTART.md)：照着做双板联调。
-3. 最后看 [CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)：进入源码、二次开发、问题定位。
+2. 再看 [WS63_DEBUG_QUICKSTART.md](./WS63_DEBUG_QUICKSTART.md)：按“先主方案，再备方案”的顺序做现场联调和验收。
+3. 再看 [PROJECT_CAPABILITY_FEASIBILITY_PLAN.md](./PROJECT_CAPABILITY_FEASIBILITY_PLAN.md)：快速了解当前成果、扩展方向和推进计划。
+4. 如果重点排查 WiFi，再看 [WIFI_DEBUG_MANUAL.md](./tools/WIFI_DEBUG_MANUAL.md)：直接使用现成工具链联调。
+5. 最后看 [CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)：进入源码、二次开发、问题定位。
 
 ## 2. 前置知识目录
 
@@ -394,7 +397,7 @@ python3 src/ws63_test/tools/wifi_console.py --web-port 9000
 - 浏览器打开 `http://localhost:8080`（或自定义端口）
 - 页面会轮询刷新运动状态和 `$WIFI?` 状态，不是一次连接后的静态缓存
 - “清空日志”会同时清空页面和后端会话日志，后续轮询不会回灌旧内容
-- “急停”当前仍发送 `M5`，不额外引入新的板端实时停机协议
+- “急停”当前发送 `!`，会走板端真急停链路，立即停光、清队列并打断当前运动
 
 TCP 通用验证工具：
 

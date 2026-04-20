@@ -33,6 +33,8 @@ logger = logging.getLogger("wifi_test")
 
 # 留出更宽松的 TCP teardown 窗口，降低测试项切换时踩到旧会话尾声的概率。
 TEST_RECONNECT_SETTLE_S = 0.8
+CONNECT_RETRY_ATTEMPTS = 3
+CONNECT_RETRY_BACKOFF_S = 0.2
 
 # ---------------------------------------------------------------------------
 # 测试结果
@@ -196,6 +198,29 @@ def resolve_suites(name: str) -> List[str]:
     return SUITE_MAP.get(name, [name])
 
 
+def connect_with_retry(client: WifiGcodeClient, host: str, port: int, timeout: float) -> None:
+    """初始建连允许做有限次短重试，吸收会话切换窗口里的瞬时失败。"""
+    last_exc: Optional[ConnectionError_] = None
+
+    for attempt in range(1, CONNECT_RETRY_ATTEMPTS + 1):
+        try:
+            client.connect(host, port, timeout=timeout)
+            return
+        except ConnectionError_ as exc:
+            last_exc = exc
+            if attempt >= CONNECT_RETRY_ATTEMPTS:
+                break
+            backoff_s = CONNECT_RETRY_BACKOFF_S * attempt
+            logger.warning(
+                "connect attempt %d/%d failed: %s; retry in %.1fs",
+                attempt, CONNECT_RETRY_ATTEMPTS, exc, backoff_s,
+            )
+            time.sleep(backoff_s)
+
+    assert last_exc is not None
+    raise last_exc
+
+
 def run_named_test(
     client: WifiGcodeClient,
     name: str,
@@ -289,7 +314,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             client = WifiGcodeClient()
 
             try:
-                client.connect(args.host, args.port, timeout=args.timeout)
+                connect_with_retry(client, args.host, args.port, timeout=args.timeout)
             except ConnectionError_ as exc:
                 logger.error("%sconnect failed before %s: %s", cycle_label, test_name, exc)
                 all_results.append(

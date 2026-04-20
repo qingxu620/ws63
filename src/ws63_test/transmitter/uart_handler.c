@@ -121,11 +121,39 @@ static bool uart_send_business_cmd_reliably(const motion_cmd_t *cmd)
     return false;
 }
 
+static bool uart_is_emergency_stop_command(const char *line)
+{
+    return (strcmp(line, "!") == 0) || (strcmp(line, "$STOP") == 0) || (strcmp(line, "M112") == 0);
+}
+
+static void uart_handle_emergency_stop(void)
+{
+    motion_cmd_t cmd;
+
+    if (!sle_laser_client_is_ready()) {
+        uart_send_str("error:estop_unavailable\r\n");
+        return;
+    }
+
+    gcode_processor_build_emergency_stop(&cmd);
+    if (!uart_send_business_cmd_reliably(&cmd)) {
+        uart_send_str("error:estop_failed\r\n");
+        return;
+    }
+
+    uart_send_str("ok\r\n");
+}
+
 /* ================= 处理一行 G-Code ================= */
 static void process_line(const char *line, int len)
 {
     if (len == 0)
         return;
+
+    if (uart_is_emergency_stop_command(line)) {
+        uart_handle_emergency_stop();
+        return;
+    }
 
     /* '?' 实时命令 — 状态查询 */
     if (line[0] == '?') {

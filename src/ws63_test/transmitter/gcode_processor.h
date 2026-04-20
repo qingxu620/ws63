@@ -17,6 +17,12 @@ extern "C" {
 void gcode_processor_init(void);
 
 /**
+ * @brief  生成一条急停命令
+ * @param  out_cmd 输出命令包
+ */
+void gcode_processor_build_emergency_stop(motion_cmd_t *out_cmd);
+
+/**
  * @brief  处理一行 G-Code 文本
  * @param  line  G-Code 文本行
  * @param  len   文本长度

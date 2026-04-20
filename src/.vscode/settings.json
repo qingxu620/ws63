@@ -6,5 +6,6 @@
     "C_Cpp.vcpkg.enabled": false,
     "C_Cpp.default.browse.path": [
         "${workspaceFolder}"
-    ]
+    ],
+    "remote.autoForwardPortsFallback": 0
 }

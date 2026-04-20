@@ -30,6 +30,7 @@
  * 连接在来得及被 accept+busy 拒绝前就被 TCP 栈直接丢掉。
  */
 #define WIFI_GCODE_LISTEN_BACKLOG 4
+#define WIFI_GCODE_CLIENT_CLOSE_SETTLE_MS 50
 #define WIFI_GCODE_RETRY_DELAY_MS 1000
 #define WIFI_GCODE_STA_SCAN_AP_LIMIT 32
 #define WIFI_GCODE_POLL_SLICE_MS 100
@@ -243,9 +244,32 @@ static bool wifi_is_status_query(const char *line)
     return (strcmp(line, "$WIFI") == 0) || (strcmp(line, "$WIFI?") == 0);
 }
 
+static bool wifi_is_emergency_stop_command(const char *line)
+{
+    return (strcmp(line, "!") == 0) || (strcmp(line, "$STOP") == 0) || (strcmp(line, "M112") == 0);
+}
+
 static void wifi_process_line(int client_sock, const char *line, int len)
 {
     if (len == 0) {
+        return;
+    }
+
+    if (wifi_is_emergency_stop_command(line)) {
+        motion_cmd_t cmd;
+
+        if (!sle_laser_client_is_ready()) {
+            wifi_send_log(client_sock, "error:estop_unavailable\r\n");
+            return;
+        }
+
+        gcode_processor_build_emergency_stop(&cmd);
+        if (!wifi_send_business_cmd_reliably(&cmd)) {
+            wifi_send_log(client_sock, "error:estop_failed\r\n");
+            return;
+        }
+
+        wifi_send_log(client_sock, "ok\r\n");
         return;
     }
 
@@ -848,6 +872,7 @@ static void wifi_run_tcp_server_loop(void)
             g_wifi_status.client_connected = false;
             lwip_close(client_sock);
             osal_printk(WIFI_GCODE_LOG " client disconnected\r\n");
+            osal_msleep(WIFI_GCODE_CLIENT_CLOSE_SETTLE_MS);
         }
     }
 

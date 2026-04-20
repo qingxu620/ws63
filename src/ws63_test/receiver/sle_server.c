@@ -156,6 +156,7 @@ static bool validate_motion_cmd(const motion_cmd_t *cmd, uint8_t *error_code)
         case CMD_LASER_OFF:
         case CMD_SET_ORIGIN:
         case CMD_SET_MODE:
+        case CMD_EMERGENCY_STOP:
         case CMD_HEARTBEAT:
             return true;
 
@@ -235,6 +236,17 @@ static void ssaps_write_request_cbk(uint8_t server_id,
             sle_send_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
         }
 #endif
+        return;
+    }
+
+    if (cmd.cmd == CMD_EMERGENCY_STOP) {
+        osal_printk("[laser rx] emergency stop! seq=%u\r\n", cmd.seq);
+        interpolator_request_abort();
+        laser_enable(false);
+        laser_set_power(0);
+        cmd_queue_flush();
+        g_last_accepted_seq = cmd.seq;
+        sle_send_status_pkt(STATUS_ERROR, STATUS_ERR_ESTOP, g_last_accepted_seq);
         return;
     }
 

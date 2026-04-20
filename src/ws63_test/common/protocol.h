@@ -19,6 +19,7 @@ extern "C" {
 #define CMD_LASER_OFF 0x04  /* M5 关闭激光 */
 #define CMD_SET_ORIGIN 0x05 /* G92 设置原点 */
 #define CMD_SET_MODE 0x06   /* G90/G91 设置模式 */
+#define CMD_EMERGENCY_STOP 0x07 /* 急停：立即停光、清队列、打断当前运动 */
 #define CMD_HEARTBEAT 0xFE  /* 心跳 */
 
 /* ================= 标志位 ================= */
@@ -48,6 +49,7 @@ typedef struct __attribute__((packed)) {
 #define STATUS_ERR_QUEUE_FULL 0x01
 #define STATUS_ERR_INVALID_CMD 0x02
 #define STATUS_ERR_INVALID_PARAM 0x03
+#define STATUS_ERR_ESTOP 0x04
 
 /* ================= 状态反馈包 (接收板 → 发射板) ================= */
 typedef struct __attribute__((packed)) {

@@ -47,6 +47,11 @@ bool interpolator_is_busy(void);
 void interpolator_set_origin(void);
 
 /**
+ * @brief  请求立即打断当前运动
+ */
+void interpolator_request_abort(void);
+
+/**
  * @brief  插补任务入口函数 (由 RTOS 任务调用)
  */
 int task_interpolator_entry(void *arg);

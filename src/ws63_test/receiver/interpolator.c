@@ -17,6 +17,7 @@
 static double g_current_x = 0.0;
 static double g_current_y = 0.0;
 static volatile bool g_motion_active = false;
+static volatile bool g_abort_requested = false;
 
 /* ================= 坐标转换 ================= */
 static inline uint16_t mm_to_dac(double mm, double scale)
@@ -55,21 +56,28 @@ static inline void write_current_position_to_dac(void)
     dac8562_write_xy(x_mm_to_dac(g_current_x), y_mm_to_dac(g_current_y));
 }
 
-static inline void interp_delay_us(unsigned int delay_us)
+static bool interp_delay_us_interruptible(unsigned int delay_us)
 {
-    if (delay_us >= 1000U) {
-        osal_msleep(delay_us / 1000U);
-        delay_us %= 1000U;
-    }
-    if (delay_us > 0U) {
+    while (delay_us > 0U) {
+        if (g_abort_requested) {
+            return false;
+        }
+        if (delay_us >= 1000U) {
+            osal_msleep(1);
+            delay_us -= 1000U;
+            continue;
+        }
         osal_udelay(delay_us);
+        delay_us = 0U;
     }
+    return !g_abort_requested;
 }
 
 /* ================= 核心插补函数 ================= */
 void perform_move(double target_x, double target_y, double feed_rate_mm_min)
 {
     g_motion_active = true;
+    bool aborted = false;
 
     double clamped_x = clamp_axis_mm(target_x, GALVO_X_MIN_MM, GALVO_X_MAX_MM);
     double clamped_y = clamp_axis_mm(target_y, GALVO_Y_MIN_MM, GALVO_Y_MAX_MM);
@@ -117,6 +125,12 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
     safety_update_last_cmd_time();
 
     for (int i = 1; i <= steps; i++) {
+        if (g_abort_requested) {
+            aborted = true;
+            osal_printk("[interpolator] move aborted before step %d/%d\r\n", i, steps);
+            break;
+        }
+
         g_current_x += step_dx;
         g_current_y += step_dy;
 
@@ -124,7 +138,11 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
         write_current_position_to_dac();
 
         /* 延时拆分: 毫秒睡眠 + 微秒补偿 */
-        interp_delay_us(delay_us);
+        if (!interp_delay_us_interruptible(delay_us)) {
+            aborted = true;
+            osal_printk("[interpolator] move aborted during delay step %d/%d\r\n", i, steps);
+            break;
+        }
 
         /*
          * 每 INTERP_UNLOCK_INTERVAL 步更新活动时间并让出一次 CPU
@@ -134,6 +152,14 @@ void perform_move(double target_x, double target_y, double feed_rate_mm_min)
             safety_update_last_cmd_time();
             osal_yield();
         }
+    }
+
+    if (aborted) {
+        write_current_position_to_dac();
+        safety_update_last_cmd_time();
+        g_motion_active = false;
+        g_abort_requested = false;
+        return;
     }
 
     /* 修正终点坐标 (消除浮点累积误差) */
@@ -166,6 +192,15 @@ void interpolator_set_origin(void)
     g_current_y = 0.0;
     write_current_position_to_dac();
     g_motion_active = false;
+    g_abort_requested = false;
+}
+
+void interpolator_request_abort(void)
+{
+    g_abort_requested = true;
+    if (!g_motion_active) {
+        g_abort_requested = false;
+    }
 }
 
 void interpolator_init(void)
@@ -173,6 +208,7 @@ void interpolator_init(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_motion_active = false;
+    g_abort_requested = false;
     write_current_position_to_dac();
 }
 
@@ -213,6 +249,13 @@ int task_interpolator_entry(void *arg)
 
             case CMD_SET_ORIGIN:
                 interpolator_set_origin();
+                break;
+
+            case CMD_EMERGENCY_STOP:
+                interpolator_request_abort();
+                laser_enable(false);
+                laser_set_power(0);
+                cmd_queue_flush();
                 break;
 
             default:
