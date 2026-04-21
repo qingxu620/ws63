@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .ai_image_generator import AIGeneratorThread
 from .gcode_generator import (
@@ -28,14 +28,29 @@ from .serial_worker import SerialWorkerThread
 
 BRIGHT_MAKER_QSS = """
 QWidget {
-    background-color: #F0F4F8;
+    background-color: #F5F7FB;
     color: #2D3748;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     font-size: 14px;
 }
 QFrame#Card {
     background-color: #FFFFFF;
-    border: 1px solid #E2E8F0;
+    border: 1px solid #DCE3EC;
+    border-radius: 16px;
+    margin: 4px;
+}
+QFrame#Card[previewRole="floating"][previewCollapsed="true"] {
+    background-color: #FFFFFF;
+    border: 1px solid #E6EDF5;
+    border-radius: 14px;
+}
+QFrame#Card[previewRole="floating"][previewCollapsed="true"][previewHover="true"] {
+    background-color: #F8FBFE;
+    border: 1px solid #DCE7F2;
+}
+QFrame#StatusCard {
+    background-color: #FFFFFF;
+    border: 1px solid #DCE3EC;
     border-radius: 16px;
     margin: 4px;
 }
@@ -43,14 +58,14 @@ QLabel { background-color: transparent; font-weight: bold; color: #4A5568; }
 
 QPushButton {
     background-color: #FFFFFF;
-    border: 2px solid #E2E8F0;
+    border: 1px solid #D6DCE6;
     border-radius: 10px;
-    padding: 8px 16px;
-    min-height: 36px;
+    padding: 7px 14px;
+    min-height: 34px;
     font-weight: bold;
     color: #4A5568;
 }
-QPushButton:hover { border-color: #A0AEC0; background-color: #F7FAFC; }
+QPushButton:hover { border-color: #9FB3C8; background-color: #F7FAFD; }
 QPushButton:pressed { background-color: #EDF2F7; }
 QPushButton:disabled {
     background-color: #E2E8F0;
@@ -116,10 +131,16 @@ QLabel#CardTitle {
 }
 
 QLabel#CardHint {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: normal;
     color: #718096;
-    padding-bottom: 4px;
+    padding-bottom: 2px;
+}
+
+QLabel#CompactHint {
+    font-size: 11px;
+    font-weight: normal;
+    color: #718096;
 }
 
 QLabel#PreviewTitle {
@@ -133,6 +154,102 @@ QFrame#PreviewPanel {
     border-radius: 14px;
 }
 
+QWidget#PreviewFloatingBar {
+    background: transparent;
+}
+
+QFrame#LiveTelemetryStrip {
+    background-color: #F8FBFE;
+    border: 1px solid #DCE3EC;
+    border-radius: 12px;
+}
+
+QLabel#LiveTelemetryLabel {
+    font-size: 11px;
+    font-weight: normal;
+    color: #718096;
+    padding: 1px 2px;
+}
+
+QLabel#LiveTelemetryValue {
+    font-size: 14px;
+    font-weight: 800;
+    color: #2D3748;
+    padding: 1px 2px;
+}
+
+QFrame#LeftFillPanel {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #EFF4FB, stop:1 #E7EEF8);
+    border: 1px solid #D6E2F1;
+    border-radius: 16px;
+    margin: 4px;
+}
+
+QLabel#LeftFillTitle {
+    font-size: 13px;
+    font-weight: 800;
+    color: #355070;
+}
+
+QLabel#LeftFillText {
+    font-size: 12px;
+    font-weight: normal;
+    color: #5F7288;
+}
+
+QToolButton#PreviewToggleButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 11px;
+    color: rgba(65, 90, 119, 92);
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+}
+
+QToolButton#PreviewToggleButton:hover {
+    background-color: rgba(237, 244, 251, 220);
+}
+
+QToolButton#PreviewToggleButton[active="true"] {
+    background-color: rgba(247, 250, 253, 235);
+    color: #415A77;
+}
+
+QFrame#PreviewCompactBar {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#PreviewCompactTag {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+}
+
+QLabel#PreviewCompactSummary {
+    font-size: 12px;
+    font-weight: normal;
+    color: #526072;
+}
+
+QLabel#PreviewCompactCaption {
+    font-size: 11px;
+    font-weight: normal;
+    color: #7B8794;
+}
+
+QLabel#PreviewCompactChip {
+    background-color: #FFFFFF;
+    border: 1px solid #DCE6F0;
+    border-radius: 9px;
+    color: #415A77;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 4px 8px;
+}
+
 QLabel#PreviewCanvas {
     background-color: #FFFFFF;
     border: 1px dashed #CBD5E0;
@@ -144,14 +261,17 @@ QLabel#PreviewCanvas {
 QProgressBar {
     border: none;
     background-color: #E2E8F0;
-    border-radius: 8px;
+    border-radius: 10px;
     text-align: center;
     color: #2D3748;
     font-weight: bold;
+    font-size: 13px;
+    min-height: 24px;
+    max-height: 28px;
 }
 QProgressBar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #48BB78, stop:1 #81E6D9);
-    border-radius: 8px;
+    border-radius: 10px;
 }
 
 QSplitter::handle {
@@ -224,6 +344,13 @@ PROMPT_TEMPLATES = [
     ),
 ]
 
+LIVE_STATE_DISPLAY: Dict[str, str] = {
+    "Idle": "空闲",
+    "Run": "运行中",
+    "Hold": "暂停",
+    "Alarm": "报警",
+}
+
 
 class ImageLabel(QtWidgets.QLabel):
     """用于显示图片的白底预览画布。"""
@@ -232,7 +359,7 @@ class ImageLabel(QtWidgets.QLabel):
         super().__init__(parent)
         self._pixmap: Optional[QtGui.QPixmap] = None
         self.setObjectName("PreviewCanvas")
-        self.setMinimumSize(280, 250)
+        self.setMinimumSize(180, 140)
         self.setAlignment(QtCore.Qt.AlignCenter)
         self.setWordWrap(True)
         self.setText(placeholder)
@@ -350,6 +477,60 @@ class EditableBaudComboBox(ClickToSelectComboBox):
             line_edit.setValidator(QtGui.QIntValidator(1, 10000000, line_edit))
 
 
+class HoverCardFrame(QtWidgets.QFrame):
+    """带悬浮进入/离开信号的卡片容器，用于极简浮层操作按钮。"""
+
+    hover_changed = QtCore.Signal(bool)
+    clicked = QtCore.Signal()
+
+    def enterEvent(self, event: QtCore.QEvent) -> None:  # pragma: no cover - GUI 事件
+        self.hover_changed.emit(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # pragma: no cover - GUI 事件
+        self.hover_changed.emit(False)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # pragma: no cover - GUI 事件
+        if event.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ChevronToolButton(QtWidgets.QToolButton):
+    """绘制细线 chevron 图标，替代文本字符折叠箭头。"""
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setText("")
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # pragma: no cover - GUI 事件
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+
+        color = self.palette().buttonText().color()
+        pen = QtGui.QPen(color, 1.7, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
+        painter.setPen(pen)
+
+        rect = self.rect().adjusted(6, 7, -6, -7)
+        center_x = rect.center().x()
+        if self.isChecked():
+            points = [
+                QtCore.QPointF(rect.left(), rect.top()),
+                QtCore.QPointF(center_x, rect.bottom()),
+                QtCore.QPointF(rect.right(), rect.top()),
+            ]
+        else:
+            points = [
+                QtCore.QPointF(rect.left(), rect.bottom()),
+                QtCore.QPointF(center_x, rect.top()),
+                QtCore.QPointF(rect.right(), rect.bottom()),
+            ]
+        painter.drawPolyline(QtGui.QPolygonF(points))
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -370,12 +551,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_thread.status_signal.connect(self.append_log)
         self.serial_thread.progress_signal.connect(self.on_progress_changed)
         self.serial_thread.ports_signal.connect(self.update_ports)
+        self.serial_thread.telemetry_signal.connect(self.on_live_status_changed)
         self.serial_thread.finished_signal.connect(self.on_job_finished)
         self.serial_thread.start()
 
         self._build_ui()
         self.apply_stylesheet()
         self._update_connection_ui(False)
+        self.reset_live_status_strip()
+        QtCore.QTimer.singleShot(0, self._position_preview_floating_bar)
         self.refresh_ports()
         self.append_log("欢迎使用 AI 智能创作中枢，准备开始创作吧。")
         self.append_log(
@@ -386,6 +570,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI 事件
         self.serial_thread.stop()
         super().closeEvent(event)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # pragma: no cover - GUI 事件
+        super().resizeEvent(event)
+        self._position_preview_floating_bar()
 
     def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
@@ -434,9 +622,11 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        for widget in widgets:
+        last_index = len(widgets) - 1
+        for index, widget in enumerate(widgets):
             layout.addWidget(widget)
-        layout.addStretch(1)
+            if index == last_index:
+                layout.setStretch(index, 1)
         return page
 
     def _build_left_tabs(self) -> QtWidgets.QTabWidget:
@@ -445,16 +635,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_tabs.setTabPosition(QtWidgets.QTabWidget.North)
         self.left_tabs.setUsesScrollButtons(False)
         self.left_tabs.tabBar().setElideMode(QtCore.Qt.ElideNone)
-        self.left_tabs.tabBar().setExpanding(False)
+        self.left_tabs.tabBar().setExpanding(True)
         self.left_tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
-        serial_page = self._create_left_tab_page(self._build_connection_card())
+        serial_page = self._build_left_scroll_page(
+            self._build_connection_card(),
+            self._build_left_fill_panel(),
+        )
         ai_page = self._build_left_scroll_page(self._build_ai_card())
         machine_page = self._build_machine_scroll_page()
 
-        self.left_tabs.addTab(serial_page, "🔌 步骤一：连接")
-        self.left_tabs.addTab(ai_page, "🎨 步骤二：创作")
-        self.left_tabs.addTab(machine_page, "🚀 步骤三：雕刻")
+        self.left_tabs.addTab(serial_page, "连接")
+        self.left_tabs.addTab(ai_page, "创作")
+        self.left_tabs.addTab(machine_page, "雕刻")
+        self.left_tabs.setTabToolTip(0, "步骤一：连接设备")
+        self.left_tabs.setTabToolTip(1, "步骤二：AI 创作与导入")
+        self.left_tabs.setTabToolTip(2, "步骤三：雕刻执行")
         return self.left_tabs
 
     def _build_left_scroll_page(self, *widgets: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
@@ -491,18 +687,76 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
-        right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # -- 状态条：固定高度，不参与 splitter 拉伸 --
+        status_card = self._build_status_card()
+        layout.addWidget(status_card)
+
+        # -- 预览 + 日志：通过 splitter 共享剩余空间 --
+        self.right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         preview_card = self._build_preview_card()
         log_card = self._build_log_card()
-        right_splitter.addWidget(preview_card)
-        right_splitter.addWidget(log_card)
-        right_splitter.setStretchFactor(0, 3)
-        right_splitter.setStretchFactor(1, 2)
-        right_splitter.setSizes([560, 260])
 
-        layout.addWidget(right_splitter)
+        log_card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.right_splitter.addWidget(preview_card)
+        self.right_splitter.addWidget(log_card)
+        self.right_splitter.setChildrenCollapsible(False)
+        self.right_splitter.setHandleWidth(8)
+        self.right_splitter.setOpaqueResize(True)
+        self.right_splitter.setStretchFactor(0, 3)
+        self.right_splitter.setStretchFactor(1, 1)
+        self.right_splitter.setSizes([560, 240])
+
+        layout.addWidget(self.right_splitter, 1)
         return panel
+
+    def _build_status_card(self) -> QtWidgets.QFrame:
+        card = QtWidgets.QFrame()
+        card.setObjectName("StatusCard")
+        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+
+        layout = QtWidgets.QVBoxLayout(card)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(6)
+
+        # -- Row 1: title + progress bar --
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setSpacing(16)
+
+        title_label = QtWidgets.QLabel("\U0001f4e1 \u72b6\u6001\u4e0e\u8fdb\u5ea6")
+        title_label.setObjectName("CardTitle")
+        title_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        header_row.addWidget(title_label)
+
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("\u4efb\u52a1\u8fdb\u5ea6 %p%")
+        self.progress_bar.setFixedHeight(24)
+        self.progress_bar.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        header_row.addWidget(self.progress_bar, 1)
+
+        layout.addLayout(header_row)
+
+        # -- Row 2: flat telemetry strip (single row, 6 columns) --
+        telemetry_strip = QtWidgets.QFrame()
+        telemetry_strip.setObjectName("LiveTelemetryStrip")
+        telemetry_strip.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        grid = QtWidgets.QGridLayout(telemetry_strip)
+        grid.setContentsMargins(12, 8, 12, 8)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+
+        self.live_state_value = self._create_live_telemetry_pair(grid, 0, 0, "\u8bbe\u5907\u72b6\u6001")
+        self.live_x_value = self._create_live_telemetry_pair(grid, 0, 1, "X")
+        self.live_y_value = self._create_live_telemetry_pair(grid, 0, 2, "Y")
+        self.live_feed_value = self._create_live_telemetry_pair(grid, 0, 3, "F")
+        self.live_power_value = self._create_live_telemetry_pair(grid, 0, 4, "S")
+        self.live_endpoint_value = self._create_live_telemetry_pair(grid, 0, 5, "\u76ee\u6807")
+
+        layout.addWidget(telemetry_strip)
+        return card
 
     def _create_card(self, title: str, hint: str = "") -> Tuple[QtWidgets.QFrame, QtWidgets.QVBoxLayout]:
         card = QtWidgets.QFrame()
@@ -590,10 +844,48 @@ class MainWindow(QtWidgets.QMainWindow):
         self.on_transport_mode_changed()
         return card
 
+    def _build_left_fill_panel(self) -> QtWidgets.QFrame:
+        panel = QtWidgets.QFrame()
+        panel.setObjectName("LeftFillPanel")
+        panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("连接就绪提示")
+        title.setObjectName("LeftFillTitle")
+        layout.addWidget(title)
+
+        summary = QtWidgets.QLabel(
+            "这一页主要负责设备接入。连接成功后，右侧会实时刷新坐标、功率、速度和链路状态。"
+        )
+        summary.setObjectName("LeftFillText")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        points = [
+            "UART 适合基础联调，链路更直接。",
+            "WiFi TCP 适合无线演示，可配合 SoftAP 或 STA。",
+            "如现场网络不稳定，建议优先走本地图导入流程。",
+        ]
+        for text in points:
+            label = QtWidgets.QLabel(f"• {text}")
+            label.setObjectName("LeftFillText")
+            label.setWordWrap(True)
+            layout.addWidget(label)
+
+        layout.addStretch(1)
+        footer = QtWidgets.QLabel("连接完成后，可切到“创作”或“雕刻”继续执行。")
+        footer.setObjectName("LeftFillText")
+        footer.setWordWrap(True)
+        layout.addWidget(footer)
+        return panel
+
     def _build_ai_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("🎨 AI 创作区", "输入提示词生成图像，或直接导入本地图片进行雕刻。")
 
-        self.template_combo = QtWidgets.QComboBox()
+        self.template_combo = ClickToSelectComboBox()
         for name, description, prompt in PROMPT_TEMPLATES:
             self.template_combo.addItem(name, {"description": description, "prompt": prompt})
         self.template_combo.currentIndexChanged.connect(self.on_prompt_template_changed)
@@ -741,34 +1033,114 @@ class MainWindow(QtWidgets.QMainWindow):
         return card
 
     def _build_preview_card(self) -> QtWidgets.QFrame:
-        card, layout = self._create_card("🖼️ 作品预览", "上方展示原图与轮廓图，保持比例居中显示，便于课堂讲解与观察。")
+        card = HoverCardFrame()
+        card.setObjectName("Card")
+        card.setProperty("previewRole", "floating")
+        card.setProperty("previewCollapsed", False)
+        card.setProperty("previewHover", False)
+        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        card.setMinimumHeight(240)
+        card.hover_changed.connect(self._set_preview_toolbar_hovered)
+        card.clicked.connect(self._on_preview_card_clicked)
+        self.preview_card = card
 
-        self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("任务进度 %p%")
-        layout.addWidget(self.progress_bar)
+        layout = QtWidgets.QVBoxLayout(card)
+        self.preview_card_layout = layout
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        self.preview_floating_bar = QtWidgets.QWidget(card)
+        self.preview_floating_bar.setObjectName("PreviewFloatingBar")
+        floating_layout = QtWidgets.QHBoxLayout(self.preview_floating_bar)
+        floating_layout.setContentsMargins(0, 0, 0, 0)
+        floating_layout.setSpacing(0)
+
+        self.preview_toggle_button = ChevronToolButton(self.preview_floating_bar)
+        self.preview_toggle_button.setObjectName("PreviewToggleButton")
+        self.preview_toggle_button.setProperty("active", False)
+        self.preview_toggle_button.setCheckable(True)
+        self.preview_toggle_button.setToolTip("收起双预览")
+        self.preview_toggle_button.toggled.connect(self._toggle_preview_panels)
+        floating_layout.addWidget(self.preview_toggle_button)
+        self.preview_floating_bar.adjustSize()
+        self.preview_floating_bar.raise_()
+
+        self.preview_compact_bar = QtWidgets.QFrame()
+        self.preview_compact_bar.setObjectName("PreviewCompactBar")
+        self.preview_compact_bar.setFixedHeight(44)
+        compact_layout = QtWidgets.QHBoxLayout(self.preview_compact_bar)
+        compact_layout.setContentsMargins(16, 0, 40, 0)
+        compact_layout.setSpacing(0)
+
+        self.preview_compact_summary = QtWidgets.QLabel()
+        self.preview_compact_summary.setObjectName("PreviewCompactSummary")
+        self.preview_compact_summary.setWordWrap(False)
+        self.preview_compact_summary.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        compact_layout.addWidget(self.preview_compact_summary, 1)
+        self.preview_compact_bar.setVisible(False)
+        layout.addWidget(self.preview_compact_bar)
+
+        self.preview_content_widget = QtWidgets.QWidget()
+        preview_content_layout = QtWidgets.QVBoxLayout(self.preview_content_widget)
+        preview_content_layout.setContentsMargins(0, 0, 0, 0)
+        preview_content_layout.setSpacing(0)
 
         preview_row = QtWidgets.QHBoxLayout()
-        preview_row.setSpacing(12)
+        preview_row.setContentsMargins(0, 0, 0, 0)
+        preview_row.setSpacing(10)
 
-        left_preview = self._create_preview_panel("🖼️ AI 原图预览", "等待生成或导入图片")
-        right_preview = self._create_preview_panel("✏️ 轮廓路径预览", "等待轮廓提取结果")
+        left_preview = self._create_preview_panel("原图", "等待生成或导入图片")
+        right_preview = self._create_preview_panel("轮廓", "等待轮廓提取结果")
 
         self.original_image_label = left_preview[1]
         self.contour_image_label = right_preview[1]
 
         preview_row.addWidget(left_preview[0], 1)
         preview_row.addWidget(right_preview[0], 1)
-        layout.addLayout(preview_row)
+        preview_content_layout.addLayout(preview_row)
+        layout.addWidget(self.preview_content_widget, 1)
+
+        self._position_preview_floating_bar()
+        self._set_preview_toolbar_hovered(False)
+        self._refresh_preview_summary()
         return card
+
+    def _refresh_preview_summary(self) -> None:
+        original_ready = bool(self.current_image_path)
+        contour_ready = bool(self.current_contours_path)
+        if original_ready and contour_ready:
+            summary = "原图与轮廓已就绪"
+        elif original_ready:
+            summary = "原图已就绪，待轮廓"
+        else:
+            summary = "等待导入或生成"
+        self.preview_compact_summary.setText(summary)
+
+    def _create_live_telemetry_pair(
+        self,
+        layout: QtWidgets.QGridLayout,
+        row: int,
+        column: int,
+        title: str,
+    ) -> QtWidgets.QLabel:
+        title_label = QtWidgets.QLabel(title)
+        title_label.setObjectName("LiveTelemetryLabel")
+        title_label.setAlignment(QtCore.Qt.AlignCenter)
+        value_label = QtWidgets.QLabel("--")
+        value_label.setObjectName("LiveTelemetryValue")
+        value_label.setAlignment(QtCore.Qt.AlignCenter)
+        value_label.setWordWrap(False)
+        layout.addWidget(title_label, row * 2, column)
+        layout.addWidget(value_label, row * 2 + 1, column)
+        layout.setColumnStretch(column, 1)
+        return value_label
 
     def _create_preview_panel(self, title: str, placeholder: str) -> Tuple[QtWidgets.QFrame, ImageLabel]:
         panel = QtWidgets.QFrame()
         panel.setObjectName("PreviewPanel")
         panel_layout = QtWidgets.QVBoxLayout(panel)
-        panel_layout.setContentsMargins(12, 12, 12, 12)
-        panel_layout.setSpacing(8)
+        panel_layout.setContentsMargins(10, 10, 10, 10)
+        panel_layout.setSpacing(6)
 
         title_label = QtWidgets.QLabel(title)
         title_label.setObjectName("PreviewTitle")
@@ -780,6 +1152,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_log_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("📝 系统消息板", "这里会显示串口或 WiFi 收发、G-Code 预览和任务运行状态，便于比赛演示。")
+        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        card.setMinimumHeight(180)
 
         self.log_edit = QtWidgets.QTextEdit()
         self.log_edit.setReadOnly(True)
@@ -787,6 +1161,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         layout.addWidget(self.log_edit, 1)
         return card
+
+    def _position_preview_floating_bar(self) -> None:
+        if not hasattr(self, "preview_card") or not hasattr(self, "preview_floating_bar"):
+            return
+        self.preview_floating_bar.adjustSize()
+        x = max(8, self.preview_card.width() - self.preview_floating_bar.width() - 10)
+        y = 10
+        if hasattr(self, "preview_toggle_button") and self.preview_toggle_button.isChecked():
+            y = max(10, (self.preview_card.height() - self.preview_floating_bar.height()) // 2)
+        self.preview_floating_bar.move(x, y)
+        self.preview_floating_bar.raise_()
+
+    def _refresh_preview_card_style(self) -> None:
+        if not hasattr(self, "preview_card"):
+            return
+        self.preview_card.style().unpolish(self.preview_card)
+        self.preview_card.style().polish(self.preview_card)
+        self.preview_card.update()
+
+    def _set_preview_toolbar_hovered(self, hovered: bool) -> None:
+        if not hasattr(self, "preview_toggle_button") or not hasattr(self, "preview_card"):
+            return
+        self.preview_card.setProperty("previewHover", hovered)
+        active = hovered or self.preview_toggle_button.isChecked()
+        self.preview_toggle_button.setProperty("active", active)
+        self.preview_floating_bar.setVisible(active)
+        self._refresh_preview_card_style()
+        self.preview_toggle_button.style().unpolish(self.preview_toggle_button)
+        self.preview_toggle_button.style().polish(self.preview_toggle_button)
+        self.preview_toggle_button.update()
+        self._position_preview_floating_bar()
+
+    def _on_preview_card_clicked(self) -> None:
+        if hasattr(self, "preview_toggle_button") and self.preview_toggle_button.isChecked():
+            self.preview_toggle_button.setChecked(False)
+
+    def _toggle_preview_panels(self, collapsed: bool) -> None:
+        if not hasattr(self, "preview_content_widget"):
+            return
+        self.preview_content_widget.setVisible(not collapsed)
+        self.preview_compact_bar.setVisible(collapsed)
+        if hasattr(self, "preview_card"):
+            self.preview_card.setProperty("previewCollapsed", collapsed)
+            self.preview_card.setMinimumHeight(46 if collapsed else 240)
+            self.preview_card.setMaximumHeight(48 if collapsed else 16777215)
+        if hasattr(self, "preview_card_layout"):
+            if collapsed:
+                self.preview_card_layout.setContentsMargins(0, 0, 0, 0)
+            else:
+                self.preview_card_layout.setContentsMargins(16, 14, 16, 14)
+        self.preview_toggle_button.setToolTip("展开双预览" if collapsed else "收起双预览")
+        hovered = self.preview_card.underMouse() if hasattr(self, "preview_card") else False
+        self._set_preview_toolbar_hovered(hovered)
+        self._position_preview_floating_bar()
+        if hasattr(self, "right_splitter"):
+            if collapsed:
+                self.right_splitter.setSizes([74, 626])
+            else:
+                self.right_splitter.setSizes([520, 200])
 
     def apply_stylesheet(self) -> None:
         self.setStyleSheet(BRIGHT_MAKER_QSS)
@@ -817,12 +1250,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.connection_summary_label.setText(
                 f"当前已通过{'WiFi TCP' if mode == 'wifi' else '串口 UART'}连接：{self.serial_thread.connection_description()}"
             )
+            self.live_state_value.setText("已连接")
+            self.live_endpoint_value.setText(self.serial_thread.connection_description() or "--")
         else:
             self.connect_button.setText("连接设备")
             if mode == "wifi":
                 self.connection_summary_label.setText("当前选择 WiFi TCP，可直连发射板 SoftAP 或 STA 地址。")
             else:
                 self.connection_summary_label.setText("当前选择串口 UART，可连接发射板业务串口。")
+            self.reset_live_status_strip()
 
     def _ensure_device_connected(self, action_name: str) -> bool:
         """在发起真实下发任务前做界面层前置校验。"""
@@ -853,6 +1289,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_transport_mode_changed(self) -> None:
         self.serial_thread.set_transport_mode(self._current_transport_mode())
         self._update_connection_ui(self.serial_thread.is_connected())
+
+    def reset_live_status_strip(self) -> None:
+        if not hasattr(self, "live_state_value"):
+            return
+        self.live_state_value.setText("未连接")
+        self.live_x_value.setText("--")
+        self.live_y_value.setText("--")
+        self.live_feed_value.setText("--")
+        self.live_power_value.setText("--")
+        self.live_endpoint_value.setText("--")
+
+    def on_live_status_changed(self, snapshot: Dict[str, object]) -> None:
+        if not hasattr(self, "live_state_value"):
+            return
+
+        raw_state = str(snapshot.get("state") or "--")
+        state_text = LIVE_STATE_DISPLAY.get(raw_state, raw_state)
+        x = float(snapshot.get("x", 0.0))
+        y = float(snapshot.get("y", 0.0))
+        feed = float(snapshot.get("feed", 0.0))
+        power = float(snapshot.get("spindle", 0.0))
+        endpoint = str(snapshot.get("endpoint") or self.serial_thread.connection_description() or "--")
+
+        self.live_state_value.setText(state_text)
+        self.live_x_value.setText(f"{x:.3f}")
+        self.live_y_value.setText(f"{y:.3f}")
+        self.live_feed_value.setText(f"{feed:.0f}")
+        self.live_power_value.setText(f"{power:.0f}")
+        self.live_endpoint_value.setText(endpoint)
 
     def append_log(self, message: str) -> None:
         cursor = self.log_edit.textCursor()
@@ -926,6 +1391,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_preview_lines = []
         self.original_image_label.set_image(image_path)
         self.contour_image_label.set_image(contours_path)
+        self._refresh_preview_summary()
         self.append_log(f"{source_name}加载完成：{image_path}")
         self.append_log(f"轮廓提取完成，共 {len(contours)} 条路径，已完成降噪与居中排版。")
 
