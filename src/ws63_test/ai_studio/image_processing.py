@@ -84,7 +84,7 @@ def _extract_edges_with_clahe(image: np.ndarray) -> np.ndarray:
     - CLAHE 增强局部对比度，避免主体边缘被吞掉；
     - 轻度高斯模糊抑制细小纹理噪点；
     - 使用更宽容的固定 Canny 阈值保留更多细节；
-    - 轻度膨胀连接断裂线条。
+    - 通过轻微闭运算连接断裂线条，同时尽量不把圆弧挤成粗边。
     """
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -93,11 +93,71 @@ def _extract_edges_with_clahe(image: np.ndarray) -> np.ndarray:
     enhanced = clahe.apply(gray)
 
     blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
-    edged = cv2.Canny(blurred, 40, 120)
+    edged = cv2.Canny(blurred, 30, 100)
 
-    kernel = np.ones((2, 2), np.uint8)
-    edged = cv2.dilate(edged, kernel, iterations=1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=1)
     return edged
+
+
+def _smooth_contour_points(
+    contour: np.ndarray,
+    *,
+    is_closed: bool,
+    smoothing_passes: int = 2,
+) -> np.ndarray:
+    """
+    对轮廓点做温和平滑，减少像素阶梯感，但尽量保留原始曲线走势。
+    """
+
+    points = contour.reshape(-1, 2).astype(np.float32)
+    if len(points) < 5:
+        return contour.astype(np.float32)
+
+    kernel = np.array([1.0, 4.0, 6.0, 4.0, 1.0], dtype=np.float32)
+    kernel /= kernel.sum()
+
+    for _ in range(max(1, smoothing_passes)):
+        if is_closed:
+            padded = np.vstack([points[-2:], points, points[:2]])
+        else:
+            padded = np.vstack([points[:1], points[:1], points, points[-1:], points[-1:]])
+        smoothed_x = np.convolve(padded[:, 0], kernel, mode="valid")
+        smoothed_y = np.convolve(padded[:, 1], kernel, mode="valid")
+        points = np.column_stack([smoothed_x, smoothed_y])
+
+    return points.reshape(-1, 1, 2)
+
+
+def _sample_contour_points_by_distance(
+    contour: np.ndarray,
+    *,
+    is_closed: bool,
+    min_distance_px: float = 1.2,
+) -> np.ndarray:
+    """
+    用最小点距做轻量抽样，避免 G-Code 被像素级重复点撑爆。
+
+    这里不使用 approxPolyDP，避免圆弧被近似成明显折线。
+    """
+
+    points = contour.reshape(-1, 2).astype(np.float32)
+    if len(points) < 3:
+        return contour.astype(np.float32)
+
+    sampled = [points[0]]
+    for point in points[1:]:
+        if np.linalg.norm(point - sampled[-1]) >= min_distance_px:
+            sampled.append(point)
+
+    if not is_closed and np.linalg.norm(points[-1] - sampled[-1]) > 1e-6:
+        sampled.append(points[-1])
+    if is_closed and len(sampled) >= 2 and np.linalg.norm(sampled[0] - sampled[-1]) < min_distance_px * 0.75:
+        sampled = sampled[:-1]
+
+    if len(sampled) < 2:
+        sampled = [points[0], points[-1]]
+    return np.asarray(sampled, dtype=np.float32).reshape(-1, 1, 2)
 
 
 def _center_and_fit_contours(
@@ -150,9 +210,9 @@ def process_image_to_contours(
     2. CLAHE 增强局部对比度
     3. 轻度高斯模糊
     4. 宽容 Canny
-    5. 轻度膨胀连接断线
+    5. 轻微闭运算连接断线
     6. 轮廓提取
-    7. 过滤极小噪点并平滑
+    7. 过滤极小噪点并做高密度平滑
     8. 居中排版并输出预览图
 
     返回：
@@ -164,7 +224,7 @@ def process_image_to_contours(
 
     edged = _extract_edges_with_clahe(image)
 
-    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     if not contours:
         raise ImageProcessingError("未检测到任何轮廓，请尝试更换图片")
 
@@ -180,18 +240,19 @@ def process_image_to_contours(
         if area < min_area and perimeter < (min_perimeter * 2.0):
             continue
 
-        epsilon = 0.005 * perimeter
-        approx = cv2.approxPolyDP(contour, epsilon, False)
-        if len(approx) < 2:
+        is_closed = area >= 1.0
+        smoothed = _smooth_contour_points(contour, is_closed=is_closed, smoothing_passes=2)
+        sampled = _sample_contour_points_by_distance(smoothed, is_closed=is_closed, min_distance_px=1.2)
+        if len(sampled) < 2:
             continue
 
-        path = _normalize_contour_points(approx, width, height)
+        path = _normalize_contour_points(sampled, width, height)
         if len(path) < 2:
             continue
 
         raw_paths.append(path)
-        is_closed = area >= 1.0
-        cv2.polylines(preview, [approx], isClosed=is_closed, color=(32, 32, 32), thickness=2)
+        preview_points = np.round(sampled).astype(np.int32)
+        cv2.polylines(preview, [preview_points], isClosed=is_closed, color=(32, 32, 32), thickness=2)
 
     if not raw_paths:
         raise ImageProcessingError("轮廓过小或噪点过多，无法生成有效路径")

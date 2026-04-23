@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 class TaskState(Enum):
@@ -45,10 +45,10 @@ STATE_DISPLAY_TEXT: Dict[TaskState, str] = {
 # 状态进度百分比，用于进度条
 STATE_PROGRESS: Dict[TaskState, int] = {
     TaskState.IDLE: 0,
-    TaskState.AI_GENERATING: 15,
-    TaskState.CONTOUR_EXTRACTING: 40,
-    TaskState.GCODE_GENERATING: 60,
-    TaskState.SENDING: 75,
+    TaskState.AI_GENERATING: 20,
+    TaskState.CONTOUR_EXTRACTING: 50,
+    TaskState.GCODE_GENERATING: 80,
+    TaskState.SENDING: 90,
     TaskState.COMPLETED: 100,
     TaskState.FAILED: 0,
 }
@@ -56,7 +56,7 @@ STATE_PROGRESS: Dict[TaskState, int] = {
 # 面向评委和演示的阶段详情描述
 STATE_DETAIL_TEXT: Dict[TaskState, str] = {
     TaskState.IDLE: "系统就绪，等待用户发起新任务。",
-    TaskState.AI_GENERATING: "正在调用云端 Imagen 4 生成图像，预计 10~30 秒…",
+    TaskState.AI_GENERATING: "正在调用云端生图模型生成彩色原图，预计 10~30 秒…",
     TaskState.CONTOUR_EXTRACTING: "正在使用 OpenCV 进行 CLAHE + Canny 边缘提取与轮廓归一化…",
     TaskState.GCODE_GENERATING: "正在将轮廓路径映射到物理坐标并生成 G-Code 指令序列…",
     TaskState.SENDING: "正在逐行下发 G-Code 到 WS63 边缘设备，等待每行 ok 确认…",
@@ -72,10 +72,14 @@ class TaskRecord:
     task_id: str = ""
     template_name: str = ""
     prompt: str = ""
+    image_model: str = ""
     state: str = TaskState.IDLE.value
     create_time: str = ""
     finish_time: str = ""
     duration_seconds: float = 0.0
+    status: str = "running"
+    error_msg: str = ""
+    completed_at: str = ""
 
     # 产物路径（相对于任务目录的文件名）
     ai_image_file: str = ""
@@ -164,6 +168,7 @@ class TaskManager:
         self._current_task_dir: Optional[Path] = None
         self._start_time: float = 0.0
         self._history: List[TaskRecord] = []
+        self._state_listeners: List[Callable[["TaskManager"], None]] = []
 
         self._load_history()
 
@@ -197,10 +202,21 @@ class TaskManager:
         """任务是否正在进行中。"""
         return self._current_state not in (TaskState.IDLE, TaskState.COMPLETED, TaskState.FAILED)
 
+    def add_state_listener(self, listener: Callable[["TaskManager"], None]) -> None:
+        """注册状态变更回调。"""
+        if listener not in self._state_listeners:
+            self._state_listeners.append(listener)
+
+    def remove_state_listener(self, listener: Callable[["TaskManager"], None]) -> None:
+        """移除状态变更回调。"""
+        if listener in self._state_listeners:
+            self._state_listeners.remove(listener)
+
     def begin_task(
         self,
         template_name: str = "",
         prompt: str = "",
+        image_model: str = "",
         source_type: str = "ai",
         width_mm: float = 50.0,
         height_mm: float = 50.0,
@@ -222,6 +238,7 @@ class TaskManager:
             task_id=task_id,
             template_name=template_name,
             prompt=prompt,
+            image_model=image_model,
             create_time=_format_time(),
             source_type=source_type,
             width_mm=width_mm,
@@ -321,7 +338,11 @@ class TaskManager:
         if self._current_record is None:
             return
         self._current_record.success = True
+        self._current_record.status = "success"
+        self._current_record.error_msg = ""
+        self._current_record.error_message = ""
         self._current_record.finish_time = _format_time()
+        self._current_record.completed_at = self._current_record.finish_time
         self._current_record.duration_seconds = time.monotonic() - self._start_time
         self._transition(TaskState.COMPLETED)
         self._finalize_task()
@@ -331,8 +352,11 @@ class TaskManager:
         if self._current_record is None:
             return
         self._current_record.success = False
+        self._current_record.status = "failed"
+        self._current_record.error_msg = error_message
         self._current_record.error_message = error_message
         self._current_record.finish_time = _format_time()
+        self._current_record.completed_at = self._current_record.finish_time
         self._current_record.duration_seconds = time.monotonic() - self._start_time
         self._transition(TaskState.FAILED)
         self._finalize_task()
@@ -342,6 +366,7 @@ class TaskManager:
         self._current_state = TaskState.IDLE
         self._current_record = None
         self._current_task_dir = None
+        self._notify_state_changed()
 
     # ── 历史管理 ──────────────────────────────────────────────
 
@@ -399,7 +424,7 @@ class TaskManager:
         if "timeout" in error_lower or "超时" in error_message:
             return "⏰ 操作超时：云端 AI 接口响应较慢，请检查网络连接后重试。如果频繁超时，可切换到本地图片导入模式。"
         if "api key" in error_lower or "key" in error_lower:
-            return "🔑 API 密钥问题：请确认 Google API Key 已正确填入并且有效。"
+            return "🔑 API 密钥问题：请确认当前生图服务的 API Key 已正确填入并且有效。"
         if "连接" in error_message or "connect" in error_lower:
             return "🔌 设备连接失败：请检查串口线缆是否松动，或 WiFi 网络是否正常。"
         if "急停" in error_message or "emergency" in error_lower:
@@ -424,6 +449,15 @@ class TaskManager:
         self._current_state = new_state
         if self._current_record is not None:
             self._current_record.state = new_state.value
+        self._notify_state_changed()
+
+    def _notify_state_changed(self) -> None:
+        """向界面层广播状态变更。"""
+        for listener in list(self._state_listeners):
+            try:
+                listener(self)
+            except Exception:
+                pass
 
     def _save_current_task(self) -> None:
         """保存当前任务的元数据到磁盘。"""
@@ -438,9 +472,31 @@ class TaskManager:
         except OSError:
             pass
 
+    def _save_final_meta(self) -> None:
+        """在任务结束时把归档摘要写入 meta.json。"""
+        if self._current_record is None or self._current_task_dir is None:
+            return
+        meta_file = self._current_task_dir / "meta.json"
+        meta_payload = self._current_record.to_dict()
+        meta_payload.update(
+            {
+                "status": self._current_record.status or ("success" if self._current_record.success else "failed"),
+                "error_msg": self._current_record.error_msg or self._current_record.error_message,
+                "completed_at": self._current_record.completed_at or self._current_record.finish_time,
+            }
+        )
+        try:
+            meta_file.write_text(
+                json.dumps(meta_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
     def _finalize_task(self) -> None:
         """任务结束后保存最终状态并更新历史。"""
         self._save_current_task()
+        self._save_final_meta()
         if self._current_record is not None:
             # 插入到历史最前面
             self._history.insert(0, self._current_record)

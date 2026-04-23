@@ -9,11 +9,19 @@ from __future__ import annotations
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
+    try:
+        from PySide6 import QtSerialPort
+    except ImportError:  # pragma: no cover - 运行环境相关
+        QtSerialPort = None
     Signal = QtCore.Signal
     Slot = QtCore.Slot
     QT_API = "PySide6"
 except ImportError:  # pragma: no cover - 运行环境相关
     from PyQt5 import QtCore, QtGui, QtWidgets
+    try:
+        from PyQt5 import QtSerialPort
+    except ImportError:  # pragma: no cover - 运行环境相关
+        QtSerialPort = None
     Signal = QtCore.pyqtSignal
     Slot = QtCore.pyqtSlot
     QT_API = "PyQt5"
@@ -22,8 +30,8 @@ __all__ = [
     "QtCore",
     "QtGui",
     "QtWidgets",
+    "QtSerialPort",
     "Signal",
     "Slot",
     "QT_API",
 ]
-

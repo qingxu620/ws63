@@ -23,11 +23,11 @@
 - 已支持在 GUI 中选择 `串口 UART` 或 `WiFi TCP` 两种设备通路
 - `WiFi TCP` 已细分为 `STA 在线工作流` 与 `SoftAP 离线直连` 两种使用预设
 - 连接页已加入 `串口模式 / WiFi SoftAP / WiFi STA` 快捷切换按钮
-- 已固化 3 套比赛导向 AI 提示词模板
+- 已支持“一键美化提示词”
 - 已支持“一键比赛流程”：`AI 生图 -> 轮廓提取 -> G-Code -> 发送`
 - GUI 已完成教育类风格重构
 - 左侧工作流已改成三步骤标签页
-- AI 生图已接入 Google `Imagen 4 Fast`
+- AI 生图已接入阿里云 `Wan2.7-Image`
 - AI 生图结果会自动进入轮廓提取和预览流程
 
 当前版本已经适合做：
@@ -69,17 +69,17 @@ src/ws63_test/ai_studio/
   - `🔌 步骤一：连接`
   - `🎨 步骤二：创作`
   - `🚀 步骤三：雕刻`
-- 已加入比赛模板下拉框与一键比赛流程按钮
+- 已加入“一键美化提示词”与一键比赛流程按钮
 - 右侧为：
   - 原图预览
   - 轮廓预览
   - 系统消息板
 
 ### `ai_image_generator.py`
-- Google `Imagen 4 Fast` REST API 请求
+- 阿里云 `Wan2.7-Image` REST API 请求
 - 子线程 `AIGeneratorThread`
 - prompt engineering
-- base64 图片解析与本地落盘
+- 图片 URL 下载与本地落盘
 
 ### `image_processing.py`
 - 中文路径图片读取
@@ -118,12 +118,12 @@ src/ws63_test/ai_studio/
 
 ### 2. AI 生图模式
 1. 用户输入 prompt
-2. `AIGeneratorThread` 调用 Imagen 4 Fast
+2. `AIGeneratorThread` 按下拉框选择调用通义万相 2.7 或豆包 Seedream 5.0
 3. 生成图片保存为本地文件
 4. 自动进入同一条 OpenCV -> G-Code -> 设备发送链路
 
 ### 3. 比赛一键流程
-1. 用户选择比赛模板并确认设备连接方式
+1. 用户确认提示词与设备连接方式
 2. 点击 `⚡ 一键比赛流程`
 3. GUI 自动执行：
    - AI 生图
@@ -232,13 +232,13 @@ python3 -m src.ws63_test.ai_studio.main
 
 ### AI Key
 
-当前 `Imagen 4 Fast` 的 API Key 直接写在：
+当前 `Wan2.7-Image` 的 API Key 直接写在：
 - [ai_image_generator.py](/root/fbb_ws63/src/ws63_test/ai_studio/ai_image_generator.py)
 
 这在联调阶段方便，但不是最终安全方案。  
 后续应迁移到：
 
-- 环境变量 `GOOGLE_API_KEY`
+- 环境变量 `DASHSCOPE_API_KEY`
 - 或单独本地配置文件
 
 ### 串口

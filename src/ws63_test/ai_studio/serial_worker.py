@@ -17,6 +17,7 @@ from __future__ import annotations
 import queue
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -24,7 +25,7 @@ import serial
 from serial import Serial
 from serial.tools import list_ports
 
-from .qt_compat import QtCore, Signal
+from .qt_compat import QtCore, QtSerialPort, Signal
 
 _TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 if str(_TOOLS_DIR) not in sys.path:
@@ -59,8 +60,56 @@ class SerialWorkerThread(QtCore.QThread):
         self._last_status_poll_at = 0.0
 
     @staticmethod
-    def list_available_ports() -> List[str]:
-        return [port.device for port in list_ports.comports()]
+    def _format_port_entry(device: str, description: str) -> Dict[str, str]:
+        clean_device = device.strip()
+        clean_description = description.strip() or "串口设备"
+        return {
+            "device": clean_device,
+            "description": clean_description,
+            "display": f"{clean_device} - {clean_description}",
+        }
+
+    @staticmethod
+    def _sort_port_key(device: str) -> tuple:
+        prefix = "".join(ch for ch in device if not ch.isdigit()).upper()
+        digits = "".join(ch for ch in device if ch.isdigit())
+        return (prefix, int(digits) if digits else 10**9, device.upper())
+
+    @classmethod
+    def list_available_ports(cls) -> List[Dict[str, str]]:
+        discovered: Dict[str, Dict[str, str]] = {}
+
+        try:
+            for port in list_ports.comports():
+                device = str(getattr(port, "device", "") or "").strip()
+                if not device:
+                    continue
+                description = str(getattr(port, "description", "") or "").strip()
+                if not description or description.lower() == "n/a":
+                    description = str(getattr(port, "manufacturer", "") or "").strip()
+                if not description or description.lower() == "n/a":
+                    description = str(getattr(port, "product", "") or "").strip()
+                discovered[device] = cls._format_port_entry(device, description)
+        except Exception as exc:  # pragma: no cover - 运行环境相关
+            print(f"[SerialWorkerThread] pyserial 串口扫描失败: {exc}", file=sys.stderr)
+            traceback.print_exc()
+
+        if QtSerialPort is not None:
+            try:
+                for info in QtSerialPort.QSerialPortInfo.availablePorts():
+                    device = str(info.portName() or "").strip()
+                    if not device:
+                        continue
+                    description = str(info.description() or "").strip()
+                    if not description:
+                        description = str(info.manufacturer() or "").strip()
+                    if device not in discovered:
+                        discovered[device] = cls._format_port_entry(device, description)
+            except Exception as exc:  # pragma: no cover - 运行环境相关
+                print(f"[SerialWorkerThread] Qt 串口扫描失败: {exc}", file=sys.stderr)
+                traceback.print_exc()
+
+        return [discovered[key] for key in sorted(discovered, key=cls._sort_port_key)]
 
     @staticmethod
     def _normalize_gcode_lines(gcode_lines: List[str]) -> List[str]:
