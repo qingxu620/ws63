@@ -40,6 +40,7 @@ class SerialWorkerThread(QtCore.QThread):
     log_signal = Signal(str)
     status_signal = Signal(str)
     progress_signal = Signal(int)
+    job_progress_signal = Signal(dict)
     ports_signal = Signal(list)
     telemetry_signal = Signal(dict)
     finished_signal = Signal(bool, str)
@@ -407,6 +408,14 @@ class SerialWorkerThread(QtCore.QThread):
                 self._wait_for_ok()
             progress = int(index * 100 / max(total, 1))
             self.progress_signal.emit(progress)
+            self.job_progress_signal.emit(
+                {
+                    "sent": index,
+                    "total": total,
+                    "progress": progress,
+                    "line": line,
+                }
+            )
 
     def run(self) -> None:
         while self._running:

@@ -108,6 +108,13 @@
 /* ================= SLE 配置 ================= */
 #define SLE_LASER_SERVER_NAME "LaserRX"
 #define SLE_LASER_CLIENT_NAME "LaserTX"
+#define SLE_FOCUS_SERVER_NAME "FocusND"
+#define SLE_SAFETY_SERVER_NAME "SafeLED"
+/*
+ * 发射板侧的多节点框架按“最多 8 个 peer”预留，和官方 sle_one_to_many 例程口径保持一致。
+ * 当前业务实际启用的是 LaserRX + FocusND + SafeLED 三个节点，后续仍可继续挂新的 peer。
+ */
+#define SLE_TX_MAX_PEERS 8
 
 /* ================= 安全配置 ================= */
 #define SAFETY_SLE_TIMEOUT_MS 1000        /* 空闲链路 SLE 超时 (ms)，保留 >= 5 个心跳周期余量，避免压测偶发抖动误停光 */
@@ -142,6 +149,12 @@
  *  │ UART TX  │ GPIO15 │ 9    │ MODE_1   │ UART1_TXD            │
  *  │ UART RX  │ GPIO16 │ 10   │ MODE_1   │ UART1_RXD            │
  *  └──────────┴────────┴──────┴──────────┴──────────────────────┘
+ *
+ *  ZDT 控制板 (ZDT Controller):
+ *  - 使用独立 UART 控制张大头 Emm_V5.0 闭环步进驱动
+ *  - 当前感知与对焦节点第一版采用 TTL 串口直连 Emm_V5.0
+ *  - Z 轴链路固定复用发送板同款 UART1 / GPIO15-16 接线
+ *  - 如果挂 RS485 模块，可选额外一根 GPIO 控制 DE/RE 方向
  * =========================================================================== */
 
 /* --- 接收板: SPI0 (DAC8562) --- */
@@ -161,6 +174,90 @@
 #define LASER_UART_TX_PIN 15  /* GPIO15 — Pin 9  — UART1_TXD */
 #define LASER_UART_RX_PIN 16  /* GPIO16 — Pin 10 — UART1_RXD */
 #define LASER_UART_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (UART1) */
+
+/* --- ZDT 控制板: 固定 UART1 (TTL 串口) --- */
+#define ZDT_UART_BUS 1 /* UART1 */
+#define ZDT_UART_TX_PIN 15 /* GPIO15 — Pin 9  — UART1_TXD */
+#define ZDT_UART_RX_PIN 16 /* GPIO16 — Pin 10 — UART1_RXD */
+#define ZDT_UART_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (UART1) */
+
+#if defined(CONFIG_ZDT_UART_BAUD)
+#define ZDT_UART_BAUD_RATE CONFIG_ZDT_UART_BAUD
+#else
+#define ZDT_UART_BAUD_RATE 115200
+#endif
+
+#if defined(CONFIG_ZDT_DEVICE_ADDR)
+#define ZDT_DEVICE_ADDR CONFIG_ZDT_DEVICE_ADDR
+#else
+#define ZDT_DEVICE_ADDR 1
+#endif
+
+#if defined(CONFIG_ZDT_RS485_DIR_ENABLE)
+#define ZDT_RS485_DIR_ENABLE 1
+#else
+#define ZDT_RS485_DIR_ENABLE 0
+#endif
+
+#if defined(CONFIG_ZDT_RS485_DIR_PIN)
+#define ZDT_RS485_DIR_PIN CONFIG_ZDT_RS485_DIR_PIN
+#else
+#define ZDT_RS485_DIR_PIN 17
+#endif
+
+#if defined(CONFIG_ZDT_RS485_DIR_ACTIVE_HIGH)
+#define ZDT_RS485_DIR_ACTIVE_HIGH 1
+#else
+#define ZDT_RS485_DIR_ACTIVE_HIGH 0
+#endif
+
+#if defined(CONFIG_ZDT_DEMO_AUTO_RUN)
+#define ZDT_DEMO_AUTO_RUN 1
+#else
+#define ZDT_DEMO_AUTO_RUN 0
+#endif
+
+#define ZDT_UART_RX_BUFFER_SIZE 256
+#define ZDT_UART_REPLY_TIMEOUT_MS 200
+#define ZDT_UART_READ_SLICE_MS 20
+#define ZDT_UART_IDLE_GAP_MS 5
+#define ZDT_RS485_TURNAROUND_DELAY_US 200
+#define ZDT_POLL_INTERVAL_MS 1000
+#define ZDT_DEMO_MOVE_SPEED_RPM 300
+#define ZDT_DEMO_MOVE_ACCEL_LEVEL 20
+#define ZDT_DEMO_MOVE_PULSES 3200U
+
+#if defined(CONFIG_FOCUS_NODE_BOOT_ENABLE_Z)
+#define FOCUS_NODE_BOOT_ENABLE_Z 1
+#else
+#define FOCUS_NODE_BOOT_ENABLE_Z 0
+#endif
+
+#if defined(CONFIG_FOCUS_NODE_BOOT_SYNC_ZERO)
+#define FOCUS_NODE_BOOT_SYNC_ZERO 1
+#else
+#define FOCUS_NODE_BOOT_SYNC_ZERO 0
+#endif
+
+#if defined(CONFIG_SAFETY_NODE_LED_PIN)
+#define SAFETY_NODE_LED_PIN CONFIG_SAFETY_NODE_LED_PIN
+#else
+#define SAFETY_NODE_LED_PIN 7
+#endif
+
+#if defined(CONFIG_SAFETY_NODE_LED_ACTIVE_HIGH)
+#define SAFETY_NODE_LED_ACTIVE_HIGH 1
+#else
+#define SAFETY_NODE_LED_ACTIVE_HIGH 0
+#endif
+
+#if defined(CONFIG_SAFETY_NODE_BOOT_LED_ON)
+#define SAFETY_NODE_BOOT_LED_ON 1
+#else
+#define SAFETY_NODE_BOOT_LED_ON 0
+#endif
+
+#define SAFETY_NODE_POLL_INTERVAL_MS 1000
 
 /* ================= 任务配置 ================= */
 #define TASK_STACK_SIZE_DEFAULT 0x1000

@@ -76,7 +76,14 @@ def _normalize_contour_points(contour: np.ndarray, width: int, height: int) -> N
     return points
 
 
-def _extract_edges_with_clahe(image: np.ndarray) -> np.ndarray:
+def _extract_edges_with_clahe(
+    image: np.ndarray,
+    *,
+    canny_low: int = 30,
+    canny_high: int = 100,
+    blur_kernel_size: int = 5,
+    close_iterations: int = 1,
+) -> np.ndarray:
     """
     使用更平衡的 CLAHE 流水线提取边缘。
 
@@ -92,11 +99,15 @@ def _extract_edges_with_clahe(image: np.ndarray) -> np.ndarray:
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
 
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
-    edged = cv2.Canny(blurred, 30, 100)
+    kernel_size = max(3, int(blur_kernel_size))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    blurred = cv2.GaussianBlur(enhanced, (kernel_size, kernel_size), 0)
+    edged = cv2.Canny(blurred, int(canny_low), int(canny_high))
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=1)
+    if close_iterations > 0:
+        edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=int(close_iterations))
     return edged
 
 
@@ -201,6 +212,9 @@ def process_image_to_contours(
     preview_path: str = "temp_contours_preview.png",
     min_area: float = 20.0,
     min_perimeter: float = 10.0,
+    detail_level: int = 3,
+    denoise_level: int = 2,
+    smoothing_passes: int = 2,
 ) -> Tuple[List[NormalizedPath], str]:
     """
     把输入图像处理成轮廓路径。
@@ -222,7 +236,21 @@ def process_image_to_contours(
 
     image = _read_image_unicode_safe(image_path)
 
-    edged = _extract_edges_with_clahe(image)
+    detail = max(1, min(5, int(detail_level)))
+    denoise = max(0, min(5, int(denoise_level)))
+    canny_low = max(10, 45 - detail * 5)
+    canny_high = max(canny_low + 30, 130 - detail * 10)
+    blur_kernel_size = 3 if denoise <= 1 else 5 if denoise <= 3 else 7
+    close_iterations = min(3, denoise)
+    sample_distance_px = max(0.6, 1.8 - detail * 0.2)
+
+    edged = _extract_edges_with_clahe(
+        image,
+        canny_low=canny_low,
+        canny_high=canny_high,
+        blur_kernel_size=blur_kernel_size,
+        close_iterations=close_iterations,
+    )
 
     contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     if not contours:
@@ -241,8 +269,16 @@ def process_image_to_contours(
             continue
 
         is_closed = area >= 1.0
-        smoothed = _smooth_contour_points(contour, is_closed=is_closed, smoothing_passes=2)
-        sampled = _sample_contour_points_by_distance(smoothed, is_closed=is_closed, min_distance_px=1.2)
+        smoothed = _smooth_contour_points(
+            contour,
+            is_closed=is_closed,
+            smoothing_passes=max(1, int(smoothing_passes)),
+        )
+        sampled = _sample_contour_points_by_distance(
+            smoothed,
+            is_closed=is_closed,
+            min_distance_px=sample_distance_px,
+        )
         if len(sampled) < 2:
             continue
 

@@ -13,6 +13,12 @@ config LASER_MARKER_RECEIVER
 config LASER_MARKER_TRANSMITTER
     bool "Support Transmitter Board (发射板)."
 
+config LASER_MARKER_FOCUS_NODE
+    bool "Support Focus Node Board (感知与对焦节点，含Z轴/ZDT)."
+
+config LASER_MARKER_SAFETY_NODE
+    bool "Support Safety Node Board (安全终端节点)."
+
 endchoice
 
 if LASER_MARKER_RECEIVER
@@ -89,6 +95,85 @@ config LASER_WIFI_TCP_PORT
 
 endmenu
 endif
+
+endmenu
+endif
+
+if LASER_MARKER_FOCUS_NODE
+menu "Focus Node Configuration (感知与对焦节点配置)"
+
+comment "Current Z-axis path is fixed to TTL UART1 / GPIO15-16（当前Z轴固定为TTL串口 UART1 / GPIO15-16）"
+
+config ZDT_UART_BAUD
+    int
+    prompt "UART baud rate (UART波特率)."
+    range 9600 1000000
+    default 115200
+
+config ZDT_DEVICE_ADDR
+    int
+    prompt "ZDT motor address (ZDT电机地址)."
+    range 0 255
+    default 1
+
+config ZDT_RS485_DIR_ENABLE
+    bool
+    prompt "Use RS485 DE/RE direction pin (启用RS485方向控制)."
+    default n
+
+if ZDT_RS485_DIR_ENABLE
+config ZDT_RS485_DIR_PIN
+    int
+    prompt "RS485 DE/RE pin (RS485方向引脚)."
+    range 0 31
+    default 17
+
+config ZDT_RS485_DIR_ACTIVE_HIGH
+    bool
+    prompt "DE active high (DE高电平发送)."
+    default y
+endif
+
+config ZDT_DEMO_AUTO_RUN
+    bool
+    prompt "Auto-run demo move after boot (上电自动演示运动)."
+    default n
+    help
+        Enable a minimal smoke test sequence:
+        motor enable -> position clear -> one relative move.
+        Keep this disabled on real Z-axis hardware until limits are verified.
+
+config FOCUS_NODE_BOOT_ENABLE_Z
+    bool
+    prompt "Enable Z motor after focus node boot (感知节点启动后自动使能Z轴)."
+    default y
+
+config FOCUS_NODE_BOOT_SYNC_ZERO
+    bool
+    prompt "Clear Z position once after boot (感知节点启动后执行一次位置清零)."
+    default y
+
+endmenu
+endif
+
+if LASER_MARKER_SAFETY_NODE
+menu "Safety Node Configuration (安全节点配置)"
+
+config SAFETY_NODE_LED_PIN
+    int
+    prompt "Safety node LED pin (安全节点LED引脚)."
+    range 0 31
+    default 7
+
+config SAFETY_NODE_LED_ACTIVE_HIGH
+    bool
+    prompt "LED active high (LED高电平点亮)."
+    default y
+
+config SAFETY_NODE_BOOT_LED_ON
+    bool
+    prompt "Turn LED on after boot (安全节点启动后点亮LED)."
+    default n
 
 endmenu
 endif

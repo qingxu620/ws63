@@ -68,8 +68,8 @@ QLabel#TaskStatusLabel {
     padding-left: 6px;
 }
 QLabel#TaskDetailLabel {
-    color: #718096;
-    font-size: 12px;
+    color: #5F6F82;
+    font-size: 11px;
     font-weight: 400;
 }
 
@@ -349,6 +349,22 @@ QLabel#LiveTelemetryValue {
     color: #2D3748;
     padding: 1px 2px;
 }
+QLabel#StatusInlineKey {
+    color: #2F6FB3;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#StatusInlineValue {
+    color: #2D3748;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#StatusInlineSeparator {
+    color: #A0AEC0;
+    font-size: 11px;
+    font-weight: 400;
+    padding: 0 1px;
+}
 
 QFrame#LeftFillPanel {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #EFF4FB, stop:1 #E7EEF8);
@@ -480,9 +496,9 @@ QProgressBar {
     text-align: center;
     color: #2D3748;
     font-weight: bold;
-    font-size: 13px;
-    min-height: 24px;
-    max-height: 28px;
+    font-size: 12px;
+    min-height: 18px;
+    max-height: 20px;
 }
 QProgressBar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #48BB78, stop:1 #81E6D9);
@@ -506,8 +522,8 @@ QTabBar::tab {
     background-color: #E4E7EB;
     color: #7F8C8D;
     border-radius: 8px;
-    padding: 10px 12px;
-    margin-right: 4px;
+    padding: 10px 14px;
+    margin-right: 8px;
     margin-bottom: 10px;
     font-weight: bold;
     font-size: 13px;
@@ -550,6 +566,39 @@ MATERIAL_PRESETS: Dict[str, Dict[str, int]] = {
     "牛皮纸 (打标)": {"power": 300, "feed_rate": 3000},
     "亚克力 (深雕)": {"power": 1000, "feed_rate": 800},
 }
+
+TRANSPORT_DISPLAY: Dict[str, str] = {
+    "serial": "串口 UART",
+    "wifi": "WiFi TCP",
+}
+
+WIFI_WORKFLOW_PRESETS: Dict[str, Dict[str, object]] = {
+    "softap": {
+        "label": "WiFi SoftAP",
+        "host": "192.168.43.1",
+        "port": 5000,
+        "summary": "SoftAP 离线直连：适合本地图导入、已有 G-Code 和纯控制演示。",
+        "placeholder": "通常为 192.168.43.1",
+    },
+    "sta": {
+        "label": "WiFi STA",
+        "host": "",
+        "port": 5000,
+        "summary": "STA 在线工作流：适合在线 AI 生图 + WiFi 下发，请填写发射板实际分配到的 IP。",
+        "placeholder": "请输入路由器/手机热点下的发射板 IP",
+    },
+}
+
+
+def format_transport_label(mode: str) -> str:
+    return TRANSPORT_DISPLAY.get(mode, mode or "--")
+
+
+def format_wifi_workflow_label(workflow: str) -> str:
+    preset = WIFI_WORKFLOW_PRESETS.get(workflow)
+    if preset is None:
+        return "WiFi TCP"
+    return str(preset["label"])
 
 
 class ImageLabel(QtWidgets.QLabel):
@@ -637,6 +686,149 @@ class ElidedLabel(QtWidgets.QLabel):
         text = self.fontMetrics().elidedText(self._full_text, QtCore.Qt.ElideRight, width)
         super().setText(text)
         super().setToolTip(self._full_text if text != self._full_text else "")
+
+
+class GCodePreviewWidget(QtWidgets.QWidget):
+    """轻量 G-Code 轨迹预览，区分空走和激光走线。"""
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._lines: List[str] = []
+        self._background_pixmap: Optional[QtGui.QPixmap] = None
+        self.setObjectName("GCodePreviewCanvas")
+        self.setMinimumHeight(170)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+    def set_gcode_lines(self, lines: List[str]) -> None:
+        self._lines = list(lines)
+        self.update()
+
+    def set_background_image(self, image_path: Optional[str]) -> None:
+        if not image_path:
+            self._background_pixmap = None
+            self.update()
+            return
+        pixmap = QtGui.QPixmap(str(image_path))
+        self._background_pixmap = pixmap if not pixmap.isNull() else None
+        self.update()
+
+    def clear_preview(self) -> None:
+        self._lines = []
+        self.update()
+
+    @staticmethod
+    def _parse_axis_words(line: str) -> Dict[str, float]:
+        result: Dict[str, float] = {}
+        for word in line.split():
+            if len(word) < 2:
+                continue
+            axis = word[0].upper()
+            if axis not in ("X", "Y"):
+                continue
+            try:
+                result[axis] = float(word[1:])
+            except ValueError:
+                continue
+        return result
+
+    def _segments(self) -> List[Tuple[float, float, float, float, bool]]:
+        segments: List[Tuple[float, float, float, float, bool]] = []
+        x = 0.0
+        y = 0.0
+        laser_on = False
+        for raw_line in self._lines:
+            line = raw_line.strip()
+            if not line or line.startswith(";") or line.startswith("("):
+                continue
+            command = line.split()[0].upper() if line.split() else ""
+            if command == "M3":
+                laser_on = True
+                continue
+            if command == "M5":
+                laser_on = False
+                continue
+            if command not in ("G0", "G00", "G1", "G01"):
+                continue
+
+            axes = self._parse_axis_words(line)
+            next_x = axes.get("X", x)
+            next_y = axes.get("Y", y)
+            if next_x != x or next_y != y:
+                segments.append((x, y, next_x, next_y, laser_on and command in ("G1", "G01")))
+            x = next_x
+            y = next_y
+        return segments
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # pragma: no cover - GUI 绘制
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+
+        rect = self.rect().adjusted(12, 12, -12, -12)
+        painter.fillRect(self.rect(), QtGui.QColor("#F8FBFE"))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#D8E3EF"), 1))
+        painter.drawRoundedRect(QtCore.QRectF(rect), 8, 8)
+
+        segments = self._segments()
+        if not segments:
+            painter.setPen(QtGui.QColor("#8A9AAD"))
+            painter.drawText(rect, QtCore.Qt.AlignCenter, "等待生成 G-Code 轨迹")
+            painter.end()
+            return
+
+        xs = [value for segment in segments for value in (segment[0], segment[2])]
+        ys = [value for segment in segments for value in (segment[1], segment[3])]
+        min_x = min(xs)
+        max_x = max(xs)
+        min_y = min(ys)
+        max_y = max(ys)
+        src_w = max(max_x - min_x, 1.0)
+        src_h = max(max_y - min_y, 1.0)
+        pad_x = max(src_w * 0.08, 1.0)
+        pad_y = max(src_h * 0.08, 1.0)
+        min_x -= pad_x
+        max_x += pad_x
+        min_y -= pad_y
+        max_y += pad_y
+        src_w = max(max_x - min_x, 1.0)
+        src_h = max(max_y - min_y, 1.0)
+
+        usable = rect.adjusted(12, 12, -12, -12)
+        scale = min(usable.width() / src_w, usable.height() / src_h)
+        draw_w = src_w * scale
+        draw_h = src_h * scale
+        origin_x = usable.left() + (usable.width() - draw_w) * 0.5
+        origin_y = usable.top() + (usable.height() - draw_h) * 0.5
+
+        preview_rect = QtCore.QRectF(origin_x, origin_y, draw_w, draw_h)
+        if self._background_pixmap is not None:
+            painter.setOpacity(0.62)
+            painter.drawPixmap(
+                preview_rect.toRect(),
+                self._background_pixmap.scaled(
+                    preview_rect.size().toSize(),
+                    QtCore.Qt.KeepAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                ),
+            )
+            painter.setOpacity(1.0)
+
+        painter.setPen(QtGui.QPen(QtGui.QColor("#B9C7D8"), 1))
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawRect(preview_rect)
+
+        def map_point(px: float, py: float) -> QtCore.QPointF:
+            return QtCore.QPointF(origin_x + (px - min_x) * scale, origin_y + draw_h - (py - min_y) * scale)
+
+        traverse_pen = QtGui.QPen(QtGui.QColor("#A7B4C4"), 1, QtCore.Qt.DashLine)
+        burn_pen = QtGui.QPen(QtGui.QColor("#1F2937"), 1.8, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap)
+        for x0, y0, x1, y1, burn in segments:
+            painter.setPen(burn_pen if burn else traverse_pen)
+            painter.drawLine(map_point(x0, y0), map_point(x1, y1))
+
+        painter.setPen(QtGui.QColor("#667085"))
+        painter.drawText(rect.adjusted(8, 6, -8, -6), QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop, "实线=雕刻  虚线=空走")
+        painter.end()
 
 
 def _draw_chevron(
@@ -893,6 +1085,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._is_generating_gcode = False
         self._is_prompt_optimizing = False
         self._active_device_job = ""
+        self._current_wifi_workflow = "softap"
         self.task_manager = TaskManager()
         self.task_manager.add_state_listener(self._on_task_state_changed)
 
@@ -900,6 +1093,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_thread.log_signal.connect(self.append_log)
         self.serial_thread.status_signal.connect(self.append_log)
         self.serial_thread.progress_signal.connect(self.on_progress_changed)
+        self.serial_thread.job_progress_signal.connect(self.on_job_line_progress)
         self.serial_thread.ports_signal.connect(self.update_ports)
         self.serial_thread.telemetry_signal.connect(self.on_live_status_changed)
         self.serial_thread.finished_signal.connect(self.on_job_finished)
@@ -937,6 +1131,9 @@ class MainWindow(QtWidgets.QMainWindow):
         root_layout.setSpacing(0)
 
         self.horizontal_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.horizontal_splitter.setChildrenCollapsible(False)
+        self.horizontal_splitter.setHandleWidth(8)
+        self.horizontal_splitter.setOpaqueResize(True)
         root_layout.addWidget(self.horizontal_splitter)
 
         left_panel = self._build_left_panel()
@@ -944,15 +1141,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.horizontal_splitter.addWidget(left_panel)
         self.horizontal_splitter.addWidget(right_panel)
-        self.horizontal_splitter.setStretchFactor(0, 0)
-        self.horizontal_splitter.setStretchFactor(1, 1)
-        self.horizontal_splitter.setSizes([330, 1110])
+        self.horizontal_splitter.setStretchFactor(0, 1)
+        self.horizontal_splitter.setStretchFactor(1, 3)
+        self.horizontal_splitter.setSizes([410, 1030])
 
     def _build_left_panel(self) -> QtWidgets.QWidget:
         self.left_panel = QtWidgets.QWidget()
-        self.left_panel.setMinimumWidth(320)
-        self.left_panel.setMaximumWidth(380)
-        self.left_panel.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
+        self.left_panel.setMinimumWidth(390)
+        self.left_panel.setMaximumWidth(460)
+        self.left_panel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
 
         self.left_layout = QtWidgets.QVBoxLayout(self.left_panel)
         self.left_layout.setContentsMargins(0, 0, 0, 0)
@@ -1036,6 +1233,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return self._build_left_scroll_page(
             self._build_params_card(),
+            self._build_contour_params_card(),
             self._build_action_card(),
         )
 
@@ -1089,12 +1287,12 @@ class MainWindow(QtWidgets.QMainWindow):
         card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
         layout = QtWidgets.QVBoxLayout(card)
-        layout.setContentsMargins(16, 10, 16, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
 
         # -- Row 1: title + progress bar --
         header_row = QtWidgets.QHBoxLayout()
-        header_row.setSpacing(16)
+        header_row.setSpacing(10)
 
         title_label = QtWidgets.QLabel("\U0001f4e1 \u72b6\u6001\u4e0e\u8fdb\u5ea6")
         title_label.setObjectName("CardTitle")
@@ -1111,7 +1309,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("\u4efb\u52a1\u8fdb\u5ea6 %p%")
-        self.progress_bar.setFixedHeight(24)
+        self.progress_bar.setFixedHeight(20)
         self.progress_bar.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         header_row.addWidget(self.progress_bar, 1)
 
@@ -1121,23 +1319,44 @@ class MainWindow(QtWidgets.QMainWindow):
         self.task_detail_label.setObjectName("TaskDetailLabel")
         self.task_detail_label.setWordWrap(True)
         self.task_detail_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        self.task_detail_label.setMaximumHeight(32)
         layout.addWidget(self.task_detail_label)
 
-        # -- Row 2: flat telemetry strip (single row, 6 columns) --
+        # -- Row 2-3: 紧凑状态栏 --
         telemetry_strip = QtWidgets.QFrame()
         telemetry_strip.setObjectName("LiveTelemetryStrip")
         telemetry_strip.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        grid = QtWidgets.QGridLayout(telemetry_strip)
-        grid.setContentsMargins(12, 8, 12, 8)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(2)
+        telemetry_layout = QtWidgets.QVBoxLayout(telemetry_strip)
+        telemetry_layout.setContentsMargins(8, 6, 8, 6)
+        telemetry_layout.setSpacing(2)
 
-        self.live_state_value = self._create_live_telemetry_pair(grid, 0, 0, "\u8bbe\u5907\u72b6\u6001")
-        self.live_x_value = self._create_live_telemetry_pair(grid, 0, 1, "X")
-        self.live_y_value = self._create_live_telemetry_pair(grid, 0, 2, "Y")
-        self.live_feed_value = self._create_live_telemetry_pair(grid, 0, 3, "F")
-        self.live_power_value = self._create_live_telemetry_pair(grid, 0, 4, "S")
-        self.live_endpoint_value = self._create_live_telemetry_pair(grid, 0, 5, "\u76ee\u6807")
+        network_row = QtWidgets.QHBoxLayout()
+        network_row.setContentsMargins(0, 0, 0, 0)
+        network_row.setSpacing(4)
+        self.live_state_value = self._append_live_status_field(network_row, "设备")
+        self._append_status_separator(network_row)
+        self.live_transport_value = self._append_live_status_field(network_row, "链路")
+        self._append_status_separator(network_row)
+        self.live_wifi_mode_value = self._append_live_status_field(network_row, "WiFi")
+        self._append_status_separator(network_row)
+        self.live_sle_value = self._append_live_status_field(network_row, "SLE")
+        self._append_status_separator(network_row)
+        self.live_refresh_value = self._append_live_status_field(network_row, "刷新")
+        network_row.addStretch(1)
+        telemetry_layout.addLayout(network_row)
+
+        telemetry_row = QtWidgets.QHBoxLayout()
+        telemetry_row.setContentsMargins(0, 0, 0, 0)
+        telemetry_row.setSpacing(4)
+        self.live_coord_value = self._append_live_status_field(telemetry_row, "坐标(X,Y)")
+        self._append_status_separator(telemetry_row)
+        self.live_target_value = self._append_live_status_field(telemetry_row, "目标", stretch=2, elide=True)
+        self._append_status_separator(telemetry_row)
+        self.live_feed_value = self._append_live_status_field(telemetry_row, "速度(F)")
+        self._append_status_separator(telemetry_row)
+        self.live_power_value = self._append_live_status_field(telemetry_row, "功率(S)")
+        telemetry_row.addStretch(1)
+        telemetry_layout.addLayout(telemetry_row)
 
         layout.addWidget(telemetry_strip)
         return card
@@ -1177,6 +1396,28 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("连接方式"))
         layout.addWidget(self.transport_combo)
 
+        preset_row = QtWidgets.QHBoxLayout()
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        preset_row.setSpacing(8)
+        self.serial_preset_button = QtWidgets.QPushButton("串口模式")
+        self.serial_preset_button.setProperty("secondary", True)
+        self.serial_preset_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.serial_preset_button.clicked.connect(lambda: self._apply_connection_preset("serial"))
+        self.wifi_softap_button = QtWidgets.QPushButton("WiFi SoftAP")
+        self.wifi_softap_button.setProperty("secondary", True)
+        self.wifi_softap_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.wifi_softap_button.clicked.connect(lambda: self._apply_connection_preset("softap"))
+        self.wifi_sta_button = QtWidgets.QPushButton("WiFi STA")
+        self.wifi_sta_button.setProperty("secondary", True)
+        self.wifi_sta_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.wifi_sta_button.clicked.connect(lambda: self._apply_connection_preset("sta"))
+        self._apply_min_height(self.serial_preset_button, self.wifi_softap_button, self.wifi_sta_button)
+        preset_row.addWidget(self.serial_preset_button)
+        preset_row.addWidget(self.wifi_softap_button)
+        preset_row.addWidget(self.wifi_sta_button)
+        layout.addWidget(QtWidgets.QLabel("快捷预设"))
+        layout.addLayout(preset_row)
+
         self.port_combo = ClickToSelectComboBox()
         self.port_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -1209,6 +1450,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.serial_config_widget)
 
         self.wifi_host_edit = QtWidgets.QLineEdit("192.168.43.1")
+        self.wifi_host_edit.setPlaceholderText("通常为 192.168.43.1")
         self.wifi_port_spin = ClickToEditSpinBox()
         self.wifi_port_spin.setRange(1, 65535)
         self.wifi_port_spin.setValue(5000)
@@ -1225,6 +1467,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.connect_button = QtWidgets.QPushButton("连接设备")
         self.connect_button.setObjectName("BtnPrimary")
+        self.connect_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.connect_button.clicked.connect(self.toggle_device_connection)
         self._apply_min_height(self.connect_button)
         layout.addWidget(self.connect_button)
@@ -1297,24 +1540,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.btn_beautify_prompt = QtWidgets.QPushButton("✨ 一键美化提示词")
         self.btn_beautify_prompt.setObjectName("BtnPromptAssist")
+        self.btn_beautify_prompt.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.btn_beautify_prompt.clicked.connect(self.on_beautify_prompt)
         self._apply_min_height(self.btn_beautify_prompt)
         layout.addWidget(self.btn_beautify_prompt)
 
         self.generate_image_button = QtWidgets.QPushButton("✨ 魔法生成图像")
         self.generate_image_button.setObjectName("BtnAI")
+        self.generate_image_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.generate_image_button.clicked.connect(self.on_generate_image)
         self._apply_min_height(self.generate_image_button)
         layout.addWidget(self.generate_image_button)
 
         self.competition_flow_button = QtWidgets.QPushButton("⚡ 一键比赛流程")
         self.competition_flow_button.setObjectName("BtnStart")
+        self.competition_flow_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.competition_flow_button.clicked.connect(self.on_start_competition_flow)
         self._apply_min_height(self.competition_flow_button)
         layout.addWidget(self.competition_flow_button)
 
         self.import_image_button = QtWidgets.QPushButton("📁 导入本地图片")
         self.import_image_button.setObjectName("BtnLocal")
+        self.import_image_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.import_image_button.clicked.connect(self.on_import_local_image)
         self._apply_min_height(self.import_image_button)
         layout.addWidget(self.import_image_button)
@@ -1393,6 +1640,51 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(board_hint)
         return card
 
+    def _build_contour_params_card(self) -> QtWidgets.QFrame:
+        card, layout = self._create_card("✏️ 轮廓提取参数", "图片已经导入或生成后，可调整参数并重新提取轮廓。")
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignLeft)
+        form.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+
+        self.contour_detail_spin = ClickToEditSpinBox()
+        self.contour_detail_spin.setRange(1, 5)
+        self.contour_detail_spin.setValue(3)
+
+        self.contour_denoise_spin = ClickToEditSpinBox()
+        self.contour_denoise_spin.setRange(0, 5)
+        self.contour_denoise_spin.setValue(2)
+
+        self.contour_min_area_spin = ClickToEditSpinBox()
+        self.contour_min_area_spin.setRange(1, 1000)
+        self.contour_min_area_spin.setValue(20)
+
+        self.contour_smooth_spin = ClickToEditSpinBox()
+        self.contour_smooth_spin.setRange(1, 5)
+        self.contour_smooth_spin.setValue(2)
+
+        self._apply_min_height(
+            self.contour_detail_spin,
+            self.contour_denoise_spin,
+            self.contour_min_area_spin,
+            self.contour_smooth_spin,
+        )
+
+        form.addRow("细节保留", self.contour_detail_spin)
+        form.addRow("降噪强度", self.contour_denoise_spin)
+        form.addRow("最小面积", self.contour_min_area_spin)
+        form.addRow("线条平滑", self.contour_smooth_spin)
+        layout.addLayout(form)
+
+        self.reprocess_contour_button = QtWidgets.QPushButton("重新提取轮廓")
+        self.reprocess_contour_button.setObjectName("BtnAction")
+        self.reprocess_contour_button.clicked.connect(self.on_reprocess_current_image)
+        self._apply_min_height(self.reprocess_contour_button)
+        layout.addWidget(self.reprocess_contour_button)
+        return card
+
     def _build_action_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("🕹️ 操作控制", "生成 G-Code、预览边界、开始雕刻或在紧急情况下立即停止。")
 
@@ -1432,6 +1724,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.export_button,
             self.emergency_button,
         ):
+            button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             layout.addWidget(button)
         return card
 
@@ -1493,7 +1786,7 @@ class MainWindow(QtWidgets.QMainWindow):
         preview_row.setSpacing(10)
 
         left_preview = self._create_preview_panel("原图", "等待生成或导入图片")
-        right_preview = self._create_preview_panel("轮廓", "等待轮廓提取结果")
+        right_preview = self._create_result_preview_panel()
 
         self.original_image_label = left_preview[1]
         self.contour_image_label = right_preview[1]
@@ -1511,31 +1804,54 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_preview_summary(self) -> None:
         original_ready = bool(self.current_image_path)
         contour_ready = bool(self.current_contours_path)
-        if original_ready and contour_ready:
-            summary = "原图与轮廓已就绪"
+        gcode_ready = bool(self.current_gcode_lines)
+        if original_ready and contour_ready and gcode_ready:
+            summary = "原图、轮廓与 G-Code 轨迹已就绪"
+        elif original_ready and contour_ready:
+            summary = "原图与轮廓已就绪，待生成 G-Code"
         elif original_ready:
             summary = "原图已就绪，待轮廓"
         else:
             summary = "等待导入或生成"
         self.preview_compact_summary.setText(summary)
 
-    def _create_live_telemetry_pair(
+    def _append_status_separator(self, layout: QtWidgets.QHBoxLayout) -> None:
+        separator = QtWidgets.QLabel("|")
+        separator.setObjectName("StatusInlineSeparator")
+        separator.setAlignment(QtCore.Qt.AlignCenter)
+        separator.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        layout.addWidget(separator)
+
+    def _append_live_status_field(
         self,
-        layout: QtWidgets.QGridLayout,
-        row: int,
-        column: int,
+        layout: QtWidgets.QHBoxLayout,
         title: str,
+        *,
+        stretch: int = 0,
+        elide: bool = False,
     ) -> QtWidgets.QLabel:
-        title_label = QtWidgets.QLabel(title)
-        title_label.setObjectName("LiveTelemetryLabel")
-        title_label.setAlignment(QtCore.Qt.AlignCenter)
-        value_label = QtWidgets.QLabel("--")
-        value_label.setObjectName("LiveTelemetryValue")
-        value_label.setAlignment(QtCore.Qt.AlignCenter)
+        container = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+
+        title_label = QtWidgets.QLabel(f"{title}:")
+        title_label.setObjectName("StatusInlineKey")
+        title_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+
+        if elide:
+            value_label = ElidedLabel("--")
+            value_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        else:
+            value_label = QtWidgets.QLabel("--")
+            value_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        value_label.setObjectName("StatusInlineValue")
+        value_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         value_label.setWordWrap(False)
-        layout.addWidget(title_label, row * 2, column)
-        layout.addWidget(value_label, row * 2 + 1, column)
-        layout.setColumnStretch(column, 1)
+
+        row.addWidget(title_label)
+        row.addWidget(value_label, 1)
+        layout.addWidget(container, stretch)
         return value_label
 
     def _create_preview_panel(self, title: str, placeholder: str) -> Tuple[QtWidgets.QFrame, ImageLabel]:
@@ -1552,6 +1868,47 @@ class MainWindow(QtWidgets.QMainWindow):
         image_label = ImageLabel(placeholder)
         panel_layout.addWidget(image_label, 1)
         return panel, image_label
+
+    def _create_result_preview_panel(self) -> Tuple[QtWidgets.QFrame, ImageLabel]:
+        panel = QtWidgets.QFrame()
+        panel.setObjectName("PreviewPanel")
+        panel_layout = QtWidgets.QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 10, 10, 10)
+        panel_layout.setSpacing(6)
+
+        title_row = QtWidgets.QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+        title_label = QtWidgets.QLabel("轮廓")
+        title_label.setObjectName("PreviewTitle")
+        title_row.addWidget(title_label)
+        title_row.addStretch(1)
+
+        self.result_preview_mode_combo = ClickToSelectComboBox()
+        self.result_preview_mode_combo.addItem("轮廓", "contour")
+        self.result_preview_mode_combo.addItem("G-Code", "gcode")
+        self.result_preview_mode_combo.addItem("叠加", "overlay")
+        self.result_preview_mode_combo.setMaximumWidth(128)
+        self.result_preview_mode_combo.currentIndexChanged.connect(self._on_result_preview_mode_changed)
+        title_row.addWidget(self.result_preview_mode_combo)
+        panel_layout.addLayout(title_row)
+
+        self.result_preview_stack = QtWidgets.QStackedWidget()
+        contour_label = ImageLabel("等待轮廓提取结果")
+        self.gcode_preview_widget = GCodePreviewWidget()
+        self.gcode_overlay_widget = GCodePreviewWidget()
+        self.result_preview_stack.addWidget(contour_label)
+        self.result_preview_stack.addWidget(self.gcode_preview_widget)
+        self.result_preview_stack.addWidget(self.gcode_overlay_widget)
+        panel_layout.addWidget(self.result_preview_stack, 1)
+        return panel, contour_label
+
+    def _on_result_preview_mode_changed(self) -> None:
+        if not hasattr(self, "result_preview_stack") or not hasattr(self, "result_preview_mode_combo"):
+            return
+        mode = str(self.result_preview_mode_combo.currentData() or "contour")
+        index = {"contour": 0, "gcode": 1, "overlay": 2}.get(mode, 0)
+        self.result_preview_stack.setCurrentIndex(index)
 
     def _build_log_card(self) -> QtWidgets.QFrame:
         card, layout = self._create_card("📝 系统消息板", "这里会显示串口或 WiFi 收发、G-Code 预览和任务运行状态，便于比赛演示。")
@@ -1647,6 +2004,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.start_button.setEnabled(connected)
         if hasattr(self, "emergency_button"):
             self.emergency_button.setEnabled(connected)
+        for preset_button in (
+            getattr(self, "serial_preset_button", None),
+            getattr(self, "wifi_softap_button", None),
+            getattr(self, "wifi_sta_button", None),
+        ):
+            if preset_button is not None:
+                preset_button.setEnabled(not connected)
         self.transport_combo.setEnabled(not connected)
         self.serial_config_widget.setVisible(mode == "serial")
         self.wifi_config_widget.setVisible(mode == "wifi")
@@ -1658,16 +2022,33 @@ class MainWindow(QtWidgets.QMainWindow):
         if connected:
             self.connect_button.setEnabled(True)
             self.connect_button.setText("断开设备")
-            self.connection_summary_label.setText(
-                f"当前已通过{'WiFi TCP' if mode == 'wifi' else '串口 UART'}连接：{self.serial_thread.connection_description()}"
-            )
+            if mode == "wifi":
+                self.connection_summary_label.setText(
+                    f"当前已通过 {format_transport_label(mode)} 连接：{self.serial_thread.connection_description()}，"
+                    f"工作流预设为 {self._current_wifi_workflow_label()}。"
+                )
+            else:
+                self.connection_summary_label.setText(
+                    f"当前已通过 {format_transport_label(mode)} 连接：{self.serial_thread.connection_description()}"
+                )
             self.live_state_value.setText("已连接")
-            self.live_endpoint_value.setText(self.serial_thread.connection_description() or "--")
+            self.live_target_value.setText(self.serial_thread.connection_description() or "--")
+            self.live_target_value.setToolTip(self.serial_thread.connection_description() or "--")
+            self.live_transport_value.setText(format_transport_label(mode))
+            if mode == "wifi":
+                self.live_wifi_mode_value.setText(self._current_wifi_workflow_label().replace("WiFi ", ""))
+                self.live_sle_value.setText("未知")
+            else:
+                self.live_wifi_mode_value.setText("--")
+                self.live_sle_value.setText("--")
         else:
             self.connect_button.setText("连接设备")
             if mode == "wifi":
                 self.connect_button.setEnabled(True)
-                self.connection_summary_label.setText("当前选择 WiFi TCP，可直连发射板 SoftAP 或 STA 地址。")
+                preset = WIFI_WORKFLOW_PRESETS.get(self._current_wifi_workflow, WIFI_WORKFLOW_PRESETS["softap"])
+                self.connection_summary_label.setText(
+                    f"当前选择 {self._current_wifi_workflow_label()}。{preset['summary']}"
+                )
             else:
                 self.connect_button.setEnabled(serial_available)
                 if serial_available:
@@ -1702,19 +2083,68 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         return value
 
+    def _confirm_device_job(self, title: str, *, line_count: int = 0) -> bool:
+        connection = self.serial_thread.connection_description() or self._current_connection_target()
+        mode = format_transport_label(self._current_transport_mode())
+        extra = ""
+        if self._current_transport_mode() == "wifi" and self._current_wifi_workflow == "softap":
+            extra = "\n当前为 WiFi SoftAP，若电脑没有其他外网链路，在线 AI 生图可能不可用。"
+        line_text = f"\nG-Code 行数：{line_count}" if line_count > 0 else ""
+        message = (
+            f"即将执行：{title}\n"
+            f"链路：{mode} -> {connection}\n"
+            f"尺寸：{self.width_spin.value():.1f} x {self.height_spin.value():.1f} mm\n"
+            f"功率/进给：S{self.power_spin.value()} / F{self.feed_spin.value()}"
+            f"{line_text}{extra}\n\n确认继续？"
+        )
+        answer = QtWidgets.QMessageBox.question(self, "执行确认", message)
+        return answer == QtWidgets.QMessageBox.Yes
+
     def on_transport_mode_changed(self) -> None:
         self.serial_thread.set_transport_mode(self._current_transport_mode())
+        if self._current_transport_mode() == "wifi":
+            preset = WIFI_WORKFLOW_PRESETS.get(self._current_wifi_workflow, WIFI_WORKFLOW_PRESETS["softap"])
+            self.wifi_host_edit.setPlaceholderText(str(preset["placeholder"]))
         self._update_connection_ui(self.serial_thread.is_connected())
+
+    def _apply_connection_preset(self, preset: str) -> None:
+        if preset == "serial":
+            serial_index = self.transport_combo.findData("serial")
+            if serial_index >= 0:
+                self.transport_combo.setCurrentIndex(serial_index)
+            self._update_connection_ui(self.serial_thread.is_connected())
+            return
+
+        self._current_wifi_workflow = "sta" if preset == "sta" else "softap"
+        wifi_index = self.transport_combo.findData("wifi")
+        if wifi_index >= 0:
+            self.transport_combo.setCurrentIndex(wifi_index)
+
+        workflow_preset = WIFI_WORKFLOW_PRESETS[self._current_wifi_workflow]
+        self.wifi_host_edit.setText(str(workflow_preset["host"]))
+        self.wifi_host_edit.setPlaceholderText(str(workflow_preset["placeholder"]))
+        self.wifi_port_spin.setValue(int(workflow_preset["port"]))
+        self._update_connection_ui(self.serial_thread.is_connected())
+
+    def _current_wifi_workflow_label(self) -> str:
+        return format_wifi_workflow_label(self._current_wifi_workflow)
 
     def reset_live_status_strip(self) -> None:
         if not hasattr(self, "live_state_value"):
             return
         self.live_state_value.setText("未连接")
-        self.live_x_value.setText("--")
-        self.live_y_value.setText("--")
+        self.live_target_value.setText("--")
+        self.live_target_value.setToolTip("")
+        self.live_transport_value.setText(format_transport_label(self._current_transport_mode()))
+        if self._current_transport_mode() == "wifi":
+            self.live_wifi_mode_value.setText(self._current_wifi_workflow_label().replace("WiFi ", ""))
+        else:
+            self.live_wifi_mode_value.setText("--")
+        self.live_sle_value.setText("--")
+        self.live_coord_value.setText("--, --")
         self.live_feed_value.setText("--")
         self.live_power_value.setText("--")
-        self.live_endpoint_value.setText("--")
+        self.live_refresh_value.setText("--")
 
     def on_live_status_changed(self, snapshot: Dict[str, object]) -> None:
         if not hasattr(self, "live_state_value"):
@@ -1727,13 +2157,36 @@ class MainWindow(QtWidgets.QMainWindow):
         feed = float(snapshot.get("feed", 0.0))
         power = float(snapshot.get("spindle", 0.0))
         endpoint = str(snapshot.get("endpoint") or self.serial_thread.connection_description() or "--")
+        transport = str(snapshot.get("transport") or self._current_transport_mode() or "").strip()
+        wifi_status = snapshot.get("wifi")
+        wifi_mode_text = "--"
+        sle_text = "--"
+        if transport == "wifi":
+            if isinstance(wifi_status, dict):
+                wifi_mode_text = str(wifi_status.get("mode") or "").strip() or self._current_wifi_workflow_label().replace(
+                    "WiFi ", ""
+                )
+                sle_ready = wifi_status.get("sle_ready")
+                if isinstance(sle_ready, bool):
+                    sle_text = "就绪" if sle_ready else "未就绪"
+                else:
+                    sle_text = "未知"
+            else:
+                wifi_mode_text = self._current_wifi_workflow_label().replace("WiFi ", "")
+                sle_text = "未知"
+        refresh_text = datetime.now().strftime("%H:%M:%S")
 
         self.live_state_value.setText(state_text)
-        self.live_x_value.setText(f"{x:.3f}")
-        self.live_y_value.setText(f"{y:.3f}")
+        self.live_target_value.setText(endpoint)
+        self.live_target_value.setToolTip(endpoint)
+        self.live_transport_value.setText(format_transport_label(transport))
+        self.live_wifi_mode_value.setText(wifi_mode_text)
+        self.live_sle_value.setText(sle_text)
+        self.live_coord_value.setText(f"{x:.3f}, {y:.3f}")
         self.live_feed_value.setText(f"{feed:.0f}")
         self.live_power_value.setText(f"{power:.0f}")
-        self.live_endpoint_value.setText(endpoint)
+        self.live_refresh_value.setText(refresh_text)
+        self.task_manager.update_live_status(snapshot)
 
     def _current_connection_target(self) -> str:
         if self.serial_thread.is_connected():
@@ -1745,7 +2198,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _begin_task(self, source_type: str) -> None:
         self.task_manager.begin_task(
-            template_name="",
             prompt=self.prompt_text_edit.toPlainText().strip(),
             image_model=self._current_image_model_label(),
             source_type=source_type,
@@ -1755,6 +2207,7 @@ class MainWindow(QtWidgets.QMainWindow):
             power=int(self.power_spin.value()),
             connection_mode=self._current_transport_mode(),
             connection_target=self._current_connection_target(),
+            wifi_workflow=self._current_wifi_workflow if self._current_transport_mode() == "wifi" else "",
         )
 
     def _rebuild_task_up_to_gcode_stage(self) -> None:
@@ -1782,6 +2235,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _ensure_task_for_sending(self) -> None:
         self._ensure_task_for_gcode()
+        self.task_manager.update_connection_context(
+            connection_mode=self._current_transport_mode(),
+            connection_target=self._current_connection_target(),
+            wifi_workflow=self._current_wifi_workflow if self._current_transport_mode() == "wifi" else "",
+        )
         if self.current_gcode_lines and self.task_manager.state != TaskState.SENDING:
             self.task_manager.on_gcode_ready(self.current_gcode_lines)
 
@@ -1795,10 +2253,38 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _task_detail_text(self) -> str:
         state = self.task_manager.state
+        record = self.task_manager.current_record
+        if record is None or state == TaskState.IDLE:
+            return "当前系统空闲，等待发起 AI 生图或导入本地文件。"
+
+        total_lines = record.total_lines or record.gcode_line_count
+        if state == TaskState.AI_GENERATING:
+            return "AI 生图中，正在等待云端返回图像结果。"
+        if state == TaskState.CONTOUR_EXTRACTING:
+            return "轮廓提取中，正在进行降噪、边缘提取与归一化。"
         if state == TaskState.GCODE_GENERATING and not self._is_generating_gcode and not self.current_gcode_lines:
-            return "轮廓提取已完成。可以继续生成 G-Code，或先调整尺寸、功率和速度后再生成。"
+            return "轮廓已就绪，等待生成 G-Code 或调整参数后继续。"
+        if state == TaskState.GCODE_GENERATING:
+            return "G-Code 生成中，正在将轮廓映射到物理坐标。"
         if state == TaskState.SENDING and not self.serial_thread.is_sending():
-            return "G-Code 已生成完成。确认设备连接无误后，可继续下发到 WS63。"
+            if total_lines > 0:
+                return f"G-Code 已就绪，共 {total_lines} 行，等待下发到 WS63。"
+            return "G-Code 已就绪，等待下发到 WS63。"
+        if state == TaskState.SENDING:
+            progress_text = f"已完成 {record.sent_lines}/{total_lines} 行" if total_lines > 0 else "正在下发 G-Code"
+            if record.last_completed_line:
+                return f"下发中，{progress_text}；最近成功 {record.last_completed_line}"
+            return f"下发中，{progress_text}。"
+        if state == TaskState.COMPLETED:
+            duration_text = f"，用时 {record.duration_seconds:.1f} 秒" if record.duration_seconds > 0 else ""
+            if total_lines > 0:
+                return f"任务执行完成，共处理 {total_lines} 行 G-Code{duration_text}。"
+            return f"任务执行完成{duration_text}。"
+        if state == TaskState.FAILED:
+            reason = record.last_stop_reason or record.error_message
+            if reason:
+                return f"任务已停止：{reason}"
+            return "任务执行失败，请检查日志后重试。"
         return self.task_manager.state_detail
 
     def _refresh_task_status_panel(self) -> None:
@@ -1820,8 +2306,9 @@ class MainWindow(QtWidgets.QMainWindow):
             TaskState.FAILED,
         ):
             self.task_manager.on_task_failed(friendly_message)
-            self._archive_task_to_history()
         self.append_log(f"[错误] {friendly_message}", color="#C53030", bold=True)
+        if mark_failed and self.task_manager.current_record is not None and self.task_manager.state == TaskState.FAILED:
+            self._archive_task_to_history()
         QtWidgets.QMessageBox.warning(self, title, friendly_message)
         return friendly_message
 
@@ -1839,6 +2326,7 @@ class MainWindow(QtWidgets.QMainWindow):
             cursor.insertText(message + "\n")
         self.log_edit.setTextCursor(cursor)
         self.log_edit.ensureCursorVisible()
+        self.task_manager.append_log_line(message)
 
     def on_progress_changed(self, value: int) -> None:
         if self.task_manager.state != TaskState.SENDING:
@@ -1849,7 +2337,14 @@ class MainWindow(QtWidgets.QMainWindow):
         mapped_progress = base_progress + int((99 - base_progress) * clamped / 100)
         self.progress_bar.setValue(mapped_progress)
         self.task_status_label.setText("当前状态: 📡 下发到设备中…")
-        self.task_detail_label.setText(f"正在逐行下发 G-Code 到 WS63，设备侧发送进度 {clamped}% 。")
+        self.task_detail_label.setText(self._task_detail_text())
+
+    def on_job_line_progress(self, payload: Dict[str, object]) -> None:
+        sent = int(payload.get("sent", 0))
+        total = int(payload.get("total", 0))
+        current_line = str(payload.get("line", "")).strip()
+        self.task_manager.on_sending_progress(sent, total, current_line=current_line)
+        self._refresh_task_status_panel()
 
     def _clear_layout(self, layout: QtWidgets.QLayout) -> None:
         while layout.count():
@@ -1877,6 +2372,144 @@ class MainWindow(QtWidgets.QMainWindow):
         power = int(meta.get("power", 0))
         feed_rate = int(meta.get("feed_rate", 0))
         return f"{display_time}  ·  {status_text}  ·  {width_mm:.0f}x{height_mm:.0f} mm  ·  功率 {power}  ·  F{feed_rate}"
+
+    def _open_local_directory(self, target_dir: Path, title: str = "目录") -> None:
+        if not target_dir.exists():
+            QtWidgets.QMessageBox.warning(self, title, f"目录不存在：{target_dir}")
+            return
+        opened = QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(target_dir)))
+        if not opened:
+            QtWidgets.QMessageBox.warning(self, title, f"无法打开目录：{target_dir}")
+
+    def _show_history_details(self, history_dir_path: str) -> None:
+        history_dir = Path(history_dir_path)
+        meta_path = history_dir / "meta.json"
+        log_path = history_dir / "task.log"
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            QtWidgets.QMessageBox.warning(self, "任务详情读取失败", f"无法读取任务元数据：{exc}")
+            return
+
+        try:
+            log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else "暂无归档日志。"
+        except OSError as exc:
+            log_text = f"日志读取失败：{exc}"
+
+        sle_ready = meta.get("sle_ready")
+        if isinstance(sle_ready, bool):
+            sle_ready_text = "是" if sle_ready else "否"
+        else:
+            sle_ready_text = "--"
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(f"任务详情 - {meta.get('task_id', history_dir.name)}")
+        dialog.resize(760, 620)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        summary_title = QtWidgets.QLabel("任务摘要")
+        summary_title.setStyleSheet("font-size:15px; font-weight:800; color:#2D3748;")
+        layout.addWidget(summary_title)
+
+        summary_lines = [
+            f"任务编号：{meta.get('task_id', history_dir.name)}",
+            f"状态：{meta.get('status', '--')}",
+            f"创建时间：{meta.get('timestamp', '--')}",
+            f"完成时间：{meta.get('completed_at', '--')}",
+            f"链路：{format_transport_label(str(meta.get('connection_mode', '')).strip())}",
+            f"目标：{meta.get('connection_target') or '--'}",
+            f"WiFi 工作流：{meta.get('wifi_workflow') or '--'}",
+            f"WiFi 模式：{meta.get('wifi_mode') or '--'}",
+            f"SLE 就绪：{sle_ready_text}",
+            f"尺寸：{float(meta.get('width_mm', 0.0)):.1f} x {float(meta.get('height_mm', 0.0)):.1f} mm",
+            f"功率/进给：S{int(meta.get('power', 0))} / F{int(meta.get('feed_rate', 0))}",
+            f"G-Code 行数：{int(meta.get('gcode_line_count', 0))}",
+            f"已完成行数：{int(meta.get('sent_lines', 0))}/{int(meta.get('total_lines', 0) or meta.get('gcode_line_count', 0))}",
+            f"最近成功指令：{meta.get('last_completed_line') or '--'}",
+            f"停止原因：{meta.get('last_stop_reason') or '--'}",
+            f"失败原因：{meta.get('error_msg') or '--'}",
+            f"Prompt：{meta.get('prompt') or '--'}",
+        ]
+        summary_edit = QtWidgets.QTextEdit()
+        summary_edit.setReadOnly(True)
+        summary_edit.setObjectName("LogBox")
+        summary_edit.setMinimumHeight(220)
+        summary_edit.setPlainText("\n".join(summary_lines))
+        layout.addWidget(summary_edit)
+
+        log_title = QtWidgets.QLabel("归档日志")
+        log_title.setStyleSheet("font-size:15px; font-weight:800; color:#2D3748;")
+        layout.addWidget(log_title)
+
+        log_edit = QtWidgets.QTextEdit()
+        log_edit.setReadOnly(True)
+        log_edit.setObjectName("LogBox")
+        log_edit.setPlainText(log_text)
+        layout.addWidget(log_edit, 1)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch(1)
+        open_dir_button = QtWidgets.QPushButton("打开目录")
+        open_dir_button.setProperty("secondary", True)
+        open_dir_button.clicked.connect(lambda: self._open_local_directory(history_dir, "任务产物目录"))
+        close_button = QtWidgets.QPushButton("关闭")
+        close_button.clicked.connect(dialog.accept)
+        button_row.addWidget(open_dir_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        exec_method = getattr(dialog, "exec", None)
+        if callable(exec_method):
+            exec_method()
+            return
+        exec_legacy = getattr(dialog, "exec_", None)
+        if callable(exec_legacy):
+            exec_legacy()
+
+    def _load_history_prompt(self, history_dir_path: str) -> None:
+        history_dir = Path(history_dir_path)
+        meta_path = history_dir / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            QtWidgets.QMessageBox.warning(self, "历史任务读取失败", f"无法读取任务参数：{exc}")
+            return
+
+        prompt = str(meta.get("prompt", "")).strip()
+        if not prompt:
+            QtWidgets.QMessageBox.warning(self, "历史任务读取失败", "该历史任务没有可复用的 Prompt。")
+            return
+        self.prompt_text_edit.setPlainText(prompt)
+        saved_model = str(meta.get("image_model", "")).strip()
+        if saved_model:
+            index = self.image_model_combo.findData(saved_model)
+            if index >= 0:
+                self.image_model_combo.setCurrentIndex(index)
+        self.left_tabs.setCurrentIndex(1)
+        self.append_log(f"已复用历史 Prompt：{history_dir.name}")
+
+    def _delete_history_task(self, history_dir_path: str) -> None:
+        history_dir = Path(history_dir_path)
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "删除历史任务",
+            f"确认删除历史任务 {history_dir.name}？该操作会移除本地归档文件。",
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            shutil.rmtree(history_dir)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "删除失败", f"无法删除历史任务：{exc}")
+            return
+        if self.current_history_dir == history_dir:
+            self.current_history_dir = None
+        self._refresh_history_gallery()
+        self.append_log(f"已删除历史任务：{history_dir.name}")
 
     def _build_history_thumbnail(self, image_path: Path, size: int = 60, radius: int = 10) -> QtGui.QPixmap:
         pixmap = QtGui.QPixmap(str(image_path))
@@ -1915,7 +2548,7 @@ class MainWindow(QtWidgets.QMainWindow):
         status = str(meta.get("status", "")).strip().lower()
         error_msg = str(meta.get("error_msg", "")).strip()
         has_error = status == "failed" and bool(error_msg)
-        card.setFixedHeight(114 if has_error else 92)
+        card.setFixedHeight(152 if has_error else 132)
         layout = QtWidgets.QHBoxLayout(card)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(10)
@@ -1950,6 +2583,16 @@ class MainWindow(QtWidgets.QMainWindow):
         text_layout.addStretch(1)
         layout.addLayout(text_layout, 1)
 
+        button_layout = QtWidgets.QVBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(6)
+
+        detail_button = QtWidgets.QPushButton("详情")
+        detail_button.setProperty("secondary", True)
+        detail_button.setCursor(QtCore.Qt.PointingHandCursor)
+        detail_button.clicked.connect(lambda _checked=False, path=str(history_dir): self._show_history_details(path))
+        button_layout.addWidget(detail_button)
+
         reuse_button = QtWidgets.QPushButton("复用")
         reuse_button.setProperty("secondary", True)
         reuse_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -1959,7 +2602,22 @@ class MainWindow(QtWidgets.QMainWindow):
             reuse_button.clicked.connect(lambda _checked=False, path=str(history_dir): self._load_history_task(path))
         else:
             reuse_button.setToolTip("该任务未生成完整 G-Code，无法直接复用。")
-        layout.addWidget(reuse_button, 0, QtCore.Qt.AlignVCenter)
+        button_layout.addWidget(reuse_button)
+
+        more_button = QtWidgets.QPushButton("更多")
+        more_button.setProperty("secondary", True)
+        more_button.setCursor(QtCore.Qt.PointingHandCursor)
+        menu = QtWidgets.QMenu(more_button)
+        open_action = menu.addAction("打开目录")
+        open_action.triggered.connect(lambda _checked=False, path=history_dir: self._open_local_directory(path, "任务产物目录"))
+        prompt_action = menu.addAction("仅复用 Prompt")
+        prompt_action.triggered.connect(lambda _checked=False, path=str(history_dir): self._load_history_prompt(path))
+        delete_action = menu.addAction("删除")
+        delete_action.triggered.connect(lambda _checked=False, path=str(history_dir): self._delete_history_task(path))
+        more_button.setMenu(menu)
+        button_layout.addWidget(more_button)
+        button_layout.addStretch(1)
+        layout.addLayout(button_layout, 0)
         return card
 
     def _refresh_history_gallery(self) -> None:
@@ -2018,6 +2676,7 @@ class MainWindow(QtWidgets.QMainWindow):
             history_dir.mkdir(parents=True, exist_ok=True)
             self._resolve_history_source(history_dir, record.ai_image_file, "original.png")
             self._resolve_history_source(history_dir, record.contour_image_file, "contour.png")
+            self._resolve_history_source(history_dir, record.log_file or "task.log", "task.log")
 
             current_task_dir = self.task_manager.current_task_dir
             gcode_written = False
@@ -2042,6 +2701,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 "height_mm": float(record.height_mm),
                 "feed_rate": int(record.feed_rate),
                 "power": int(record.power),
+                "connection_mode": record.connection_mode,
+                "connection_target": record.connection_target,
+                "wifi_workflow": record.wifi_workflow,
+                "wifi_mode": record.wifi_mode,
+                "sle_ready": record.sle_ready,
+                "last_status_at": record.last_status_at,
+                "gcode_line_count": int(record.gcode_line_count),
+                "sent_lines": int(record.sent_lines),
+                "total_lines": int(record.total_lines or record.gcode_line_count),
+                "last_progress_percent": int(record.last_progress_percent),
+                "last_completed_line": record.last_completed_line,
+                "last_stop_reason": record.last_stop_reason,
+                "log_file": record.log_file or "task.log",
+                "duration_seconds": float(record.duration_seconds),
             }
             (history_dir / "meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
@@ -2095,7 +2768,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self.current_image_path:
             try:
-                restored_contours, _ = process_image_to_contours(self.current_image_path)
+                restored_contours, _ = process_image_to_contours(
+                    self.current_image_path,
+                    **self._current_contour_processing_params(),
+                )
                 self.current_contours = restored_contours
             except (ImageProcessingError, OSError) as exc:
                 self.append_log(f"[提示] 历史任务已载入，但轮廓路径未完全恢复：{exc}")
@@ -2108,6 +2784,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.contour_image_label.set_image(self.current_contours_path)
         else:
             self.contour_image_label.clear_to_placeholder("历史任务缺少轮廓图")
+        if hasattr(self, "gcode_preview_widget"):
+            self.gcode_preview_widget.set_gcode_lines(self.current_gcode_lines)
+        if hasattr(self, "gcode_overlay_widget"):
+            self.gcode_overlay_widget.set_background_image(self.current_contours_path)
+            self.gcode_overlay_widget.set_gcode_lines(self.current_gcode_lines)
+        if hasattr(self, "result_preview_mode_combo") and self.current_gcode_lines:
+            index = self.result_preview_mode_combo.findData("overlay")
+            if index >= 0:
+                self.result_preview_mode_combo.setCurrentIndex(index)
 
         self._refresh_preview_summary()
         self.task_manager.reset_to_idle()
@@ -2238,6 +2923,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.append_log(f"[错误] 提示词美化失败：{message}", color="#C53030", bold=True)
         QtWidgets.QMessageBox.warning(self, "提示词美化失败", message)
 
+    def _current_contour_processing_params(self) -> Dict[str, int]:
+        return {
+            "detail_level": int(self.contour_detail_spin.value()) if hasattr(self, "contour_detail_spin") else 3,
+            "denoise_level": int(self.contour_denoise_spin.value()) if hasattr(self, "contour_denoise_spin") else 2,
+            "min_area": int(self.contour_min_area_spin.value()) if hasattr(self, "contour_min_area_spin") else 20,
+            "smoothing_passes": int(self.contour_smooth_spin.value()) if hasattr(self, "contour_smooth_spin") else 2,
+        }
+
     def _load_image_into_pipeline(
         self,
         image_path: str,
@@ -2245,7 +2938,10 @@ class MainWindow(QtWidgets.QMainWindow):
         preview_pixmap: Optional[QtGui.QPixmap] = None,
     ) -> None:
         try:
-            contours, contours_path = process_image_to_contours(image_path)
+            contours, contours_path = process_image_to_contours(
+                image_path,
+                **self._current_contour_processing_params(),
+            )
         except ImageProcessingError as exc:
             self._show_task_error("图像处理失败", str(exc))
             return
@@ -2258,6 +2954,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_contours = contours
         self.current_gcode_lines = []
         self.current_preview_lines = []
+        if hasattr(self, "gcode_preview_widget"):
+            self.gcode_preview_widget.clear_preview()
+        if hasattr(self, "gcode_overlay_widget"):
+            self.gcode_overlay_widget.clear_preview()
         if preview_pixmap is not None and not preview_pixmap.isNull():
             self.original_image_label.set_pixmap_image(preview_pixmap)
         else:
@@ -2269,6 +2969,23 @@ class MainWindow(QtWidgets.QMainWindow):
         saved_contour_path = self.task_manager.on_contour_ready(contours_path, len(contours))
         if saved_contour_path:
             self.current_contours_path = saved_contour_path
+        if hasattr(self, "gcode_overlay_widget"):
+            self.gcode_overlay_widget.set_background_image(self.current_contours_path)
+        if hasattr(self, "result_preview_mode_combo"):
+            index = self.result_preview_mode_combo.findData("contour")
+            if index >= 0:
+                self.result_preview_mode_combo.setCurrentIndex(index)
+
+    def on_reprocess_current_image(self) -> None:
+        if not self.current_image_path:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先生成或导入图片")
+            return
+        self.append_log(
+            "正在按当前轮廓参数重新提取："
+            f"细节 {self.contour_detail_spin.value()} / 降噪 {self.contour_denoise_spin.value()} / "
+            f"最小面积 {self.contour_min_area_spin.value()} / 平滑 {self.contour_smooth_spin.value()}"
+        )
+        self._load_image_into_pipeline(self.current_image_path, "当前图片")
 
     def _generate_gcode_for_current_contours(self, announce_preview: bool = True) -> bool:
         if not self.current_contours:
@@ -2294,6 +3011,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._is_generating_gcode = False
 
         saved_gcode_path = self.task_manager.on_gcode_ready(self.current_gcode_lines)
+        if hasattr(self, "gcode_preview_widget"):
+            self.gcode_preview_widget.set_gcode_lines(self.current_gcode_lines)
+        if hasattr(self, "gcode_overlay_widget"):
+            self.gcode_overlay_widget.set_background_image(self.current_contours_path)
+            self.gcode_overlay_widget.set_gcode_lines(self.current_gcode_lines)
+        if hasattr(self, "result_preview_mode_combo"):
+            index = self.result_preview_mode_combo.findData("overlay")
+            if index >= 0:
+                self.result_preview_mode_combo.setCurrentIndex(index)
+        self._refresh_preview_summary()
         if announce_preview:
             preview = "\n".join(self.current_gcode_lines[:20])
             self.append_log("G-Code 生成完成，预览前 20 行：")
@@ -2324,6 +3051,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.serial_thread.connect_wifi(host, int(self.wifi_port_spin.value()))
                 self._update_connection_ui(True)
                 self.append_log(f"WiFi 连接成功：{host}:{self.wifi_port_spin.value()}")
+                self.left_tabs.setCurrentIndex(1)
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "WiFi 错误", str(exc))
                 self.append_log(f"[错误] {exc}")
@@ -2340,6 +3068,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.serial_thread.connect_port(port, baud_rate)
             self._update_connection_ui(True)
             self.append_log(f"串口连接成功：{port} @ {baud_rate}")
+            self.left_tabs.setCurrentIndex(1)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "串口错误", str(exc))
             self.append_log(f"[错误] {exc}")
@@ -2373,6 +3102,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_start_competition_flow(self) -> None:
         if not self._ensure_device_connected("一键比赛流程"):
+            return
+        if not self._confirm_device_job("一键比赛流程"):
             return
         self.append_log(
             f"比赛流程启动：模型={self._current_image_model_label()}，设备={self.serial_thread.connection_description()}。"
@@ -2422,7 +3153,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.serial_thread.enqueue_gcode(self.current_gcode_lines)
             self._active_device_job = "task"
-            self.task_manager.on_sending_started()
+            self.task_manager.on_sending_started(len(self.current_gcode_lines))
             self.append_log("比赛流程已自动下发任务。")
         except Exception as exc:
             self._active_device_job = ""
@@ -2467,11 +3198,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
         if not self._ensure_device_connected("激光雕刻"):
             return
+        if not self._confirm_device_job("激光雕刻", line_count=len(self.current_gcode_lines)):
+            return
         self._ensure_task_for_sending()
         try:
             self.serial_thread.enqueue_gcode(self.current_gcode_lines)
             self._active_device_job = "task"
-            self.task_manager.on_sending_started()
+            self.task_manager.on_sending_started(len(self.current_gcode_lines))
             self.append_log("已下发雕刻任务。")
         except Exception as exc:
             self._active_device_job = ""
@@ -2505,6 +3238,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.serial_thread.is_connected():
             self.append_log("[提示] 当前未连接设备，急停命令未发送。")
             return
+        if self._active_device_job == "task":
+            self.task_manager.note_stop_reason("操作员手动触发急停，正在等待设备停止。")
         self.serial_thread.emergency_stop()
         self.append_log("已触发急停。")
 
@@ -2514,8 +3249,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if success:
             if active_device_job == "task":
                 self.task_manager.on_task_completed()
-                self._archive_task_to_history()
             self.append_log(f"[完成] {message}")
+            if active_device_job == "task":
+                self._archive_task_to_history()
         else:
             if active_device_job == "task":
                 self._show_task_error("任务状态", message)

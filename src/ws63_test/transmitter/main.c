@@ -14,6 +14,8 @@
 #include "wifi_gcode_server.h"
 #include "sle_client.h"
 #include "crc16.h"
+#include "focus_protocol.h"
+#include "safety_protocol.h"
 #include "systick.h"
 
 /* 独立心跳任务：避免依赖 UART 空闲轮询导致保活间隔抖动 */
@@ -60,8 +62,9 @@ static int heartbeat_task(void *arg)
         if ((last_stat_log_ms == 0) || (((uint64_t)now - last_stat_log_ms) >= 5000)) {
             last_stat_log_ms = now;
             osal_printk(
-                "[laser tx] hb stat conn=%u handles=%u status_rx=%u cmd_hdl=0x%x status_hdl=0x%x qfree=%u ack=%u "
+                "[laser tx] hb stat peers=%u/%u conn=%u handles=%u status_rx=%u cmd_hdl=0x%x status_hdl=0x%x qfree=%u ack=%u "
                 "ok=%u busy=%u fail=%u pending=%u wr_req=%u cfm_ok=%u cfm_fail=%u submit_fail=%u\r\n",
+                sle_client_get_connected_peer_count(), sle_client_get_configured_peer_count(),
                 sle_laser_client_is_connected() ? 1U : 0U, sle_laser_client_has_handles_ready() ? 1U : 0U,
                 sle_laser_client_has_status_rx() ? 1U : 0U, sle_laser_client_get_cmd_handle(),
                 sle_laser_client_get_status_handle(), sle_laser_client_get_queue_free(),
@@ -71,6 +74,80 @@ static int heartbeat_task(void *arg)
                 sle_laser_client_get_write_cfm_fail_count(), sle_laser_client_get_write_submit_fail_count());
         }
         osal_msleep(sleep_ms);
+    }
+
+    return 0;
+}
+
+static int focus_link_task(void *arg)
+{
+    uint16_t seq = 0;
+    uint64_t last_query_ms = 0;
+    uint64_t last_log_ms = 0;
+    focus_node_cmd_t query = {0};
+    focus_node_status_t status = {0};
+
+    unused(arg);
+
+    while (1) {
+        uint64_t now = uapi_systick_get_ms();
+
+        if (sle_focus_client_has_handles_ready() &&
+            (!sle_focus_client_has_status_rx() || ((now - last_query_ms) >= ZDT_POLL_INTERVAL_MS))) {
+            memset(&query, 0, sizeof(query));
+            query.version = FOCUS_PROTOCOL_VERSION;
+            query.cmd = FOCUS_CMD_QUERY_STATUS;
+            query.seq = ++seq;
+            focus_cmd_set_crc(&query);
+            if (sle_focus_client_send_cmd(&query) == ERRCODE_SUCC) {
+                last_query_ms = now;
+            }
+        }
+
+        if ((last_log_ms == 0U) || ((now - last_log_ms) >= 5000U)) {
+            last_log_ms = now;
+            sle_focus_client_get_status_snapshot(&status);
+            osal_printk(
+                "[laser tx] focus stat peers=%u/%u conn=%u handles=%u status_rx=%u cmd_hdl=0x%x status_hdl=0x%x pending=%u "
+                "state=%u err=%u flags=0x%02x pos=%ld speed=%d ack=%u\r\n",
+                sle_client_get_connected_peer_count(), sle_client_get_configured_peer_count(),
+                sle_focus_client_is_connected() ? 1U : 0U, sle_focus_client_has_handles_ready() ? 1U : 0U,
+                sle_focus_client_has_status_rx() ? 1U : 0U, sle_focus_client_get_cmd_handle(),
+                sle_focus_client_get_status_handle(), sle_focus_client_get_pending_writes(), status.status,
+                status.error_code, status.flags, (long)status.z_position_pulses, (int)status.z_speed_rpm,
+                status.ack_seq);
+        }
+
+        osal_msleep(200);
+    }
+
+    return 0;
+}
+
+static int safety_link_task(void *arg)
+{
+    uint64_t last_log_ms = 0;
+    safety_node_status_t status = {0};
+
+    unused(arg);
+
+    while (1) {
+        uint64_t now = uapi_systick_get_ms();
+
+        if ((last_log_ms == 0U) || ((now - last_log_ms) >= 5000U)) {
+            last_log_ms = now;
+            sle_safety_client_get_status_snapshot(&status);
+            osal_printk(
+                "[laser tx] safety stat peers=%u/%u conn=%u handles=%u status_rx=%u cmd_hdl=0x%x status_hdl=0x%x pending=%u "
+                "state=%u err=%u flags=0x%02x ack=%u\r\n",
+                sle_client_get_connected_peer_count(), sle_client_get_configured_peer_count(),
+                sle_safety_client_is_connected() ? 1U : 0U, sle_safety_client_has_handles_ready() ? 1U : 0U,
+                sle_safety_client_has_status_rx() ? 1U : 0U, sle_safety_client_get_cmd_handle(),
+                sle_safety_client_get_status_handle(), sle_safety_client_get_pending_writes(), status.status,
+                status.error_code, status.flags, status.ack_seq);
+        }
+
+        osal_msleep(200);
     }
 
     return 0;
@@ -139,6 +216,22 @@ static void transmitter_entry(void)
     /* 5) 心跳任务:
      *    周期发送 CMD_HEARTBEAT，维持接收板安全看门狗 */
     task = osal_kthread_create(heartbeat_task, NULL, "hb", TASK_STACK_SIZE_DEFAULT);
+    if (task != NULL) {
+        osal_kthread_set_priority(task, TASK_PRIO_SLE);
+        osal_kfree(task);
+    }
+
+    /* 6) Focus 链路任务:
+     *    周期查询感知节点状态，确保发射板 <-> focus_node 的命令/状态链路持续在线。 */
+    task = osal_kthread_create(focus_link_task, NULL, "focus_link", TASK_STACK_SIZE_DEFAULT);
+    if (task != NULL) {
+        osal_kthread_set_priority(task, TASK_PRIO_SLE);
+        osal_kfree(task);
+    }
+
+    /* 7) Safety 链路任务:
+     *    低频打印安全终端节点状态，方便联调 LED_ON / LED_OFF 节点验证链路。 */
+    task = osal_kthread_create(safety_link_task, NULL, "safety_link", TASK_STACK_SIZE_DEFAULT);
     if (task != NULL) {
         osal_kthread_set_priority(task, TASK_PRIO_SLE);
         osal_kfree(task);

@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "protocol.h"
+#include "focus_protocol.h"
+#include "safety_protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +45,46 @@ void status_pkt_set_crc(status_pkt_t *pkt);
  * @brief  校验状态反馈包的 CRC16
  */
 bool status_pkt_check_crc(const status_pkt_t *pkt);
+
+/**
+ * @brief  为感知节点命令包设置 CRC16
+ */
+void focus_cmd_set_crc(focus_node_cmd_t *cmd);
+
+/**
+ * @brief  校验感知节点命令包的 CRC16
+ */
+bool focus_cmd_check_crc(const focus_node_cmd_t *cmd);
+
+/**
+ * @brief  为感知节点状态包设置 CRC16
+ */
+void focus_status_set_crc(focus_node_status_t *pkt);
+
+/**
+ * @brief  校验感知节点状态包的 CRC16
+ */
+bool focus_status_check_crc(const focus_node_status_t *pkt);
+
+/**
+ * @brief  为安全节点命令包设置 CRC16
+ */
+void safety_cmd_set_crc(safety_node_cmd_t *cmd);
+
+/**
+ * @brief  校验安全节点命令包的 CRC16
+ */
+bool safety_cmd_check_crc(const safety_node_cmd_t *cmd);
+
+/**
+ * @brief  为安全节点状态包设置 CRC16
+ */
+void safety_status_set_crc(safety_node_status_t *pkt);
+
+/**
+ * @brief  校验安全节点状态包的 CRC16
+ */
+bool safety_status_check_crc(const safety_node_status_t *pkt);
 
 #ifdef __cplusplus
 }

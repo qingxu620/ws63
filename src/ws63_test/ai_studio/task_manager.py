@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -70,7 +70,6 @@ class TaskRecord:
     """单次任务的完整记录，用于历史回溯和快速复用。"""
 
     task_id: str = ""
-    template_name: str = ""
     prompt: str = ""
     image_model: str = ""
     state: str = TaskState.IDLE.value
@@ -85,6 +84,7 @@ class TaskRecord:
     ai_image_file: str = ""
     contour_image_file: str = ""
     gcode_file: str = ""
+    log_file: str = ""
 
     # 雕刻参数快照
     width_mm: float = 50.0
@@ -95,10 +95,19 @@ class TaskRecord:
     # 连接方式
     connection_mode: str = ""
     connection_target: str = ""
+    wifi_workflow: str = ""
+    wifi_mode: str = ""
+    sle_ready: Optional[bool] = None
+    last_status_at: str = ""
 
     # 结果
     gcode_line_count: int = 0
     contour_count: int = 0
+    sent_lines: int = 0
+    total_lines: int = 0
+    last_progress_percent: int = 0
+    last_completed_line: str = ""
+    last_stop_reason: str = ""
     success: bool = False
     error_message: str = ""
 
@@ -214,7 +223,6 @@ class TaskManager:
 
     def begin_task(
         self,
-        template_name: str = "",
         prompt: str = "",
         image_model: str = "",
         source_type: str = "ai",
@@ -224,6 +232,7 @@ class TaskManager:
         power: int = 200,
         connection_mode: str = "",
         connection_target: str = "",
+        wifi_workflow: str = "",
     ) -> TaskRecord:
         """
         开始一个新任务，创建任务目录并初始化记录。
@@ -233,10 +242,13 @@ class TaskManager:
         task_id = _generate_task_id()
         task_dir = self._tasks_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (task_dir / "task.log").touch(exist_ok=True)
+        except OSError:
+            pass
 
         record = TaskRecord(
             task_id=task_id,
-            template_name=template_name,
             prompt=prompt,
             image_model=image_model,
             create_time=_format_time(),
@@ -247,6 +259,8 @@ class TaskManager:
             power=power,
             connection_mode=connection_mode,
             connection_target=connection_target,
+            wifi_workflow=wifi_workflow,
+            log_file="task.log",
         )
 
         self._current_record = record
@@ -323,20 +337,123 @@ class TaskManager:
             pass
 
         self._current_record.gcode_line_count = len(gcode_lines)
+        self._current_record.total_lines = len(gcode_lines)
+        self._current_record.sent_lines = 0
+        self._current_record.last_progress_percent = 0
+        self._current_record.last_completed_line = ""
+        self._current_record.last_stop_reason = ""
         self._transition(TaskState.SENDING)
         self._save_current_task()
         return str(gcode_path)
 
-    def on_sending_started(self) -> None:
+    def on_sending_started(self, total_lines: int = 0) -> None:
         """设备下发已开始。"""
+        if self._current_record is not None:
+            resolved_total = total_lines or self._current_record.gcode_line_count
+            self._current_record.total_lines = max(resolved_total, self._current_record.total_lines)
+            self._current_record.sent_lines = 0
+            self._current_record.last_progress_percent = 0
+            self._current_record.last_completed_line = ""
+            self._current_record.last_stop_reason = ""
         if self._current_state != TaskState.SENDING:
             self._transition(TaskState.SENDING)
         self._save_current_task()
+
+    def on_sending_progress(self, sent_lines: int, total_lines: int, current_line: str = "") -> None:
+        """更新逐行下发进度，用于状态面板和历史详情。"""
+        if self._current_record is None:
+            return
+
+        resolved_total = max(total_lines, self._current_record.total_lines, self._current_record.gcode_line_count, 1)
+        clamped_sent = max(0, min(sent_lines, resolved_total))
+        self._current_record.total_lines = resolved_total
+        self._current_record.sent_lines = clamped_sent
+        self._current_record.last_progress_percent = int(clamped_sent * 100 / resolved_total)
+        if current_line:
+            self._current_record.last_completed_line = current_line
+
+        self._notify_state_changed()
+        if clamped_sent in (1, resolved_total) or (clamped_sent % 10 == 0):
+            self._save_current_task()
+
+    def update_connection_context(
+        self,
+        *,
+        connection_mode: str = "",
+        connection_target: str = "",
+        wifi_workflow: str = "",
+    ) -> None:
+        """更新任务当前使用的连接上下文。"""
+        if self._current_record is None:
+            return
+        if connection_mode:
+            self._current_record.connection_mode = connection_mode
+        if connection_target:
+            self._current_record.connection_target = connection_target
+        if wifi_workflow:
+            self._current_record.wifi_workflow = wifi_workflow
+        self._save_current_task()
+        self._notify_state_changed()
+
+    def update_live_status(self, snapshot: Dict[str, object]) -> None:
+        """记录最近一次设备状态快照中的关键信息。"""
+        if self._current_record is None:
+            return
+        if self._current_state in (TaskState.IDLE, TaskState.COMPLETED, TaskState.FAILED):
+            return
+
+        transport = str(snapshot.get("transport") or "").strip()
+        endpoint = str(snapshot.get("endpoint") or "").strip()
+        if transport:
+            self._current_record.connection_mode = transport
+        if endpoint:
+            self._current_record.connection_target = endpoint
+
+        wifi_status = snapshot.get("wifi")
+        if isinstance(wifi_status, dict):
+            self._current_record.wifi_mode = str(wifi_status.get("mode") or "").strip()
+            sle_ready = wifi_status.get("sle_ready")
+            if isinstance(sle_ready, bool):
+                self._current_record.sle_ready = sle_ready
+        self._current_record.last_status_at = _format_time()
+        self._save_current_task()
+        self._notify_state_changed()
+
+    def note_stop_reason(self, reason: str) -> None:
+        """记录当前任务的停止/失败原因提示。"""
+        if self._current_record is None:
+            return
+        self._current_record.last_stop_reason = reason.strip()
+        self._save_current_task()
+        self._notify_state_changed()
+
+    def append_log_line(self, message: str) -> None:
+        """把 GUI 日志同步追加到当前任务目录。"""
+        if self._current_task_dir is None or self._current_record is None:
+            return
+
+        log_name = self._current_record.log_file or "task.log"
+        log_path = self._current_task_dir / log_name
+        timestamp = time.strftime("%H:%M:%S")
+        try:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{timestamp}] {message}\n")
+        except OSError:
+            return
+
+        if not self._current_record.log_file:
+            self._current_record.log_file = log_name
+            self._save_current_task()
 
     def on_task_completed(self) -> None:
         """任务成功完成。"""
         if self._current_record is None:
             return
+        resolved_total = max(self._current_record.total_lines, self._current_record.gcode_line_count)
+        self._current_record.total_lines = resolved_total
+        self._current_record.sent_lines = resolved_total
+        self._current_record.last_progress_percent = 100 if resolved_total > 0 else 0
+        self._current_record.last_stop_reason = ""
         self._current_record.success = True
         self._current_record.status = "success"
         self._current_record.error_msg = ""
@@ -355,6 +472,8 @@ class TaskManager:
         self._current_record.status = "failed"
         self._current_record.error_msg = error_message
         self._current_record.error_message = error_message
+        if not self._current_record.last_stop_reason:
+            self._current_record.last_stop_reason = error_message
         self._current_record.finish_time = _format_time()
         self._current_record.completed_at = self._current_record.finish_time
         self._current_record.duration_seconds = time.monotonic() - self._start_time
@@ -397,20 +516,32 @@ class TaskManager:
         status = "✅ 成功" if record.success else "❌ 失败"
         source = "AI" if record.source_type == "ai" else "本地"
         duration = _format_duration(record.duration_seconds) if record.duration_seconds > 0 else "—"
-        template = record.template_name or "自定义"
 
         lines = [
             f"任务编号: {record.task_id}",
             f"状态: {status}",
             f"来源: {source}",
-            f"模板: {template}",
             f"创建时间: {record.create_time}",
             f"耗时: {duration}",
             f"轮廓数: {record.contour_count}",
             f"G-Code 行数: {record.gcode_line_count}",
+            f"已完成行数: {record.sent_lines}/{record.total_lines or record.gcode_line_count}",
             f"尺寸: {record.width_mm:.1f} × {record.height_mm:.1f} mm",
             f"连接: {record.connection_mode} → {record.connection_target}",
         ]
+
+        if record.wifi_workflow:
+            lines.append(f"WiFi 工作流: {record.wifi_workflow}")
+        if record.wifi_mode:
+            lines.append(f"WiFi 模式: {record.wifi_mode}")
+        if record.sle_ready is not None:
+            lines.append(f"SLE 就绪: {'是' if record.sle_ready else '否'}")
+        if record.last_status_at:
+            lines.append(f"最近状态刷新: {record.last_status_at}")
+        if record.last_stop_reason:
+            lines.append(f"停止原因: {record.last_stop_reason}")
+        if record.log_file:
+            lines.append(f"日志文件: {record.log_file}")
 
         if not record.success and record.error_message:
             lines.append(f"失败原因: {record.error_message}")
@@ -430,7 +561,7 @@ class TaskManager:
         if "急停" in error_message or "emergency" in error_lower:
             return "🛑 任务已被急停终止：操作员手动触发了紧急停止，激光已关闭，队列已清空。"
         if "轮廓" in error_message or "contour" in error_lower:
-            return "✏️ 轮廓提取失败：当前图片不适合提取轮廓。建议使用线条清晰、背景简洁的图案，或切换到其他比赛模板。"
+            return "✏️ 轮廓提取失败：当前图片不适合提取轮廓。建议使用线条清晰、背景简洁的图案，或先用一键美化提示词优化后重试。"
         if "串口" in error_message or "serial" in error_lower:
             return "🔌 串口通信异常：请检查串口连接并确认波特率设置正确。"
         if "wifi" in error_lower or "network" in error_lower or "网络" in error_message:

@@ -1,6 +1,8 @@
 /**
  * @file sle_client.h
- * @brief 发射板 SLE Client — 连接接收板并发送运动命令
+ * @brief 发射板 SLE Client
+ *        底层统一管理多节点 SLE 扫描/连接/发现/写入，
+ *        当前上层业务封装了 LaserRX 与 FocusND 两个 peer。
  */
 #ifndef SLE_CLIENT_H
 #define SLE_CLIENT_H
@@ -9,12 +11,16 @@
 #include <stdbool.h>
 #include "errcode.h"
 #include "protocol.h"
+#include "focus_protocol.h"
+#include "safety_protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 errcode_t sle_laser_client_init(void);
+uint8_t sle_client_get_connected_peer_count(void);
+uint8_t sle_client_get_configured_peer_count(void);
 /* 发送一帧运动命令到接收板 (内部走 SSAP write request) */
 errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd);
 /* 物理链路是否已连接 */
@@ -46,6 +52,30 @@ uint32_t sle_laser_client_get_write_req_count(void);
 uint32_t sle_laser_client_get_write_cfm_ok_count(void);
 uint32_t sle_laser_client_get_write_cfm_fail_count(void);
 uint32_t sle_laser_client_get_write_submit_fail_count(void);
+
+/* ================= 感知与对焦节点链路 ================= */
+errcode_t sle_focus_client_send_cmd(const focus_node_cmd_t *cmd);
+bool sle_focus_client_is_connected(void);
+bool sle_focus_client_has_handles_ready(void);
+bool sle_focus_client_has_status_rx(void);
+bool sle_focus_client_is_ready(void);
+void sle_focus_client_get_status_snapshot(focus_node_status_t *status);
+uint16_t sle_focus_client_get_cmd_handle(void);
+uint16_t sle_focus_client_get_status_handle(void);
+uint16_t sle_focus_client_get_pending_writes(void);
+
+/* ================= 安全终端节点链路 ================= */
+errcode_t sle_safety_client_send_cmd(const safety_node_cmd_t *cmd);
+errcode_t sle_safety_client_led_on(void);
+errcode_t sle_safety_client_led_off(void);
+bool sle_safety_client_is_connected(void);
+bool sle_safety_client_has_handles_ready(void);
+bool sle_safety_client_has_status_rx(void);
+bool sle_safety_client_is_ready(void);
+void sle_safety_client_get_status_snapshot(safety_node_status_t *status);
+uint16_t sle_safety_client_get_cmd_handle(void);
+uint16_t sle_safety_client_get_status_handle(void);
+uint16_t sle_safety_client_get_pending_writes(void);
 
 #ifdef __cplusplus
 }

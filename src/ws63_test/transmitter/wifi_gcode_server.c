@@ -249,8 +249,27 @@ static bool wifi_is_emergency_stop_command(const char *line)
     return (strcmp(line, "!") == 0) || (strcmp(line, "$STOP") == 0) || (strcmp(line, "M112") == 0);
 }
 
+static bool wifi_is_safety_led_command(const char *line, bool *turn_on)
+{
+    if (strcmp(line, "LED_ON") == 0) {
+        if (turn_on != NULL) {
+            *turn_on = true;
+        }
+        return true;
+    }
+    if (strcmp(line, "LED_OFF") == 0) {
+        if (turn_on != NULL) {
+            *turn_on = false;
+        }
+        return true;
+    }
+    return false;
+}
+
 static void wifi_process_line(int client_sock, const char *line, int len)
 {
+    bool led_on = false;
+
     if (len == 0) {
         return;
     }
@@ -266,6 +285,24 @@ static void wifi_process_line(int client_sock, const char *line, int len)
         gcode_processor_build_emergency_stop(&cmd);
         if (!wifi_send_business_cmd_reliably(&cmd)) {
             wifi_send_log(client_sock, "error:estop_failed\r\n");
+            return;
+        }
+
+        wifi_send_log(client_sock, "ok\r\n");
+        return;
+    }
+
+    if (wifi_is_safety_led_command(line, &led_on)) {
+        errcode_t ret;
+
+        if (!sle_safety_client_is_connected() || !sle_safety_client_has_handles_ready()) {
+            wifi_send_log(client_sock, "error:safety_unavailable\r\n");
+            return;
+        }
+
+        ret = led_on ? sle_safety_client_led_on() : sle_safety_client_led_off();
+        if (ret != ERRCODE_SUCC) {
+            wifi_send_log(client_sock, "error:safety_failed\r\n");
             return;
         }
 

@@ -126,6 +126,23 @@ static bool uart_is_emergency_stop_command(const char *line)
     return (strcmp(line, "!") == 0) || (strcmp(line, "$STOP") == 0) || (strcmp(line, "M112") == 0);
 }
 
+static bool uart_is_safety_led_command(const char *line, bool *turn_on)
+{
+    if (strcmp(line, "LED_ON") == 0) {
+        if (turn_on != NULL) {
+            *turn_on = true;
+        }
+        return true;
+    }
+    if (strcmp(line, "LED_OFF") == 0) {
+        if (turn_on != NULL) {
+            *turn_on = false;
+        }
+        return true;
+    }
+    return false;
+}
+
 static void uart_handle_emergency_stop(void)
 {
     motion_cmd_t cmd;
@@ -144,14 +161,39 @@ static void uart_handle_emergency_stop(void)
     uart_send_str("ok\r\n");
 }
 
+static void uart_handle_safety_led(bool turn_on)
+{
+    errcode_t ret;
+
+    if (!sle_safety_client_is_connected() || !sle_safety_client_has_handles_ready()) {
+        uart_send_str("error:safety_unavailable\r\n");
+        return;
+    }
+
+    ret = turn_on ? sle_safety_client_led_on() : sle_safety_client_led_off();
+    if (ret != ERRCODE_SUCC) {
+        uart_send_str("error:safety_failed\r\n");
+        return;
+    }
+
+    uart_send_str("ok\r\n");
+}
+
 /* ================= 处理一行 G-Code ================= */
 static void process_line(const char *line, int len)
 {
+    bool led_on = false;
+
     if (len == 0)
         return;
 
     if (uart_is_emergency_stop_command(line)) {
         uart_handle_emergency_stop();
+        return;
+    }
+
+    if (uart_is_safety_led_command(line, &led_on)) {
+        uart_handle_safety_led(led_on);
         return;
     }
 

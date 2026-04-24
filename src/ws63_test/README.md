@@ -2,15 +2,18 @@
 
 `src/ws63_test` 是一套面向 WS63 的多板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 TCP 文本入口，支持 `SoftAP` 直连和 `STA` 入网两种模式，方便后续网页端或自研上位机接入。
 
-当前目录包含三类核心工程模块：
+当前目录包含五类核心工程模块：
 - `common/`：协议、CRC、全局配置，负责收发两端共享契约。
 - `transmitter/`：发射板固件，负责 UART/WiFi/G-Code/SLE Client。
 - `receiver/`：接收板固件，负责 SLE Server/命令队列/插补/DAC/PWM/安全监控。
+- `zdt_controller/`：张大头 `Emm_V5.0` 的底层驱动与 bring-up 代码目录，供 `focus_node/` 复用，不再作为独立板卡角色编译。
+- `focus_node/`：感知与对焦节点固件，也是当前唯一的 `Z` 轴节点角色；第一版先整合 `TTL UART + ZDT Z轴`，为后续 `NFC / 测高 / 自动对焦` 预留统一节点入口。
 
 配套支持目录：
 - `tools/`：Windows 上位机自动化测试脚本。
 - `ai_studio/`：AI 智能创作中枢 PC 上位机，负责 AI 生图、轮廓提取、G-Code 生成，以及通过串口或 WiFi 下发到发射板。
 - `PROJECT_CAPABILITY_FEASIBILITY_PLAN.md`：汇总当前已实现能力、提升方向可行性与项目推进计划，适合对外说明与内部规划。
+- `PROJECT_COMPETITION_UPGRADE_PLAN.md`：把现有工程底座与竞赛增强方案整合成一份更适合立项书、答辩和团队排期的总纲。
 - `WS63_DEBUG_QUICKSTART.md`：统一的现场联调、安卓手机网络方案、主备切换与验收手册。
 - `CODE_ARCHITECTURE.md`：代码架构梳理与源码阅读地图。
 - `tools/WIFI_DEBUG_MANUAL.md`：WiFi 工具链、网页控制台与自动化脚本的专用调试手册。
@@ -22,8 +25,9 @@
 1. 先看本 README：搞清楚工程目标、目录、编译烧录、验收路径。
 2. 再看 [WS63_DEBUG_QUICKSTART.md](./WS63_DEBUG_QUICKSTART.md)：按“先主方案，再备方案”的顺序做现场联调和验收。
 3. 再看 [PROJECT_CAPABILITY_FEASIBILITY_PLAN.md](./PROJECT_CAPABILITY_FEASIBILITY_PLAN.md)：快速了解当前成果、扩展方向和推进计划。
-4. 如果重点排查 WiFi，再看 [WIFI_DEBUG_MANUAL.md](./tools/WIFI_DEBUG_MANUAL.md)：直接使用现成工具链联调。
-5. 最后看 [CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)：进入源码、二次开发、问题定位。
+4. 如果要准备比赛立项书、答辩 PPT 或团队分工，再看 [PROJECT_COMPETITION_UPGRADE_PLAN.md](./PROJECT_COMPETITION_UPGRADE_PLAN.md)：按“当前底座 + 竞赛增强 + 二期路线”统一理解项目。
+5. 如果重点排查 WiFi，再看 [WIFI_DEBUG_MANUAL.md](./tools/WIFI_DEBUG_MANUAL.md)：直接使用现成工具链联调。
+6. 最后看 [CODE_ARCHITECTURE.md](./CODE_ARCHITECTURE.md)：进入源码、二次开发、问题定位。
 
 ## 2. 前置知识目录
 
@@ -38,7 +42,7 @@
 | 坐标与功率输出 | X/Y 由 DAC8562 输出，激光功率由 PWM 输出 | `receiver/dac8562.c`、`receiver/laser_ctrl.c` |
 | 插补与执行 | 接收板消费命令队列并执行线性插补 | `receiver/interpolator.c` |
 | 安全机制 | 接收板会根据心跳和业务活动做超时停光保护 | `receiver/safety_monitor.c` |
-| 构建系统 | 通过 `Kconfig + CMakeLists.txt` 二选一构建发射板或接收板 | `Kconfig`、`CMakeLists.txt` |
+| 构建系统 | 通过 `Kconfig + CMakeLists.txt` 选择接收板、发射板、感知与对焦节点或安全节点 | `Kconfig`、`CMakeLists.txt` |
 | 自动化测试 | 用 Python 串口脚本做 smoke/square/repeat/stress 回归 | `tools/uart_auto_test.py`、`tools/stress_test.py` |
 
 ## 3. 新手入门指南
@@ -118,6 +122,15 @@ src/ws63_test/
 │   ├── dac8562.c
 │   ├── laser_ctrl.c
 │   └── safety_monitor.c
+├── zdt_controller/
+│   ├── main.c
+│   ├── zdt_controller.c
+│   ├── zdt_protocol.c
+│   └── zdt_uart.c
+├── focus_node/
+│   ├── main.c
+│   ├── focus_service.c
+│   └── focus_service.h
 └── tools/
     ├── wifi_client.py
     ├── wifi_console.py
@@ -188,9 +201,11 @@ src/ws63_test/
 python3 build.py menuconfig ws63-liteos-app
 ```
 
-二选一配置：
+按角色选择：
 - 接收板：打开 `CONFIG_LASER_MARKER_RECEIVER`
 - 发射板：打开 `CONFIG_LASER_MARKER_TRANSMITTER`
+- 感知与对焦节点：打开 `CONFIG_LASER_MARKER_FOCUS_NODE`
+- 安全终端节点：打开 `CONFIG_LASER_MARKER_SAFETY_NODE`
 
 固定硬件映射：
 - 接收板固定使用 `SPI0 + GPIO10(CS) + PWM2`
@@ -202,6 +217,16 @@ python3 build.py menuconfig ws63-liteos-app
 - `CONFIG_LASER_WIFI_MODE_STA`：发射板连接现有路由器/手机热点，适合电脑和手机在同一局域网下访问
 
 `SoftAP` 和 `STA` 在菜单里是二选一。
+
+如果选择 `感知与对焦节点`，还可以继续确认：
+- `CONFIG_ZDT_UART_BAUD`：张大头驱动串口波特率
+- `CONFIG_ZDT_DEVICE_ADDR`：张大头驱动地址
+- `CONFIG_ZDT_RS485_DIR_ENABLE`：是否启用 RS485 DE/RE 方向脚
+- `CONFIG_ZDT_DEMO_AUTO_RUN`：是否上电自动执行一次安全的演示运动
+
+当前推荐的 Z 轴接线口径：
+- `Emm_V5.0` 优先走 `TTL UART` 直连 `WS63`
+- `RS485 / Modbus` 优先留给后续测高传感器
 
 ### 6.2 编译
 
