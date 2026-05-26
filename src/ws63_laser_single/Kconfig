@@ -1,0 +1,34 @@
+#===============================================================================
+# @brief WS63 single-board laser marker Kconfig
+#===============================================================================
+
+menu "WS63 Single Board Laser Marker Configuration"
+    depends on ENABLE_LASER_SINGLE_SAMPLE
+
+comment "Fixed pins: UART1 GPIO15/16, SPI0 GPIO7/9/10, PWM2 GPIO2"
+
+config LASER_SINGLE_UART_BAUD
+    int
+    prompt "LaserGRBL UART baud rate"
+    range 9600 1000000
+    default 115200
+
+config LASER_SINGLE_WORK_AREA_X_MM
+    int
+    prompt "Work area X size in mm"
+    range 1 300
+    default 70
+
+config LASER_SINGLE_WORK_AREA_Y_MM
+    int
+    prompt "Work area Y size in mm"
+    range 1 300
+    default 70
+
+config LASER_SINGLE_STATUS_PERIODIC
+    bool
+    prompt "Send periodic Grbl status reports"
+    default n
+
+endmenu
+

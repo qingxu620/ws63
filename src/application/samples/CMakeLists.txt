@@ -31,7 +31,9 @@ endif()
 
 add_subdirectory_if_exist(custom)
 
-if(DEFINED CONFIG_ENABLE_LASER_MARKER_SAMPLE)
+if(DEFINED CONFIG_ENABLE_LASER_SINGLE_SAMPLE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_single ws63_laser_single)
+elseif(DEFINED CONFIG_ENABLE_LASER_MARKER_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_test ws63_test)
 endif()
 

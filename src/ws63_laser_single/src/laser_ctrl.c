@@ -1,17 +1,16 @@
 /**
  * @file laser_ctrl.c
- * @brief 激光 PWM 控制实现
+ * @brief Laser PWM control.
  */
 #include "laser_ctrl.h"
 #include "config.h"
 #include "pinctrl.h"
 #include "pwm.h"
-#include "soc_osal.h"
 
 #define LASER_PWM_PERIOD_TICKS 1000
 
 static bool g_laser_enabled = false;
-static uint16_t g_laser_power = 0; /* 0-1000 */
+static uint16_t g_laser_power = 0;
 static bool g_pwm_opened = false;
 
 static void laser_pwm_stop(void)
@@ -42,22 +41,18 @@ static void laser_build_pwm_config(uint16_t power, pwm_config_t *cfg)
 
 errcode_t laser_ctrl_init(void)
 {
-    /* 配置 PWM 引脚复用: GPIO2 → PWM2 */
     uapi_pin_set_mode(LASER_PWM_PIN, LASER_PWM_PIN_MODE);
     uapi_pwm_init();
-
-    /* 确保激光默认关闭 */
     g_laser_enabled = false;
     g_laser_power = 0;
     laser_pwm_stop();
-
     return ERRCODE_SUCC;
 }
 
 void laser_set_power(uint16_t power)
 {
-    if (power > 1000) {
-        power = 1000;
+    if (power > (uint16_t)LASER_S_MAX) {
+        power = (uint16_t)LASER_S_MAX;
     }
     g_laser_power = power;
 
@@ -105,4 +100,9 @@ void laser_enable(bool enable)
 bool laser_is_enabled(void)
 {
     return g_laser_enabled;
+}
+
+uint16_t laser_get_power(void)
+{
+    return g_laser_power;
 }

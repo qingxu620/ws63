@@ -1,0 +1,74 @@
+/**
+ * @file config.h
+ * @brief Configuration for the single-board WS63 laser marker sample.
+ */
+#ifndef LASER_SINGLE_CONFIG_H
+#define LASER_SINGLE_CONFIG_H
+
+#define DAC_MAX 65535U
+
+#if defined(CONFIG_LASER_SINGLE_WORK_AREA_X_MM)
+#define GALVO_WORK_AREA_X_MM ((double)CONFIG_LASER_SINGLE_WORK_AREA_X_MM)
+#else
+#define GALVO_WORK_AREA_X_MM 70.0
+#endif
+
+#if defined(CONFIG_LASER_SINGLE_WORK_AREA_Y_MM)
+#define GALVO_WORK_AREA_Y_MM ((double)CONFIG_LASER_SINGLE_WORK_AREA_Y_MM)
+#else
+#define GALVO_WORK_AREA_Y_MM 70.0
+#endif
+
+#define GALVO_X_MIN_MM 0.0
+#define GALVO_X_MAX_MM (GALVO_WORK_AREA_X_MM)
+#define GALVO_Y_MIN_MM 0.0
+#define GALVO_Y_MAX_MM (GALVO_WORK_AREA_Y_MM)
+
+#define BEILV_X ((double)DAC_MAX / GALVO_WORK_AREA_X_MM)
+#define BEILV_Y ((double)DAC_MAX / GALVO_WORK_AREA_Y_MM)
+#define STEP_NUM 0.1
+
+#define DEFAULT_FEED_RATE 10000.0
+#define G0_FEED_RATE 100000.0
+#define MARKING_FEED_RATE_MAX 600.0
+#define FRAME_FEED_RATE 500.0
+#define FRAME_LASER_POWER 200
+#define LASER_S_MAX 1000.0
+
+#if defined(CONFIG_LASER_SINGLE_UART_BAUD)
+#define UART_BAUD_RATE CONFIG_LASER_SINGLE_UART_BAUD
+#else
+#define UART_BAUD_RATE 115200
+#endif
+
+#if defined(CONFIG_LASER_SINGLE_STATUS_PERIODIC)
+#define LASER_SINGLE_STATUS_PERIODIC 1
+#else
+#define LASER_SINGLE_STATUS_PERIODIC 0
+#endif
+
+#define STATUS_INTERVAL_MS 200
+#define ACTIVITY_TIMEOUT_MS 200
+
+#define DAC_SPI_BUS 0
+#define DAC_SPI_CLK_PIN 7
+#define DAC_SPI_MOSI_PIN 9
+#define DAC_CS_PIN 10
+#define DAC_SPI_PIN_MODE 3
+
+#define LASER_PWM_CHANNEL 2
+#define LASER_PWM_GROUP_ID 0
+#define LASER_PWM_PIN 2
+#define LASER_PWM_PIN_MODE 1
+
+#define LASER_UART_BUS 1
+#define LASER_UART_TX_PIN 15
+#define LASER_UART_RX_PIN 16
+#define LASER_UART_PIN_MODE 1
+
+#define TASK_STACK_SIZE_DEFAULT 0x1000
+#define TASK_PRIO_UART 3
+#define TASK_PRIO_MOTION 4
+#define MOTION_QUEUE_SIZE 128
+
+#endif /* LASER_SINGLE_CONFIG_H */

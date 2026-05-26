@@ -165,7 +165,8 @@
 #define DAC_SPI_PIN_MODE 3 /* PIN_MODE_3 = 复用信号3 (SPI0) */
 
 /* --- 接收板: PWM (激光控制) --- */
-#define LASER_PWM_CHANNEL 2 /* PWM2 通道 */
+#define LASER_PWM_CHANNEL 2  /* PWM2 通道 */
+#define LASER_PWM_GROUP_ID 0 /* PWM 分组 ID */
 #define LASER_PWM_PIN 2      /* GPIO2  — Pin 24 — PWM2     */
 #define LASER_PWM_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (PWM) */
 
