@@ -51,6 +51,11 @@ static void laser_single_entry(void)
     osal_kfree(task);
     osal_kthread_unlock();
 
+    ret = motion_executor_start_task();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[laser single] create motion task failed: 0x%x\r\n", ret);
+    }
+
     osal_printk("[laser single] ready\r\n");
 }
 

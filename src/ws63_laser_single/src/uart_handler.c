@@ -54,6 +54,15 @@ static void send_error(int code)
     uart_send_str(buf);
 }
 
+static bool enqueue_motion_cmd(const motion_cmd_t *cmd)
+{
+    if (!motion_executor_enqueue(cmd)) {
+        send_error(9);
+        return false;
+    }
+    return true;
+}
+
 static void send_grbl_startup(const char *source)
 {
     char buf[96];
@@ -157,21 +166,18 @@ static bool handle_dollar_command(const char *line)
         cmd.target_x = (float)target_x;
         cmd.target_y = (float)target_y;
         cmd.feed_rate = (float)feed_rate;
-        motion_executor_execute(&cmd);
-        send_ok();
+        if (enqueue_motion_cmd(&cmd)) {
+            send_ok();
+        }
     } else if (strcmp(line, "$FRAME") == 0) {
         motion_cmd_t cmd = {0};
-        laser_enable(false);
 
         cmd.cmd = CMD_G0_MOVE;
         cmd.target_x = (float)GALVO_X_MIN_MM;
         cmd.target_y = (float)GALVO_Y_MIN_MM;
-        motion_executor_execute(&cmd);
-
-        cmd.cmd = CMD_LASER_ON;
-        cmd.flags = FLAG_LASER_ON;
-        cmd.laser_pwr = FRAME_LASER_POWER;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
 
         cmd.cmd = CMD_G1_MOVE;
         cmd.feed_rate = (float)FRAME_FEED_RATE;
@@ -179,21 +185,31 @@ static bool handle_dollar_command(const char *line)
         cmd.laser_pwr = FRAME_LASER_POWER;
         cmd.target_x = (float)GALVO_X_MAX_MM;
         cmd.target_y = (float)GALVO_Y_MIN_MM;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
         cmd.target_x = (float)GALVO_X_MAX_MM;
         cmd.target_y = (float)GALVO_Y_MAX_MM;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
         cmd.target_x = (float)GALVO_X_MIN_MM;
         cmd.target_y = (float)GALVO_Y_MAX_MM;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
         cmd.target_x = (float)GALVO_X_MIN_MM;
         cmd.target_y = (float)GALVO_Y_MIN_MM;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
 
         cmd.cmd = CMD_LASER_OFF;
         cmd.flags = 0;
         cmd.laser_pwr = 0;
-        motion_executor_execute(&cmd);
+        if (!enqueue_motion_cmd(&cmd)) {
+            return true;
+        }
         send_ok();
     } else if (strcmp(line, "$I") == 0) {
         uart_send_str("[VER:1.1f.WS63_SINGLE:]\r\n[OPT:V,15,128]\r\nok\r\n");
@@ -227,6 +243,18 @@ static void handle_emergency_stop(void)
     motion_executor_execute(&cmd);
 }
 
+static void wait_motion_idle(uint32_t timeout_ms)
+{
+    unsigned long start = (unsigned long)uapi_systick_get_ms();
+
+    while (motion_executor_is_busy()) {
+        if (((unsigned long)uapi_systick_get_ms() - start) >= timeout_ms) {
+            break;
+        }
+        osal_msleep(1);
+    }
+}
+
 static bool handle_realtime_char(uint8_t ch)
 {
     switch (ch) {
@@ -241,6 +269,7 @@ static bool handle_realtime_char(uint8_t ch)
         case GRBL_RESET_CHAR:
             g_rx_pos = 0;
             handle_emergency_stop();
+            wait_motion_idle(100);
             gcode_processor_init();
             motion_executor_set_origin();
             send_grbl_startup("soft-reset");
@@ -257,7 +286,9 @@ static void execute_gcode_line(const char *line, int len)
 
     if (gcode_process_line(line, len, cmds, 4, &cmd_count)) {
         for (int i = 0; i < cmd_count; i++) {
-            motion_executor_execute(&cmds[i]);
+            if (!enqueue_motion_cmd(&cmds[i])) {
+                return;
+            }
         }
     }
 

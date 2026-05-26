@@ -86,20 +86,12 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
             s = LASER_S_MAX;
         }
         g_laser_power = s;
-        if (g_laser_enabled && count < max_cmds) {
-            fill_cmd_header(&out_cmds[count], CMD_LASER_ON);
-            out_cmds[count].laser_pwr = (uint16_t)g_laser_power;
-            count++;
-        }
     }
 
     if (gcode_has_word(&gc, 'M')) {
         int m_val = (int)gcode_get_value(&gc, 'M');
-        if ((m_val == 3 || m_val == 4) && count < max_cmds) {
+        if (m_val == 3 || m_val == 4) {
             g_laser_enabled = true;
-            fill_cmd_header(&out_cmds[count], CMD_LASER_ON);
-            out_cmds[count].laser_pwr = (uint16_t)g_laser_power;
-            count++;
         } else if (m_val == 5 && count < max_cmds) {
             g_laser_enabled = false;
             fill_cmd_header(&out_cmds[count], CMD_LASER_OFF);
@@ -185,4 +177,3 @@ bool gcode_processor_is_absolute_mode(void)
 {
     return g_absolute_mode;
 }
-

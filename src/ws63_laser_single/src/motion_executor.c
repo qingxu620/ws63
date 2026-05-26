@@ -25,6 +25,7 @@ static volatile uint16_t g_queue_tail = 0;
 static osal_mutex g_queue_mutex;
 static osal_semaphore g_queue_sem;
 static bool g_queue_ready = false;
+static bool g_worker_started = false;
 static uint64_t g_last_wdt_kick_us = 0;
 
 static inline double clamp_axis(double value, double min_value, double max_value)
@@ -177,6 +178,7 @@ void motion_executor_init(void)
     g_last_activity_ms = 0;
     g_queue_head = 0;
     g_queue_tail = 0;
+    g_worker_started = false;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
@@ -188,7 +190,7 @@ void motion_executor_init(void)
 
 static bool motion_queue_pop(motion_cmd_t *cmd)
 {
-    if (!g_queue_ready || cmd == NULL) {
+    if (!g_queue_ready || !g_worker_started || cmd == NULL) {
         return false;
     }
     if (osal_sem_down(&g_queue_sem) != OSAL_SUCCESS) {
@@ -217,7 +219,7 @@ static uint16_t motion_queue_used_locked(void)
 
 bool motion_executor_enqueue(const motion_cmd_t *cmd)
 {
-    if (!g_queue_ready || cmd == NULL) {
+    if (!g_queue_ready || !g_worker_started || cmd == NULL) {
         return false;
     }
 
@@ -250,6 +252,7 @@ void motion_executor_flush(void)
     while (osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
     }
     osal_mutex_unlock(&g_queue_mutex);
+    laser_enable(false);
 }
 
 static int motion_executor_task(void *arg)
@@ -260,6 +263,8 @@ static int motion_executor_task(void *arg)
     while (1) {
         if (motion_queue_pop(&cmd)) {
             motion_executor_execute(&cmd);
+        } else {
+            osal_msleep(1);
         }
     }
 
@@ -268,14 +273,22 @@ static int motion_executor_task(void *arg)
 
 errcode_t motion_executor_start_task(void)
 {
+    if (!g_queue_ready) {
+        return ERRCODE_FAIL;
+    }
+
+    osal_kthread_lock();
     osal_task *task = osal_kthread_create(motion_executor_task, NULL, "laser_motion", TASK_STACK_SIZE_DEFAULT);
     if (task == NULL) {
+        osal_kthread_unlock();
         return ERRCODE_FAIL;
     }
     if (osal_kthread_set_priority(task, TASK_PRIO_MOTION) != OSAL_SUCCESS) {
         osal_printk("[laser single] set motion priority failed\r\n");
     }
     osal_kfree(task);
+    g_worker_started = true;
+    osal_kthread_unlock();
     return ERRCODE_SUCC;
 }
 
@@ -288,19 +301,28 @@ void motion_executor_execute(const motion_cmd_t *cmd)
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case CMD_G0_MOVE:
+            laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE);
             break;
         case CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
-            if ((cmd->flags & FLAG_LASER_ON) && feed_rate > MARKING_FEED_RATE_MAX) {
+            bool laser_on = ((cmd->flags & FLAG_LASER_ON) != 0) && cmd->laser_pwr > 0;
+            if (laser_on && feed_rate > MARKING_FEED_RATE_MAX) {
                 feed_rate = MARKING_FEED_RATE_MAX;
             }
+            if (laser_on) {
+                laser_set_power(cmd->laser_pwr);
+                laser_enable(true);
+            } else {
+                laser_enable(false);
+            }
             perform_move(cmd->target_x, cmd->target_y, feed_rate);
+            laser_enable(false);
             break;
         }
         case CMD_LASER_ON:
             laser_set_power(cmd->laser_pwr);
-            laser_enable(true);
+            laser_enable(cmd->laser_pwr > 0);
             update_activity();
             break;
         case CMD_LASER_OFF:
@@ -308,10 +330,12 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             update_activity();
             break;
         case CMD_SET_ORIGIN:
+            laser_enable(false);
             motion_executor_set_origin();
             break;
         case CMD_EMERGENCY_STOP:
             motion_executor_request_abort();
+            motion_executor_flush();
             laser_enable(false);
             laser_set_power(0);
             update_activity();
