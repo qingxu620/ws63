@@ -10,6 +10,7 @@
 #include "motion_executor.h"
 #include "laser_ctrl.h"
 #include "pinctrl.h"
+#include "preserve.h"
 #include "soc_osal.h"
 #include "systick.h"
 #include "uart.h"
@@ -53,10 +54,16 @@ static void send_error(int code)
     uart_send_str(buf);
 }
 
-static void send_grbl_startup(void)
+static void send_grbl_startup(const char *source)
 {
+    char buf[96];
+
     uart_send_str("\r\nWS63 Single Laser Marker V1.0\r\n");
     uart_send_str("Grbl 1.1f ['$' for help]\r\n");
+    snprintf(buf, sizeof(buf), "[MSG:startup source=%s uptime=%lums reset=0x%04x count=%u]\r\n",
+             source, (unsigned long)uapi_systick_get_ms(), (unsigned int)get_cpu_utils_reset_cause(),
+             get_cpu_utils_reset_count());
+    uart_send_str(buf);
 }
 
 static bool parsed_line_contains_gcode(const gcode_line_t *gc, int expected_code)
@@ -236,7 +243,7 @@ static bool handle_realtime_char(uint8_t ch)
             handle_emergency_stop();
             gcode_processor_init();
             motion_executor_set_origin();
-            send_grbl_startup();
+            send_grbl_startup("soft-reset");
             return true;
         default:
             return false;
@@ -292,7 +299,7 @@ int task_uart_rx_entry(void *arg)
 
     osal_printk("[laser single] uart task started\r\n");
     osal_msleep(500);
-    send_grbl_startup();
+    send_grbl_startup("boot");
 
     uint8_t ch;
     while (1) {

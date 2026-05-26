@@ -10,6 +10,7 @@
 #include "soc_osal.h"
 #include "systick.h"
 #include "tcxo.h"
+#include "watchdog.h"
 #include <math.h>
 #include <string.h>
 
@@ -24,6 +25,7 @@ static volatile uint16_t g_queue_tail = 0;
 static osal_mutex g_queue_mutex;
 static osal_semaphore g_queue_sem;
 static bool g_queue_ready = false;
+static uint64_t g_last_wdt_kick_us = 0;
 
 static inline double clamp_axis(double value, double min_value, double max_value)
 {
@@ -58,10 +60,20 @@ static void update_activity(void)
     g_last_activity_ms = (unsigned long)uapi_systick_get_ms();
 }
 
+static void kick_watchdog_periodic(uint64_t now_us, bool force)
+{
+    if (force || g_last_wdt_kick_us == 0 ||
+        (now_us - g_last_wdt_kick_us) >= MOTION_WDT_KICK_INTERVAL_US) {
+        (void)uapi_watchdog_kick();
+        g_last_wdt_kick_us = now_us;
+    }
+}
+
 static bool delay_until_us_interruptible(uint64_t target_us)
 {
     while (!g_abort_requested) {
         uint64_t now_us = uapi_tcxo_get_us();
+        kick_watchdog_periodic(now_us, false);
         if (now_us >= target_us) {
             return true;
         }
@@ -83,6 +95,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
 {
     g_motion_active = true;
     g_abort_requested = false;
+    kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 
     target_x = clamp_axis(target_x, GALVO_X_MIN_MM, GALVO_X_MAX_MM);
     target_y = clamp_axis(target_y, GALVO_Y_MIN_MM, GALVO_Y_MAX_MM);
@@ -99,6 +112,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         write_current_position();
         gcode_processor_note_executed(g_current_x, g_current_y);
         update_activity();
+        kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
         return;
     }
@@ -129,6 +143,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         g_current_x = start_x + step_dx * i;
         g_current_y = start_y + step_dy * i;
         write_current_position();
+        kick_watchdog_periodic(uapi_tcxo_get_us(), false);
 
         next_step_us += step_time_us;
         if (!delay_until_us_interruptible(next_step_us)) {
@@ -148,6 +163,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
 
     gcode_processor_note_executed(g_current_x, g_current_y);
     update_activity();
+    kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     g_abort_requested = false;
     g_motion_active = false;
 }
@@ -161,6 +177,7 @@ void motion_executor_init(void)
     g_last_activity_ms = 0;
     g_queue_head = 0;
     g_queue_tail = 0;
+    g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
         osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
@@ -268,6 +285,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
         return;
     }
 
+    kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case CMD_G0_MOVE:
             perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE);
@@ -301,6 +319,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
         default:
             break;
     }
+    kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
 
 void motion_executor_set_origin(void)
@@ -311,6 +330,7 @@ void motion_executor_set_origin(void)
     write_current_position();
     gcode_processor_note_executed(g_current_x, g_current_y);
     update_activity();
+    kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
 
 void motion_executor_request_abort(void)
