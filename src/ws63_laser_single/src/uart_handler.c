@@ -19,7 +19,7 @@
 #include <string.h>
 
 #define RX_LINE_MAX 128
-#define UART_RX_BUF_SIZE 256
+#define UART_RX_BUF_SIZE 4096
 #define UART_READ_TIMEOUT_MS 20
 #define GRBL_RESET_CHAR 0x18
 
@@ -218,6 +218,13 @@ static bool handle_dollar_command(const char *line)
                  gcode_processor_is_absolute_mode() ? 90 : 91, gcode_processor_laser_is_enabled() ? 3 : 5,
                  (int)gcode_processor_get_feed_rate(), (int)gcode_processor_get_laser_power());
         uart_send_str(buf);
+    } else if (strcmp(line, "$D") == 0) {
+        snprintf(buf, sizeof(buf), "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f]\r\nok\r\n",
+                 motion_executor_is_busy() ? 1 : 0, (unsigned int)motion_executor_queue_depth(),
+                 motion_executor_abort_requested() ? 1 : 0, motion_executor_worker_started() ? 1 : 0,
+                 motion_executor_enqueued_count(), motion_executor_executed_count(),
+                 motion_executor_get_x(), motion_executor_get_y());
+        uart_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
         motion_executor_set_origin();
         send_ok();
@@ -226,6 +233,7 @@ static bool handle_dollar_command(const char *line)
     } else if (strcmp(line, "$") == 0) {
         uart_send_str("$G - View gcode parser state\r\n");
         uart_send_str("$I - View build info\r\n");
+        uart_send_str("$D - View motion debug state\r\n");
         uart_send_str("$X - Kill alarm lock\r\n");
         uart_send_str("$H - Set origin\r\n");
         send_ok();
@@ -262,7 +270,6 @@ static bool handle_realtime_char(uint8_t ch)
             send_status_report();
             return true;
         case '!':
-            handle_emergency_stop();
             return true;
         case '~':
             return true;

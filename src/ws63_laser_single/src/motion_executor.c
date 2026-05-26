@@ -26,6 +26,9 @@ static osal_mutex g_queue_mutex;
 static osal_semaphore g_queue_sem;
 static bool g_queue_ready = false;
 static bool g_worker_started = false;
+static bool g_output_armed = false;
+static unsigned long g_enqueued_count = 0;
+static unsigned long g_executed_count = 0;
 static uint64_t g_last_wdt_kick_us = 0;
 
 static inline double clamp_axis(double value, double min_value, double max_value)
@@ -54,6 +57,18 @@ static inline uint16_t mm_to_dac(double mm, double scale)
 static void write_current_position(void)
 {
     dac8562_write_xy(mm_to_dac(g_current_x, BEILV_X), mm_to_dac(g_current_y, BEILV_Y));
+}
+
+static void arm_output_if_needed(void)
+{
+    if (g_output_armed) {
+        return;
+    }
+
+    laser_enable(false);
+    dac8562_recover();
+    write_current_position();
+    g_output_armed = true;
 }
 
 static void update_activity(void)
@@ -86,6 +101,9 @@ static bool delay_until_us_interruptible(uint64_t target_us)
         }
         if (chunk_us > 0U) {
             uapi_tcxo_delay_us(chunk_us);
+            if (chunk_us >= 2000U) {
+                osal_yield();
+            }
         }
     }
 
@@ -179,6 +197,9 @@ void motion_executor_init(void)
     g_queue_head = 0;
     g_queue_tail = 0;
     g_worker_started = false;
+    g_output_armed = false;
+    g_enqueued_count = 0;
+    g_executed_count = 0;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
@@ -229,6 +250,7 @@ bool motion_executor_enqueue(const motion_cmd_t *cmd)
         if (next != g_queue_tail) {
             memcpy(&g_motion_queue[g_queue_head], cmd, sizeof(motion_cmd_t));
             g_queue_head = next;
+            g_enqueued_count++;
             osal_mutex_unlock(&g_queue_mutex);
             osal_sem_up(&g_queue_sem);
             return true;
@@ -301,12 +323,14 @@ void motion_executor_execute(const motion_cmd_t *cmd)
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case CMD_G0_MOVE:
+            arm_output_if_needed();
             laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE);
             break;
         case CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
             bool laser_on = ((cmd->flags & FLAG_LASER_ON) != 0) && cmd->laser_pwr > 0;
+            arm_output_if_needed();
             if (laser_on && feed_rate > MARKING_FEED_RATE_MAX) {
                 feed_rate = MARKING_FEED_RATE_MAX;
             }
@@ -343,6 +367,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
         default:
             break;
     }
+    g_executed_count++;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
 
@@ -385,6 +410,38 @@ bool motion_executor_is_busy(void)
     bool busy = (motion_queue_used_locked() > 0U);
     osal_mutex_unlock(&g_queue_mutex);
     return busy;
+}
+
+uint16_t motion_executor_queue_depth(void)
+{
+    if (!g_queue_ready) {
+        return 0;
+    }
+
+    osal_mutex_lock(&g_queue_mutex);
+    uint16_t used = motion_queue_used_locked();
+    osal_mutex_unlock(&g_queue_mutex);
+    return used;
+}
+
+bool motion_executor_worker_started(void)
+{
+    return g_worker_started;
+}
+
+bool motion_executor_abort_requested(void)
+{
+    return g_abort_requested;
+}
+
+unsigned long motion_executor_enqueued_count(void)
+{
+    return g_enqueued_count;
+}
+
+unsigned long motion_executor_executed_count(void)
+{
+    return g_executed_count;
 }
 
 unsigned long motion_executor_last_activity_ms(void)

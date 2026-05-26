@@ -23,6 +23,11 @@ void motion_executor_request_abort(void);
 double motion_executor_get_x(void);
 double motion_executor_get_y(void);
 bool motion_executor_is_busy(void);
+uint16_t motion_executor_queue_depth(void);
+bool motion_executor_worker_started(void);
+bool motion_executor_abort_requested(void);
+unsigned long motion_executor_enqueued_count(void);
+unsigned long motion_executor_executed_count(void);
 unsigned long motion_executor_last_activity_ms(void);
 
 #ifdef __cplusplus

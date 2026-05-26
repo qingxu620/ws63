@@ -27,6 +27,7 @@ extern "C" {
 #define DAC_GAIN_B1_A1 0x0003
 
 errcode_t dac8562_init(void);
+void dac8562_recover(void);
 void dac8562_write_channel(uint8_t cmd, uint16_t value);
 void dac8562_write_xy(uint16_t x_val, uint16_t y_val);
 
@@ -35,4 +36,3 @@ void dac8562_write_xy(uint16_t x_val, uint16_t y_val);
 #endif
 
 #endif /* DAC8562_H */
-
