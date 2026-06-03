@@ -20,6 +20,12 @@ void laser_force_off(void);
 bool laser_is_enabled(void);
 uint16_t laser_get_power(void);
 bool laser_pwm_is_opened(void);
+uint32_t laser_pwm_clock_hz(void);
+uint32_t laser_pwm_period_ticks(void);
+uint32_t laser_pwm_high_ticks(void);
+uint32_t laser_pwm_low_ticks(void);
+uint16_t laser_pwm_last_requested_power(void);
+uint16_t laser_pwm_last_effective_power(void);
 
 #ifdef __cplusplus
 }

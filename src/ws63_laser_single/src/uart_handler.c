@@ -151,7 +151,7 @@ static void send_wait_status(unsigned long *last_status_ms)
 
 static bool handle_dollar_command(const char *line)
 {
-    char buf[320];
+    char buf[512];
 
     if (line[0] != '$') {
         return false;
@@ -248,12 +248,15 @@ static bool handle_dollar_command(const char *line)
         uart_send_str(buf);
     } else if (strcmp(line, "$D") == 0) {
         snprintf(buf, sizeof(buf),
-                 "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu]\r\nok\r\n",
+                 "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu]\r\nok\r\n",
                  motion_executor_is_busy() ? 1 : 0, (unsigned int)motion_executor_queue_depth(),
                  motion_executor_abort_requested() ? 1 : 0, motion_executor_worker_started() ? 1 : 0,
                  motion_executor_enqueued_count(), motion_executor_executed_count(),
                  motion_executor_get_x(), motion_executor_get_y(), laser_is_enabled() ? 1 : 0,
                  (unsigned int)laser_get_power(), laser_pwm_is_opened() ? 1 : 0,
+                 (unsigned long)laser_pwm_clock_hz(), (unsigned long)laser_pwm_period_ticks(),
+                 (unsigned long)laser_pwm_high_ticks(), (unsigned long)laser_pwm_low_ticks(),
+                 (unsigned int)laser_pwm_last_requested_power(), (unsigned int)laser_pwm_last_effective_power(),
                  motion_executor_max_sample_late_us(), motion_executor_late_sample_count(),
                  motion_executor_missed_sample_count(), motion_executor_motion_segment_count(),
                  motion_executor_short_segment_count());
@@ -348,6 +351,7 @@ static void execute_gcode_line(const char *line, int len)
         }
         if (drain_before_ok) {
             wait_motion_idle(MOTION_END_DRAIN_TIMEOUT_MS);
+            laser_force_off();
         }
     }
 

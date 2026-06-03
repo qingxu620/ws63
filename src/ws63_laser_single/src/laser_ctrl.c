@@ -9,10 +9,19 @@
 #include "pwm.h"
 
 #define LASER_PWM_MIN_PERIOD_TICKS 8U
+#define LASER_PWM_INVALID_TICKS 0xFFFFFFFFU
 
 static bool g_laser_enabled = false;
 static uint16_t g_laser_power = 0;
 static bool g_pwm_opened = false;
+static uint32_t g_last_pwm_clk_hz = 0;
+static uint32_t g_last_period_ticks = 0;
+static uint32_t g_last_high_ticks = 0;
+static uint32_t g_last_low_ticks = 0;
+static uint16_t g_last_requested_power = 0;
+static uint16_t g_last_effective_power = 0;
+static uint32_t g_applied_high_ticks = LASER_PWM_INVALID_TICKS;
+static uint32_t g_applied_low_ticks = LASER_PWM_INVALID_TICKS;
 
 static void laser_pin_force_low(void)
 {
@@ -30,6 +39,8 @@ static void laser_pwm_close_and_low(void)
         uapi_pwm_close(LASER_PWM_CHANNEL);
         g_pwm_opened = false;
     }
+    g_applied_high_ticks = LASER_PWM_INVALID_TICKS;
+    g_applied_low_ticks = LASER_PWM_INVALID_TICKS;
     laser_pin_force_low();
 }
 
@@ -56,6 +67,12 @@ static void laser_build_pwm_config(uint16_t power, pwm_config_t *cfg)
     cfg->offset_time = 0;
     cfg->cycles = 0;
     cfg->repeat = true;
+
+    g_last_pwm_clk_hz = pwm_clk;
+    g_last_period_ticks = period_ticks;
+    g_last_high_ticks = cfg->high_time;
+    g_last_low_ticks = cfg->low_time;
+    g_last_effective_power = power;
 }
 
 static void laser_apply_pwm_power(uint16_t power)
@@ -64,11 +81,16 @@ static void laser_apply_pwm_power(uint16_t power)
     laser_build_pwm_config(power, &cfg);
 
     if (g_pwm_opened) {
+        if (g_applied_high_ticks == cfg.high_time && g_applied_low_ticks == cfg.low_time) {
+            return;
+        }
 #ifdef CONFIG_PWM_USING_V151
         uapi_pwm_update_cfg(LASER_PWM_CHANNEL, &cfg);
 #else
         uapi_pwm_update_duty_ratio(LASER_PWM_CHANNEL, cfg.low_time, cfg.high_time);
 #endif
+        g_applied_high_ticks = cfg.high_time;
+        g_applied_low_ticks = cfg.low_time;
         return;
     }
 
@@ -83,6 +105,8 @@ static void laser_apply_pwm_power(uint16_t power)
         return;
     }
     g_pwm_opened = true;
+    g_applied_high_ticks = cfg.high_time;
+    g_applied_low_ticks = cfg.low_time;
 
 #ifdef CONFIG_PWM_USING_V151
     uint8_t channel_id = LASER_PWM_CHANNEL;
@@ -111,8 +135,15 @@ errcode_t laser_ctrl_init(void)
 
 void laser_set_power(uint16_t power)
 {
+    g_last_requested_power = power;
     if (power > (uint16_t)LASER_S_MAX) {
         power = (uint16_t)LASER_S_MAX;
+    }
+    if (power == g_laser_power) {
+        uint16_t output_power = g_laser_enabled ? power : 0;
+        if (output_power == 0 || g_pwm_opened) {
+            return;
+        }
     }
     g_laser_power = power;
     laser_update_output();
@@ -120,6 +151,12 @@ void laser_set_power(uint16_t power)
 
 void laser_enable(bool enable)
 {
+    if (enable == g_laser_enabled) {
+        uint16_t output_power = enable ? g_laser_power : 0;
+        if (output_power == 0 || g_pwm_opened) {
+            return;
+        }
+    }
     g_laser_enabled = enable;
     laser_update_output();
 }
@@ -144,4 +181,34 @@ uint16_t laser_get_power(void)
 bool laser_pwm_is_opened(void)
 {
     return g_pwm_opened;
+}
+
+uint32_t laser_pwm_clock_hz(void)
+{
+    return g_last_pwm_clk_hz;
+}
+
+uint32_t laser_pwm_period_ticks(void)
+{
+    return g_last_period_ticks;
+}
+
+uint32_t laser_pwm_high_ticks(void)
+{
+    return g_last_high_ticks;
+}
+
+uint32_t laser_pwm_low_ticks(void)
+{
+    return g_last_low_ticks;
+}
+
+uint16_t laser_pwm_last_requested_power(void)
+{
+    return g_last_requested_power;
+}
+
+uint16_t laser_pwm_last_effective_power(void)
+{
+    return g_last_effective_power;
 }
