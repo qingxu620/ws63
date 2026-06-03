@@ -15,6 +15,7 @@
 
 static double g_current_x = 0.0;
 static double g_current_y = 0.0;
+static volatile bool g_command_active = false;
 static volatile bool g_motion_active = false;
 static volatile bool g_abort_requested = false;
 static unsigned long g_last_activity_ms = 0;
@@ -232,6 +233,7 @@ void motion_executor_init(void)
 {
     g_current_x = 0.0;
     g_current_y = 0.0;
+    g_command_active = false;
     g_motion_active = false;
     g_abort_requested = false;
     g_last_activity_ms = 0;
@@ -272,6 +274,7 @@ static bool motion_queue_pop(motion_cmd_t *cmd)
 
     memcpy(cmd, &g_motion_queue[g_queue_tail], sizeof(motion_cmd_t));
     g_queue_tail = (uint16_t)((g_queue_tail + 1U) % MOTION_QUEUE_SIZE);
+    g_command_active = true;
     osal_mutex_unlock(&g_queue_mutex);
     return true;
 }
@@ -336,6 +339,7 @@ static int motion_executor_task(void *arg)
     while (1) {
         if (motion_queue_pop(&cmd)) {
             motion_executor_execute(&cmd);
+            g_command_active = false;
         } else {
             osal_msleep(1);
         }
@@ -456,6 +460,9 @@ double motion_executor_get_y(void)
 
 bool motion_executor_is_busy(void)
 {
+    if (g_command_active) {
+        return true;
+    }
     if (g_motion_active) {
         return true;
     }

@@ -35,6 +35,8 @@ static uart_buffer_config_t g_uart_buffer_config = {
 static unsigned long g_last_status_ms = 0;
 #endif
 
+static void wait_motion_idle(uint32_t timeout_ms);
+
 static void uart_send_str(const char *str)
 {
     uint32_t len = (uint32_t)strlen(str);
@@ -132,6 +134,19 @@ static void send_periodic_status(void)
         g_last_status_ms = now;
     }
 #endif
+}
+
+static void send_wait_status(unsigned long *last_status_ms)
+{
+    if (last_status_ms == NULL) {
+        return;
+    }
+
+    unsigned long now = (unsigned long)uapi_systick_get_ms();
+    if ((now - *last_status_ms) >= STATUS_INTERVAL_MS) {
+        send_status_report();
+        *last_status_ms = now;
+    }
 }
 
 static bool handle_dollar_command(const char *line)
@@ -244,6 +259,7 @@ static bool handle_dollar_command(const char *line)
                  motion_executor_short_segment_count());
         uart_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
+        wait_motion_idle(MOTION_END_DRAIN_TIMEOUT_MS);
         gcode_processor_set_origin();
         motion_executor_set_origin();
         send_ok();
@@ -273,12 +289,13 @@ static void handle_emergency_stop(void)
 static void wait_motion_idle(uint32_t timeout_ms)
 {
     unsigned long start = (unsigned long)uapi_systick_get_ms();
+    unsigned long last_status_ms = 0;
 
     while (motion_executor_is_busy()) {
         if (((unsigned long)uapi_systick_get_ms() - start) >= timeout_ms) {
             break;
         }
-        send_periodic_status();
+        send_wait_status(&last_status_ms);
         osal_msleep(1);
     }
 }
