@@ -14,6 +14,7 @@
 #include "soc_osal.h"
 #include "systick.h"
 #include "uart.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,18 @@ static bool parsed_line_contains_gcode(const gcode_line_t *gc, int expected_code
     return false;
 }
 
+static bool line_contains_mcode(const char *line, int expected_code)
+{
+    const char *p = line;
+    while ((p = strchr(p, 'M')) != NULL) {
+        if ((p == line || !isalpha((unsigned char)*(p - 1))) && atoi(p + 1) == expected_code) {
+            return true;
+        }
+        p++;
+    }
+    return false;
+}
+
 static bool machine_is_idle(void)
 {
     if (motion_executor_is_busy()) {
@@ -123,7 +136,7 @@ static void send_periodic_status(void)
 
 static bool handle_dollar_command(const char *line)
 {
-    char buf[160];
+    char buf[320];
 
     if (line[0] != '$') {
         return false;
@@ -219,11 +232,16 @@ static bool handle_dollar_command(const char *line)
                  (int)gcode_processor_get_feed_rate(), (int)gcode_processor_get_laser_power());
         uart_send_str(buf);
     } else if (strcmp(line, "$D") == 0) {
-        snprintf(buf, sizeof(buf), "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f]\r\nok\r\n",
+        snprintf(buf, sizeof(buf),
+                 "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu]\r\nok\r\n",
                  motion_executor_is_busy() ? 1 : 0, (unsigned int)motion_executor_queue_depth(),
                  motion_executor_abort_requested() ? 1 : 0, motion_executor_worker_started() ? 1 : 0,
                  motion_executor_enqueued_count(), motion_executor_executed_count(),
-                 motion_executor_get_x(), motion_executor_get_y());
+                 motion_executor_get_x(), motion_executor_get_y(), laser_is_enabled() ? 1 : 0,
+                 (unsigned int)laser_get_power(), laser_pwm_is_opened() ? 1 : 0,
+                 motion_executor_max_sample_late_us(), motion_executor_late_sample_count(),
+                 motion_executor_missed_sample_count(), motion_executor_motion_segment_count(),
+                 motion_executor_short_segment_count());
         uart_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
         gcode_processor_set_origin();
@@ -260,6 +278,7 @@ static void wait_motion_idle(uint32_t timeout_ms)
         if (((unsigned long)uapi_systick_get_ms() - start) >= timeout_ms) {
             break;
         }
+        send_periodic_status();
         osal_msleep(1);
     }
 }
@@ -299,6 +318,7 @@ static void execute_gcode_line(const char *line, int len)
 {
     motion_cmd_t cmds[4];
     int cmd_count = 0;
+    bool drain_before_ok = line_contains_mcode(line, 5);
 
     if (gcode_process_line(line, len, cmds, 4, &cmd_count)) {
         for (int i = 0; i < cmd_count; i++) {
@@ -308,6 +328,9 @@ static void execute_gcode_line(const char *line, int len)
         }
         if (cmd_count > 0) {
             wait_motion_queue_watermark();
+        }
+        if (drain_before_ok) {
+            wait_motion_idle(MOTION_END_DRAIN_TIMEOUT_MS);
         }
     }
 

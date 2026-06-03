@@ -21,7 +21,7 @@ static void laser_pin_force_low(void)
     uapi_gpio_set_val(LASER_PWM_PIN, GPIO_LEVEL_LOW);
 }
 
-static void laser_pwm_stop(void)
+static void laser_pwm_close_and_low(void)
 {
     if (g_pwm_opened) {
 #ifdef CONFIG_PWM_USING_V151
@@ -43,7 +43,9 @@ static void laser_build_pwm_config(uint16_t power, pwm_config_t *cfg)
 
     uint32_t high_ticks = (uint32_t)((double)power / LASER_S_MAX * period_ticks);
 
-    if (high_ticks == 0) {
+    if (power == 0) {
+        high_ticks = 0;
+    } else if (high_ticks == 0) {
         high_ticks = 1;
     } else if (high_ticks >= period_ticks) {
         high_ticks = period_ticks - 1;
@@ -56,28 +58,8 @@ static void laser_build_pwm_config(uint16_t power, pwm_config_t *cfg)
     cfg->repeat = true;
 }
 
-errcode_t laser_ctrl_init(void)
+static void laser_apply_pwm_power(uint16_t power)
 {
-    uapi_pwm_init();
-    g_laser_enabled = false;
-    g_laser_power = 0;
-    g_pwm_opened = false;
-    laser_pin_force_low();
-    return ERRCODE_SUCC;
-}
-
-void laser_set_power(uint16_t power)
-{
-    if (power > (uint16_t)LASER_S_MAX) {
-        power = (uint16_t)LASER_S_MAX;
-    }
-    g_laser_power = power;
-
-    if (!g_laser_enabled || power == 0) {
-        laser_pwm_stop();
-        return;
-    }
-
     pwm_config_t cfg = {0};
     laser_build_pwm_config(power, &cfg);
 
@@ -87,6 +69,11 @@ void laser_set_power(uint16_t power)
 #else
         uapi_pwm_update_duty_ratio(LASER_PWM_CHANNEL, cfg.low_time, cfg.high_time);
 #endif
+        return;
+    }
+
+    if (power == 0) {
+        laser_pin_force_low();
         return;
     }
 
@@ -106,14 +93,42 @@ void laser_set_power(uint16_t power)
 #endif
 }
 
+static void laser_update_output(void)
+{
+    uint16_t output_power = g_laser_enabled ? g_laser_power : 0;
+    laser_apply_pwm_power(output_power);
+}
+
+errcode_t laser_ctrl_init(void)
+{
+    uapi_pwm_init();
+    g_laser_enabled = false;
+    g_laser_power = 0;
+    g_pwm_opened = false;
+    laser_force_off();
+    return ERRCODE_SUCC;
+}
+
+void laser_set_power(uint16_t power)
+{
+    if (power > (uint16_t)LASER_S_MAX) {
+        power = (uint16_t)LASER_S_MAX;
+    }
+    g_laser_power = power;
+    laser_update_output();
+}
+
 void laser_enable(bool enable)
 {
     g_laser_enabled = enable;
-    if (enable) {
-        laser_set_power(g_laser_power);
-    } else {
-        laser_pwm_stop();
-    }
+    laser_update_output();
+}
+
+void laser_force_off(void)
+{
+    g_laser_enabled = false;
+    g_laser_power = 0;
+    laser_pwm_close_and_low();
 }
 
 bool laser_is_enabled(void)
@@ -124,4 +139,9 @@ bool laser_is_enabled(void)
 uint16_t laser_get_power(void)
 {
     return g_laser_power;
+}
+
+bool laser_pwm_is_opened(void)
+{
+    return g_pwm_opened;
 }

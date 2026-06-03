@@ -16,12 +16,13 @@ extern "C" {
 errcode_t laser_ctrl_init(void);
 void laser_set_power(uint16_t power);
 void laser_enable(bool enable);
+void laser_force_off(void);
 bool laser_is_enabled(void);
 uint16_t laser_get_power(void);
+bool laser_pwm_is_opened(void);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* LASER_CTRL_H */
-

@@ -29,6 +29,11 @@ bool motion_executor_abort_requested(void);
 unsigned long motion_executor_enqueued_count(void);
 unsigned long motion_executor_executed_count(void);
 unsigned long motion_executor_last_activity_ms(void);
+unsigned long motion_executor_late_sample_count(void);
+unsigned long motion_executor_missed_sample_count(void);
+unsigned long motion_executor_motion_segment_count(void);
+unsigned long motion_executor_short_segment_count(void);
+unsigned long motion_executor_max_sample_late_us(void);
 
 #ifdef __cplusplus
 }

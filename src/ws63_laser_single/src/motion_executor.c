@@ -28,7 +28,14 @@ static volatile bool g_worker_started = false;
 static bool g_output_armed = false;
 static volatile unsigned long g_enqueued_count = 0;
 static volatile unsigned long g_executed_count = 0;
+static volatile unsigned long g_late_sample_count = 0;
+static volatile unsigned long g_missed_sample_count = 0;
+static volatile unsigned long g_motion_segment_count = 0;
+static volatile unsigned long g_short_segment_count = 0;
+static volatile unsigned long g_max_sample_late_us = 0;
 static uint64_t g_last_wdt_kick_us = 0;
+
+#define MOTION_LATE_WARN_US 100U
 
 static inline double clamp_axis(double value, double min_value, double max_value)
 {
@@ -64,7 +71,7 @@ static void arm_output_if_needed(void)
         return;
     }
 
-    laser_enable(false);
+    laser_force_off();
     dac8562_recover();
     write_current_position();
     g_output_armed = true;
@@ -109,7 +116,25 @@ static bool delay_until_us_interruptible(uint64_t target_us)
     return false;
 }
 
-static void perform_move(double target_x, double target_y, double feed_rate_mm_min)
+static int ceil_step_count(double value)
+{
+    if (value <= 1.0) {
+        return 1;
+    }
+    return (int)ceil(value);
+}
+
+static void record_late_sample(uint64_t late_us)
+{
+    if (late_us > (uint64_t)g_max_sample_late_us) {
+        g_max_sample_late_us = (unsigned long)late_us;
+    }
+    if (late_us >= MOTION_LATE_WARN_US) {
+        g_late_sample_count++;
+    }
+}
+
+static void perform_move(double target_x, double target_y, double feed_rate_mm_min, bool laser_marking)
 {
     g_motion_active = true;
     g_abort_requested = false;
@@ -124,7 +149,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     double dy = target_y - start_y;
     double distance = sqrt(dx * dx + dy * dy);
 
-    if (distance < STEP_NUM) {
+    if (distance <= 0.000001) {
         g_current_x = target_x;
         g_current_y = target_y;
         write_current_position();
@@ -139,36 +164,55 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         feed_sec = 0.1;
     }
 
-    int steps = (int)(distance / STEP_NUM);
-    if (steps < 1) {
-        steps = 1;
+    double duration_us = (distance / feed_sec) * 1000000.0;
+    g_motion_segment_count++;
+    bool short_segment = (distance <= STEP_NUM || duration_us <= (double)MOTION_SAMPLE_PERIOD_US);
+    if (short_segment) {
+        g_short_segment_count++;
+    }
+    if (laser_marking && short_segment && duration_us < (double)MOTION_MIN_MARK_SEGMENT_US) {
+        duration_us = (double)MOTION_MIN_MARK_SEGMENT_US;
     }
 
-    double step_dx = dx / steps;
-    double step_dy = dy / steps;
-    uint64_t step_time_us = (uint64_t)((((distance / feed_sec) * 1000000.0) / steps) + 0.5);
-    if (step_time_us < 1U) {
-        step_time_us = 1U;
+    int time_steps = ceil_step_count(duration_us / (double)MOTION_SAMPLE_PERIOD_US);
+    int space_steps = ceil_step_count(distance / STEP_NUM);
+    int steps = (time_steps > space_steps) ? time_steps : space_steps;
+    double step_time_us = duration_us / (double)steps;
+    if (step_time_us < 1.0) {
+        step_time_us = 1.0;
     }
 
-    uint64_t next_step_us = uapi_tcxo_get_us();
+    double next_step_us = (double)uapi_tcxo_get_us();
     for (int i = 1; i <= steps; i++) {
         if (g_abort_requested) {
             break;
         }
 
         next_step_us += step_time_us;
-        if (!delay_until_us_interruptible(next_step_us)) {
+        uint64_t target_us = (uint64_t)(next_step_us + 0.5);
+        if (!delay_until_us_interruptible(target_us)) {
             break;
         }
 
-        g_current_x = start_x + step_dx * i;
-        g_current_y = start_y + step_dy * i;
+        uint64_t now_us = uapi_tcxo_get_us();
+        if (now_us > target_us) {
+            uint64_t late_us = now_us - target_us;
+            record_late_sample(late_us);
+            if (late_us >= MOTION_LATE_WARN_US) {
+                unsigned long slipped = (unsigned long)((double)late_us / step_time_us);
+                g_missed_sample_count += (slipped > 0UL) ? slipped : 1UL;
+                next_step_us = (double)now_us;
+            }
+        }
+
+        double fraction = (double)i / (double)steps;
+        g_current_x = start_x + dx * fraction;
+        g_current_y = start_y + dy * fraction;
         write_current_position();
-        kick_watchdog_periodic(uapi_tcxo_get_us(), false);
+
+        kick_watchdog_periodic(now_us, false);
         if ((i % 200) == 0) {
             update_activity();
-            osal_yield();
         }
     }
 
@@ -197,6 +241,11 @@ void motion_executor_init(void)
     g_output_armed = false;
     g_enqueued_count = 0;
     g_executed_count = 0;
+    g_late_sample_count = 0;
+    g_missed_sample_count = 0;
+    g_motion_segment_count = 0;
+    g_short_segment_count = 0;
+    g_max_sample_late_us = 0;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
@@ -276,7 +325,7 @@ void motion_executor_flush(void)
     while (osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
     }
     osal_mutex_unlock(&g_queue_mutex);
-    laser_enable(false);
+    laser_force_off();
 }
 
 static int motion_executor_task(void *arg)
@@ -327,7 +376,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
         case CMD_G0_MOVE:
             arm_output_if_needed();
             laser_enable(false);
-            perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE);
+            perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE, false);
             break;
         case CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
@@ -346,7 +395,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             } else {
                 laser_enable(false);
             }
-            perform_move(cmd->target_x, cmd->target_y, feed_rate);
+            perform_move(cmd->target_x, cmd->target_y, feed_rate, laser_on);
             if (!laser_on) {
                 laser_enable(false);
             }
@@ -363,15 +412,13 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             update_activity();
             break;
         case CMD_SET_ORIGIN:
-            laser_enable(false);
-            laser_set_power(0);
+            laser_force_off();
             motion_executor_set_origin();
             break;
         case CMD_EMERGENCY_STOP:
             motion_executor_request_abort();
             motion_executor_flush();
-            laser_enable(false);
-            laser_set_power(0);
+            laser_force_off();
             update_activity();
             break;
         default:
@@ -383,6 +430,7 @@ void motion_executor_execute(const motion_cmd_t *cmd)
 
 void motion_executor_set_origin(void)
 {
+    laser_force_off();
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_abort_requested = false;
@@ -456,4 +504,29 @@ unsigned long motion_executor_executed_count(void)
 unsigned long motion_executor_last_activity_ms(void)
 {
     return g_last_activity_ms;
+}
+
+unsigned long motion_executor_late_sample_count(void)
+{
+    return g_late_sample_count;
+}
+
+unsigned long motion_executor_missed_sample_count(void)
+{
+    return g_missed_sample_count;
+}
+
+unsigned long motion_executor_motion_segment_count(void)
+{
+    return g_motion_segment_count;
+}
+
+unsigned long motion_executor_short_segment_count(void)
+{
+    return g_short_segment_count;
+}
+
+unsigned long motion_executor_max_sample_late_us(void)
+{
+    return g_max_sample_late_us;
 }
