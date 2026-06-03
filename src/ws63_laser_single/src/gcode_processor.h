@@ -13,8 +13,8 @@ extern "C" {
 #endif
 
 void gcode_processor_init(void);
+void gcode_processor_set_origin(void);
 bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int max_cmds, int *out_count);
-void gcode_processor_note_executed(double x, double y);
 void gcode_processor_build_emergency_stop(motion_cmd_t *out_cmd);
 unsigned long gcode_processor_get_line_count(void);
 double gcode_processor_get_feed_rate(void);
@@ -27,4 +27,3 @@ bool gcode_processor_is_absolute_mode(void);
 #endif
 
 #endif /* GCODE_PROCESSOR_H */
-

@@ -123,7 +123,7 @@ static void send_periodic_status(void)
 
 static bool handle_dollar_command(const char *line)
 {
-    char buf[128];
+    char buf[160];
 
     if (line[0] != '$') {
         return false;
@@ -226,6 +226,7 @@ static bool handle_dollar_command(const char *line)
                  motion_executor_get_x(), motion_executor_get_y());
         uart_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
+        gcode_processor_set_origin();
         motion_executor_set_origin();
         send_ok();
     } else if (strcmp(line, "$C") == 0) {
@@ -286,6 +287,14 @@ static bool handle_realtime_char(uint8_t ch)
     }
 }
 
+static void wait_motion_queue_watermark(void)
+{
+    while (motion_executor_queue_depth() >= MOTION_QUEUE_OK_WATERMARK) {
+        send_periodic_status();
+        osal_msleep(1);
+    }
+}
+
 static void execute_gcode_line(const char *line, int len)
 {
     motion_cmd_t cmds[4];
@@ -296,6 +305,9 @@ static void execute_gcode_line(const char *line, int len)
             if (!enqueue_motion_cmd(&cmds[i])) {
                 return;
             }
+        }
+        if (cmd_count > 0) {
+            wait_motion_queue_watermark();
         }
     }
 

@@ -5,7 +5,6 @@
 #include "motion_executor.h"
 #include "config.h"
 #include "dac8562.h"
-#include "gcode_processor.h"
 #include "laser_ctrl.h"
 #include "soc_osal.h"
 #include "systick.h"
@@ -25,10 +24,10 @@ static volatile uint16_t g_queue_tail = 0;
 static osal_mutex g_queue_mutex;
 static osal_semaphore g_queue_sem;
 static bool g_queue_ready = false;
-static bool g_worker_started = false;
+static volatile bool g_worker_started = false;
 static bool g_output_armed = false;
-static unsigned long g_enqueued_count = 0;
-static unsigned long g_executed_count = 0;
+static volatile unsigned long g_enqueued_count = 0;
+static volatile unsigned long g_executed_count = 0;
 static uint64_t g_last_wdt_kick_us = 0;
 
 static inline double clamp_axis(double value, double min_value, double max_value)
@@ -129,7 +128,6 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         g_current_x = target_x;
         g_current_y = target_y;
         write_current_position();
-        gcode_processor_note_executed(g_current_x, g_current_y);
         update_activity();
         kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
@@ -159,15 +157,15 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
             break;
         }
 
-        g_current_x = start_x + step_dx * i;
-        g_current_y = start_y + step_dy * i;
-        write_current_position();
-        kick_watchdog_periodic(uapi_tcxo_get_us(), false);
-
         next_step_us += step_time_us;
         if (!delay_until_us_interruptible(next_step_us)) {
             break;
         }
+
+        g_current_x = start_x + step_dx * i;
+        g_current_y = start_y + step_dy * i;
+        write_current_position();
+        kick_watchdog_periodic(uapi_tcxo_get_us(), false);
         if ((i % 200) == 0) {
             update_activity();
             osal_yield();
@@ -180,7 +178,6 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         write_current_position();
     }
 
-    gcode_processor_note_executed(g_current_x, g_current_y);
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     g_abort_requested = false;
@@ -236,6 +233,11 @@ static uint16_t motion_queue_used_locked(void)
         return (uint16_t)(g_queue_head - g_queue_tail);
     }
     return (uint16_t)(MOTION_QUEUE_SIZE - g_queue_tail + g_queue_head);
+}
+
+static bool cmd_uses_laser(const motion_cmd_t *cmd)
+{
+    return cmd != NULL && cmd->cmd == CMD_G1_MOVE && ((cmd->flags & FLAG_LASER_ON) != 0) && cmd->laser_pwr > 0;
 }
 
 bool motion_executor_enqueue(const motion_cmd_t *cmd)
@@ -329,19 +331,25 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             break;
         case CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
-            bool laser_on = ((cmd->flags & FLAG_LASER_ON) != 0) && cmd->laser_pwr > 0;
+            bool laser_on = cmd_uses_laser(cmd);
             arm_output_if_needed();
             if (laser_on && feed_rate > MARKING_FEED_RATE_MAX) {
                 feed_rate = MARKING_FEED_RATE_MAX;
             }
             if (laser_on) {
-                laser_set_power(cmd->laser_pwr);
-                laser_enable(true);
+                if (!laser_is_enabled() || laser_get_power() != cmd->laser_pwr) {
+                    laser_set_power(cmd->laser_pwr);
+                }
+                if (!laser_is_enabled()) {
+                    laser_enable(true);
+                }
             } else {
                 laser_enable(false);
             }
             perform_move(cmd->target_x, cmd->target_y, feed_rate);
-            laser_enable(false);
+            if (!laser_on) {
+                laser_enable(false);
+            }
             break;
         }
         case CMD_LASER_ON:
@@ -351,10 +359,12 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             break;
         case CMD_LASER_OFF:
             laser_enable(false);
+            laser_set_power(0);
             update_activity();
             break;
         case CMD_SET_ORIGIN:
             laser_enable(false);
+            laser_set_power(0);
             motion_executor_set_origin();
             break;
         case CMD_EMERGENCY_STOP:
@@ -377,7 +387,6 @@ void motion_executor_set_origin(void)
     g_current_y = 0.0;
     g_abort_requested = false;
     write_current_position();
-    gcode_processor_note_executed(g_current_x, g_current_y);
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }

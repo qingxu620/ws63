@@ -5,16 +5,19 @@
 #include "gcode_processor.h"
 #include "config.h"
 #include "gcode_parser.h"
+#include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 
 static double g_feed_rate = DEFAULT_FEED_RATE;
 static double g_laser_power = 0.0;
 static bool g_laser_enabled = false;
 static bool g_absolute_mode = true;
+static int g_motion_mode = 0;
 static uint16_t g_seq = 1;
 static unsigned long g_line_counter = 0;
-static double g_report_x = 0.0;
-static double g_report_y = 0.0;
+static double g_plan_x = 0.0;
+static double g_plan_y = 0.0;
 
 static void fill_cmd_header(motion_cmd_t *cmd, uint8_t type)
 {
@@ -29,16 +32,35 @@ static void fill_cmd_header(motion_cmd_t *cmd, uint8_t type)
     }
 }
 
+static bool append_laser_off(motion_cmd_t *out_cmds, int max_cmds, int *count)
+{
+    if (out_cmds == NULL || count == NULL || *count >= max_cmds) {
+        return false;
+    }
+
+    fill_cmd_header(&out_cmds[*count], CMD_LASER_OFF);
+    out_cmds[*count].flags = 0;
+    out_cmds[*count].laser_pwr = 0;
+    (*count)++;
+    return true;
+}
+
 void gcode_processor_init(void)
 {
     g_feed_rate = DEFAULT_FEED_RATE;
     g_laser_power = 0.0;
     g_laser_enabled = false;
     g_absolute_mode = true;
+    g_motion_mode = 0;
     g_seq = 1;
     g_line_counter = 0;
-    g_report_x = 0.0;
-    g_report_y = 0.0;
+    gcode_processor_set_origin();
+}
+
+void gcode_processor_set_origin(void)
+{
+    g_plan_x = 0.0;
+    g_plan_y = 0.0;
 }
 
 void gcode_processor_build_emergency_stop(motion_cmd_t *out_cmd)
@@ -52,10 +74,17 @@ void gcode_processor_build_emergency_stop(motion_cmd_t *out_cmd)
     g_laser_power = 0.0;
 }
 
+static bool is_word_start(const gcode_line_t *gc, int pos, char letter)
+{
+    return gc->line[pos] == letter && (pos == 0 || !isalpha((unsigned char)gc->line[pos - 1]));
+}
+
 bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int max_cmds, int *out_count)
 {
     gcode_line_t gc;
     int count = 0;
+    bool suppress_modal_motion = false;
+    bool laser_off_requested = false;
 
     if (out_count == NULL || out_cmds == NULL || max_cmds <= 0) {
         return false;
@@ -86,58 +115,67 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
             s = LASER_S_MAX;
         }
         g_laser_power = s;
+        if (s <= 0.0) {
+            laser_off_requested = true;
+        }
     }
 
     if (gcode_has_word(&gc, 'M')) {
         int m_val = (int)gcode_get_value(&gc, 'M');
         if (m_val == 3 || m_val == 4) {
             g_laser_enabled = true;
-        } else if (m_val == 5 && count < max_cmds) {
+        } else if (m_val == 5) {
             g_laser_enabled = false;
-            fill_cmd_header(&out_cmds[count], CMD_LASER_OFF);
-            count++;
+            laser_off_requested = true;
         }
     }
 
-    if (gcode_has_word(&gc, 'G')) {
-        int g_val = (int)gcode_get_value(&gc, 'G');
+    if (laser_off_requested && !append_laser_off(out_cmds, max_cmds, &count)) {
+        *out_count = count;
+        return count > 0;
+    }
 
+    for (int i = 0; i < gc.len; i++) {
+        if (!is_word_start(&gc, i, 'G')) {
+            continue;
+        }
+
+        int g_val = (int)strtod(&gc.line[i + 1], NULL);
         if (g_val == 90) {
             g_absolute_mode = true;
         } else if (g_val == 91) {
             g_absolute_mode = false;
+        } else if (g_val == 0 || g_val == 1 || g_val == 2 || g_val == 3) {
+            g_motion_mode = g_val;
         } else if ((g_val == 28 || g_val == 92) && count < max_cmds) {
             fill_cmd_header(&out_cmds[count], CMD_SET_ORIGIN);
             count++;
-            g_report_x = 0.0;
-            g_report_y = 0.0;
-        } else if ((g_val == 0 || g_val == 1 || g_val == 2 || g_val == 3) && count < max_cmds) {
-            double target_x = g_report_x;
-            double target_y = g_report_y;
-            bool has_move = false;
-
-            if (gcode_has_word(&gc, 'X')) {
-                double x = gcode_get_value(&gc, 'X');
-                target_x = g_absolute_mode ? x : (g_report_x + x);
-                has_move = true;
-            }
-            if (gcode_has_word(&gc, 'Y')) {
-                double y = gcode_get_value(&gc, 'Y');
-                target_y = g_absolute_mode ? y : (g_report_y + y);
-                has_move = true;
-            }
-
-            if (has_move) {
-                fill_cmd_header(&out_cmds[count], (g_val == 0) ? CMD_G0_MOVE : CMD_G1_MOVE);
-                out_cmds[count].target_x = (float)target_x;
-                out_cmds[count].target_y = (float)target_y;
-                out_cmds[count].feed_rate = (g_val == 0) ? (float)G0_FEED_RATE : (float)g_feed_rate;
-                out_cmds[count].laser_pwr = (uint16_t)g_laser_power;
-                count++;
-                g_report_x = target_x;
-                g_report_y = target_y;
-            }
+            gcode_processor_set_origin();
+            suppress_modal_motion = true;
         }
+    }
+
+    if (!suppress_modal_motion && (gcode_has_word(&gc, 'X') || gcode_has_word(&gc, 'Y')) && count < max_cmds) {
+        double target_x = g_plan_x;
+        double target_y = g_plan_y;
+
+        if (gcode_has_word(&gc, 'X')) {
+            double x = gcode_get_value(&gc, 'X');
+            target_x = g_absolute_mode ? x : (g_plan_x + x);
+        }
+        if (gcode_has_word(&gc, 'Y')) {
+            double y = gcode_get_value(&gc, 'Y');
+            target_y = g_absolute_mode ? y : (g_plan_y + y);
+        }
+
+        fill_cmd_header(&out_cmds[count], (g_motion_mode == 0) ? CMD_G0_MOVE : CMD_G1_MOVE);
+        out_cmds[count].target_x = (float)target_x;
+        out_cmds[count].target_y = (float)target_y;
+        out_cmds[count].feed_rate = (g_motion_mode == 0) ? (float)G0_FEED_RATE : (float)g_feed_rate;
+        out_cmds[count].laser_pwr = (uint16_t)g_laser_power;
+        count++;
+        g_plan_x = target_x;
+        g_plan_y = target_y;
     }
 
     *out_count = count;
@@ -145,12 +183,6 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
         g_line_counter++;
     }
     return count > 0;
-}
-
-void gcode_processor_note_executed(double x, double y)
-{
-    g_report_x = x;
-    g_report_y = y;
 }
 
 unsigned long gcode_processor_get_line_count(void)
