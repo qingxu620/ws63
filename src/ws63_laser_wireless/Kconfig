@@ -1,0 +1,39 @@
+#===============================================================================
+# @brief WS63 wireless laser marker Kconfig
+#===============================================================================
+
+menu "WS63 Wireless Laser Marker Configuration (隔离版无线打标配置)"
+    depends on ENABLE_LASER_WIRELESS_SAMPLE
+
+comment "Current role: RECEIVER / 接收板（连接振镜、激光、DAC/PWM）"
+    depends on LASER_WIRELESS_RECEIVER
+
+comment "Current role: TRANSMITTER / 发射板（连接LaserGRBL串口，负责星闪转发）"
+    depends on LASER_WIRELESS_TRANSMITTER
+
+comment "Fixed pins: UART1 GPIO15/16, SPI0 GPIO7/9/10, PWM2 GPIO2（固定接线）"
+
+config LASER_WIRELESS_UART_BAUD
+    int
+    prompt "LaserGRBL debug UART baud rate (LaserGRBL调试串口波特率)"
+    range 9600 1000000
+    default 115200
+
+config LASER_WIRELESS_WORK_AREA_X_MM
+    int
+    prompt "Work area X size in mm (X轴工作幅面mm)"
+    range 1 300
+    default 70
+
+config LASER_WIRELESS_WORK_AREA_Y_MM
+    int
+    prompt "Work area Y size in mm (Y轴工作幅面mm)"
+    range 1 300
+    default 70
+
+config LASER_WIRELESS_STATUS_PERIODIC
+    bool
+    prompt "Send periodic Grbl status reports on debug UART (调试串口周期输出Grbl状态)"
+    default n
+
+endmenu

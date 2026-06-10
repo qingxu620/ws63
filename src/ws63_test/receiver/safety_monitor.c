@@ -113,9 +113,8 @@ int task_safety_entry(void *arg)
                         "rx_after_connect=%u Laser OFF\r\n",
                         elapsed_ms, timeout_ms, g_timeout_confirm_count, motion_active ? 1U : 0U,
                         g_sle_rx_after_connect ? 1U : 0U);
-                    laser_enable(false);
-                    laser_set_power(0);
                     cmd_queue_flush();
+                    laser_force_off();
                     g_sle_timeout_handled = true;
                 }
             } else {
@@ -136,8 +135,7 @@ void safety_monitor_init(void)
     uint32_t now = safety_now_ms();
 
     /* 确保激光默认关闭 */
-    laser_enable(false);
-    laser_set_power(0);
+    laser_force_off();
     g_sle_connected = false;
     g_sle_timeout_handled = false;
     g_last_sle_time = now;

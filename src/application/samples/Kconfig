@@ -101,5 +101,45 @@ if ENABLE_LASER_SINGLE_SAMPLE
 source "ws63_laser_single/Kconfig"
 endif
 
+config ENABLE_LASER_WIRELESS_SAMPLE
+    bool
+    prompt "Enable the Sample of WS63 Wireless Laser Marker (隔离版无线激光振镜打标机)."
+    default n
+    depends on SAMPLE_ENABLE
+    help
+        This option enables the isolated wireless laser marker development tree.
+        It is separate from the stable single-board sample.
+
+if ENABLE_LASER_WIRELESS_SAMPLE
+choice
+    prompt "WS63 Wireless board role (无线板卡角色，决定本次编译哪块板)"
+    default LASER_WIRELESS_RECEIVER
+
+config LASER_WIRELESS_RECEIVER
+    bool "Build RECEIVER board firmware (接收板：连接振镜/激光，执行打标)"
+    select SPI_SUPPORT_MASTER
+    help
+        Build the receiver-side firmware. The receiver connects to the galvo,
+        DAC/SPI and laser PWM output, receives SLE packets from the transmitter,
+        and executes motion/laser commands.
+
+config LASER_WIRELESS_TRANSMITTER
+    bool "Build TRANSMITTER board firmware (发射板：连接LaserGRBL，转发指令)"
+    help
+        Build the transmitter-side firmware. The transmitter connects to
+        LaserGRBL over UART, parses G-code, and forwards motion packets to the
+        receiver over SLE.
+
+endchoice
+
+comment "CURRENT BUILD TARGET: RECEIVER / 接收板固件（烧录到接振镜和激光的板子）"
+    depends on LASER_WIRELESS_RECEIVER
+
+comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件（烧录到连接LaserGRBL的板子）"
+    depends on LASER_WIRELESS_TRANSMITTER
+
+source "ws63_laser_wireless/Kconfig"
+endif
+
 # 注册你的 User 配置菜单
 source "application/samples/User/Kconfig"

@@ -21,11 +21,12 @@
 #define BEILV_X ((double)DAC_MAX / GALVO_WORK_AREA_X_MM)
 #define BEILV_Y ((double)DAC_MAX / GALVO_WORK_AREA_Y_MM)
 #define BEILV BEILV_X /* 兼容历史单比例宏 */
-#define STEP_NUM 0.1  /* 插补最小距离 (mm) */
+#define STEP_NUM 0.05 /* 插补最小距离 (mm) */
 
 /* ================= 速度配置 ================= */
 #define DEFAULT_FEED_RATE 10000.0 /* 默认进给速度 mm/min */
 #define G0_FEED_RATE 100000.0     /* G0 空走速度 mm/min */
+#define MARKING_FEED_RATE_MAX 8000.0
 #define LASER_S_MAX 1000.0        /* 激光功率最大值 */
 
 /* ================= 通信配置 ================= */
@@ -169,6 +170,7 @@
 #define LASER_PWM_GROUP_ID 0 /* PWM 分组 ID */
 #define LASER_PWM_PIN 2      /* GPIO2  — Pin 24 — PWM2     */
 #define LASER_PWM_PIN_MODE 1 /* PIN_MODE_1 = 复用信号1 (PWM) */
+#define LASER_PWM_FREQ_HZ 5000U
 
 /* --- 发射板: UART1 (上位机) --- */
 #define LASER_UART_BUS 1 /* UART1 */
@@ -261,7 +263,7 @@
 #define SAFETY_NODE_POLL_INTERVAL_MS 1000
 
 /* ================= 任务配置 ================= */
-#define TASK_STACK_SIZE_DEFAULT 0x1000
+#define TASK_STACK_SIZE_DEFAULT 0x4000
 #define TASK_STACK_SIZE_SLE 0x2000
 #define TASK_STACK_SIZE_WIFI 0x2000
 #define TASK_PRIO_INTERPOLATOR 2 /* OSAL_TASK_PRIORITY_ABOVE_HIGH */
@@ -295,5 +297,9 @@
 
 /* ================= 插补引擎配置 ================= */
 #define INTERP_UNLOCK_INTERVAL 200 /* 每 N 步解锁一次调度 */
+#define MOTION_WDT_KICK_INTERVAL_US 100000U
+#define MOTION_SAMPLE_PERIOD_US 1000U
+#define MOTION_MIN_MARK_SEGMENT_US 1000U
+#define MOTION_LATE_WARN_US 100U
 
 #endif /* LASER_CONFIG_H */

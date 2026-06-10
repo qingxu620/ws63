@@ -34,6 +34,7 @@ extern "C" {
  * @return ERRCODE_SUCC 成功
  */
 errcode_t dac8562_init(void);
+void dac8562_recover(void);
 
 /**
  * @brief  向 DAC 写入一个命令+数据
