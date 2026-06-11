@@ -1,0 +1,96 @@
+/**
+ * @file config.h
+ * @brief Configuration for WS63 SLE laser receiver.
+ */
+#ifndef SLE_LASER_RX_CONFIG_H
+#define SLE_LASER_RX_CONFIG_H
+
+#define DAC_MAX 65535U
+
+/* Work area */
+#if defined(CONFIG_SLE_LASER_WORK_AREA_X_MM)
+#define GALVO_WORK_AREA_X_MM ((double)CONFIG_SLE_LASER_WORK_AREA_X_MM)
+#else
+#define GALVO_WORK_AREA_X_MM 70.0
+#endif
+
+#if defined(CONFIG_SLE_LASER_WORK_AREA_Y_MM)
+#define GALVO_WORK_AREA_Y_MM ((double)CONFIG_SLE_LASER_WORK_AREA_Y_MM)
+#else
+#define GALVO_WORK_AREA_Y_MM 70.0
+#endif
+
+#define GALVO_X_MIN_MM 0.0
+#define GALVO_X_MAX_MM (GALVO_WORK_AREA_X_MM)
+#define GALVO_Y_MIN_MM 0.0
+#define GALVO_Y_MAX_MM (GALVO_WORK_AREA_Y_MM)
+
+#define BEILV_X ((double)DAC_MAX / GALVO_WORK_AREA_X_MM)
+#define BEILV_Y ((double)DAC_MAX / GALVO_WORK_AREA_Y_MM)
+#define STEP_NUM 0.05
+
+/* Motion parameters */
+#define DEFAULT_FEED_RATE 10000.0
+#define G0_FEED_RATE 100000.0
+#define MARKING_FEED_RATE_MAX 8000.0
+#define FRAME_FEED_RATE 500.0
+#define FRAME_LASER_POWER 200
+#define LASER_S_MAX 1000.0
+
+/* UART config for debug output */
+#if defined(CONFIG_SLE_LASER_UART_BAUD)
+#define UART_BAUD_RATE CONFIG_SLE_LASER_UART_BAUD
+#else
+#define UART_BAUD_RATE 115200
+#endif
+
+#if defined(CONFIG_SLE_LASER_UART_BUS)
+#define LASER_UART_BUS CONFIG_SLE_LASER_UART_BUS
+#else
+#define LASER_UART_BUS 1
+#endif
+
+#if defined(CONFIG_SLE_LASER_UART_TX_PIN)
+#define LASER_UART_TX_PIN CONFIG_SLE_LASER_UART_TX_PIN
+#else
+#define LASER_UART_TX_PIN 15
+#endif
+
+#if defined(CONFIG_SLE_LASER_UART_RX_PIN)
+#define LASER_UART_RX_PIN CONFIG_SLE_LASER_UART_RX_PIN
+#else
+#define LASER_UART_RX_PIN 16
+#endif
+
+#define LASER_UART_PIN_MODE 1
+
+/* Status */
+#define STATUS_INTERVAL_MS 200
+#define ACTIVITY_TIMEOUT_MS 200
+
+/* SPI DAC */
+#define DAC_SPI_BUS 0
+#define DAC_SPI_CLK_PIN 7
+#define DAC_SPI_MOSI_PIN 9
+#define DAC_CS_PIN 10
+#define DAC_SPI_PIN_MODE 3
+
+/* PWM laser */
+#define LASER_PWM_CHANNEL 2
+#define LASER_PWM_GROUP_ID 0
+#define LASER_PWM_PIN 2
+#define LASER_PWM_PIN_MODE 1
+#define LASER_PWM_FREQ_HZ 5000U
+
+/* Task */
+#define TASK_STACK_SIZE_DEFAULT 0x4000
+#define TASK_PRIO_UART 3
+#define TASK_PRIO_MOTION 4
+#define MOTION_QUEUE_SIZE 512
+#define MOTION_QUEUE_OK_WATERMARK 16
+#define MOTION_WDT_KICK_INTERVAL_US 100000U
+#define MOTION_SAMPLE_PERIOD_US 1000U
+#define MOTION_MIN_MARK_SEGMENT_US 1000U
+#define MOTION_END_DRAIN_TIMEOUT_MS 120000U
+
+#endif /* SLE_LASER_RX_CONFIG_H */

@@ -64,6 +64,8 @@ static osal_semaphore g_safety_sem;
 static bool g_safety_sem_ready = false;
 static volatile bool g_safety_off_pending = false;
 static volatile uint16_t g_safety_off_seq = 0;
+static volatile bool g_pending_ack = false;
+static volatile status_pkt_t g_pending_ack_pkt;
 
 static uint8_t sle_uuid_base[] = {0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
                                   0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -121,9 +123,8 @@ static int safety_off_task(void *arg)
     osal_printk("[wireless rx] safety task started\r\n");
 
     while (1) {
-        if (osal_sem_down(&g_safety_sem) != OSAL_SUCCESS) {
-            osal_msleep(1);
-            continue;
+        sle_laser_server_flush_pending_ack();
+        if (osal_sem_down_timeout(&g_safety_sem, 500U) != OSAL_SUCCESS) {
         }
 
         uint16_t seq = 0;
@@ -198,12 +199,27 @@ static void sle_send_ack_pkt(uint8_t status, uint8_t error_code, uint16_t ack_se
     pkt.queue_free = wireless_queue_free_count();
     status_pkt_set_crc(&pkt);
 
+    unsigned int irq_state = osal_irq_lock();
+    g_pending_ack_pkt = pkt;
+    g_pending_ack = true;
+    osal_irq_restore(irq_state);
+}
+
+void sle_laser_server_flush_pending_ack(void)
+{
+    if (!g_pending_ack) {
+        return;
+    }
+
+    status_pkt_t pkt;
+    unsigned int irq_state = osal_irq_lock();
+    g_pending_ack = false;
+    pkt = g_pending_ack_pkt;
+    osal_irq_restore(irq_state);
+
     errcode_t ret = sle_laser_server_send_status((const uint8_t *)&pkt, sizeof(pkt));
     if (ret != ERRCODE_SLE_SUCCESS) {
-        osal_printk("[wireless rx] send ack fail: 0x%x\r\n", ret);
-    } else if (ack_seq <= 16U || ((ack_seq % 64U) == 0U)) {
-        osal_printk("[wireless rx] ack tx seq=%u status=%u err=%u qfree=%u\r\n", ack_seq, status, error_code,
-                    pkt.queue_free);
+        osal_printk("[wireless rx] flush ack fail: 0x%x\r\n", ret);
     }
 }
 
@@ -338,6 +354,10 @@ static void ssaps_write_request_cbk(uint8_t server_id,
             ((now - g_last_status_report_ms) >= SLE_LASER_STATUS_REPORT_INTERVAL_MS)) {
             sle_send_full_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
         }
+        if (g_safety_off_pending) {
+            signal_safety_off();
+        }
+        sle_laser_server_flush_pending_ack();
         return;
     }
 
@@ -370,7 +390,6 @@ static void ssaps_write_request_cbk(uint8_t server_id,
         g_last_accepted_seq = cmd.seq;
         g_business_rx_count++;
         sle_send_ack_pkt(STATUS_IDLE, STATUS_ERR_NONE, g_last_accepted_seq);
-        signal_safety_off();
         return;
     }
 
@@ -392,7 +411,6 @@ static void ssaps_write_request_cbk(uint8_t server_id,
                     wireless_queue_free_count());
     }
     sle_send_ack_pkt(STATUS_RUNNING, STATUS_ERR_NONE, g_last_accepted_seq);
-    motion_executor_signal_worker();
 }
 
 static void ssaps_mtu_changed_cbk(uint8_t server_id, uint16_t conn_id, ssap_exchange_info_t *mtu_size, errcode_t status)

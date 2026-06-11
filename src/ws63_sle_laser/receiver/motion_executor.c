@@ -6,7 +6,6 @@
 #include "config.h"
 #include "dac8562.h"
 #include "laser_ctrl.h"
-#include "sle_server.h"
 #include "soc_osal.h"
 #include "systick.h"
 #include "tcxo.h"
@@ -213,9 +212,6 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         write_current_position();
 
         kick_watchdog_periodic(now_us, false);
-        if ((i % 8) == 0) {
-            osal_yield();
-        }
         if ((i % 200) == 0) {
             update_activity();
         }
@@ -266,7 +262,9 @@ static bool motion_queue_pop(motion_cmd_t *cmd)
     if (!g_queue_ready || !g_worker_started || cmd == NULL) {
         return false;
     }
-    (void)osal_sem_down_timeout(&g_queue_sem, 10U);
+    if (osal_sem_down(&g_queue_sem) != OSAL_SUCCESS) {
+        return false;
+    }
 
     osal_mutex_lock(&g_queue_mutex);
     if (g_queue_head == g_queue_tail) {
@@ -294,7 +292,7 @@ static bool cmd_uses_laser(const motion_cmd_t *cmd)
     return cmd != NULL && cmd->cmd == CMD_G1_MOVE && ((cmd->flags & FLAG_LASER_ON) != 0) && cmd->laser_pwr > 0;
 }
 
-static bool motion_executor_enqueue_internal(const motion_cmd_t *cmd, bool signal_worker)
+bool motion_executor_enqueue(const motion_cmd_t *cmd)
 {
     if (!g_queue_ready || !g_worker_started || cmd == NULL) {
         return false;
@@ -308,9 +306,7 @@ static bool motion_executor_enqueue_internal(const motion_cmd_t *cmd, bool signa
             g_queue_head = next;
             g_enqueued_count++;
             osal_mutex_unlock(&g_queue_mutex);
-            if (signal_worker) {
-                osal_sem_up(&g_queue_sem);
-            }
+            osal_sem_up(&g_queue_sem);
             return true;
         }
         osal_mutex_unlock(&g_queue_mutex);
@@ -318,23 +314,6 @@ static bool motion_executor_enqueue_internal(const motion_cmd_t *cmd, bool signa
     }
 
     return false;
-}
-
-bool motion_executor_enqueue(const motion_cmd_t *cmd)
-{
-    return motion_executor_enqueue_internal(cmd, true);
-}
-
-bool motion_executor_enqueue_deferred(const motion_cmd_t *cmd)
-{
-    return motion_executor_enqueue_internal(cmd, false);
-}
-
-void motion_executor_signal_worker(void)
-{
-    if (g_queue_ready) {
-        osal_sem_up(&g_queue_sem);
-    }
 }
 
 void motion_executor_flush(void)
@@ -349,7 +328,6 @@ void motion_executor_flush(void)
     while (osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
     }
     osal_mutex_unlock(&g_queue_mutex);
-    g_abort_requested = false;
     laser_force_off();
 }
 
@@ -359,10 +337,11 @@ static int motion_executor_task(void *arg)
 
     motion_cmd_t cmd;
     while (1) {
-        sle_laser_server_flush_pending_ack();
         if (motion_queue_pop(&cmd)) {
             motion_executor_execute(&cmd);
             g_command_active = false;
+        } else {
+            osal_msleep(1);
         }
     }
 
@@ -512,11 +491,6 @@ uint16_t motion_executor_queue_depth(void)
 bool motion_executor_worker_started(void)
 {
     return g_worker_started;
-}
-
-bool motion_executor_queue_ready(void)
-{
-    return g_queue_ready;
 }
 
 bool motion_executor_abort_requested(void)

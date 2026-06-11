@@ -187,27 +187,28 @@ static bool tx_queue_pop(motion_cmd_t *cmd)
     return true;
 }
 
-static bool tx_queue_try_pop(motion_cmd_t *cmd)
+static void tx_queue_push_front(const motion_cmd_t *cmd)
 {
     if (cmd == NULL || !g_tx_queue_ready) {
-        return false;
-    }
-    if (osal_sem_down_timeout(&g_tx_queue_sem, 0) != OSAL_SUCCESS) {
-        return false;
+        return;
     }
 
     osal_mutex_lock(&g_tx_queue_mutex);
-    if (g_tx_queue_depth == 0U) {
+    if (g_tx_queue_depth >= TX_OUTBOUND_QUEUE_SIZE) {
+        g_tx_queue_drop_count++;
         osal_mutex_unlock(&g_tx_queue_mutex);
-        return false;
+        return;
     }
 
-    *cmd = g_tx_queue[g_tx_queue_head];
-    g_tx_queue_head = (uint16_t)((g_tx_queue_head + 1U) % TX_OUTBOUND_QUEUE_SIZE);
-    g_tx_queue_depth--;
-    g_tx_queue_deq_count++;
+    if (g_tx_queue_head == 0U) {
+        g_tx_queue_head = TX_OUTBOUND_QUEUE_SIZE - 1U;
+    } else {
+        g_tx_queue_head--;
+    }
+    g_tx_queue[g_tx_queue_head] = *cmd;
+    g_tx_queue_depth++;
     osal_mutex_unlock(&g_tx_queue_mutex);
-    return true;
+    osal_sem_up(&g_tx_queue_sem);
 }
 
 static void tx_queue_flush(void)
@@ -260,26 +261,6 @@ static bool send_cmd_with_retry(const motion_cmd_t *cmd)
     return false;
 }
 
-static bool wait_cmd_remote_ack(uint16_t seq)
-{
-    uint32_t start_ms = (uint32_t)uapi_systick_get_ms();
-    bool ok = sle_laser_client_wait_ack(seq, CMD_ACK_TIMEOUT_MS);
-    uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - start_ms;
-    g_tx_ack_wait_last_ms = elapsed;
-    if (elapsed > g_tx_ack_wait_max_ms) {
-        g_tx_ack_wait_max_ms = elapsed;
-    }
-    if (ok) {
-        return true;
-    }
-
-    osal_printk("[wireless tx uart] remote ack timeout seq=%u app_ack=%u waited=%u\r\n", seq,
-                sle_laser_client_get_last_ack_seq(), elapsed);
-    uart_log_link_state("ack_timeout");
-    g_tx_sender_ack_timeout_count++;
-    return false;
-}
-
 static bool submit_business_cmd(const motion_cmd_t *cmd)
 {
     if (!send_cmd_with_retry(cmd)) {
@@ -291,46 +272,11 @@ static bool submit_business_cmd(const motion_cmd_t *cmd)
 
 static bool send_business_cmd_and_wait_ack(const motion_cmd_t *cmd)
 {
-    for (uint32_t attempt = 0; attempt <= CMD_RETRY_MAX; attempt++) {
-        if (attempt > 0U) {
-            g_tx_sender_retry_count++;
-            g_tx_sender_state = TX_SENDER_RETRY;
-        }
-        if (!submit_business_cmd(cmd)) {
-            return false;
-        }
-        g_tx_sender_state = TX_SENDER_WAIT_ACK;
-        if (wait_cmd_remote_ack(cmd->seq)) {
-            g_tx_sender_ack_count++;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool send_urgent_cmd_and_wait_ack(const motion_cmd_t *cmd)
-{
-    if (cmd == NULL) {
+    g_tx_sender_state = TX_SENDER_WAIT_ACK;
+    if (!submit_business_cmd(cmd)) {
         return false;
     }
-
-    for (uint32_t attempt = 0; attempt <= CMD_RETRY_MAX; attempt++) {
-        if (attempt > 0U) {
-            g_tx_sender_retry_count++;
-            g_tx_sender_state = TX_SENDER_RETRY;
-        }
-
-        if (!submit_business_cmd(cmd)) {
-            return false;
-        }
-
-        g_tx_sender_state = TX_SENDER_WAIT_ACK;
-        if (wait_cmd_remote_ack(cmd->seq)) {
-            g_tx_sender_ack_count++;
-            return true;
-        }
-    }
-    return false;
+    return true;
 }
 
 static void handle_estop(void)
@@ -342,11 +288,6 @@ static void handle_estop(void)
         uart_send_str("error:estop_failed\r\n");
         return;
     }
-    if (!wait_cmd_remote_ack(cmd.seq)) {
-        uart_send_str("error:estop_ack_failed\r\n");
-        return;
-    }
-    g_tx_sender_ack_count++;
     uart_send_str("ok\r\n");
 }
 
@@ -417,9 +358,7 @@ static void process_line(const char *line, int len)
         if (has_critical) {
             tx_queue_flush();
             for (int i = 0; i < cmd_count; i++) {
-                bool sent_ok = (cmds[i].cmd == CMD_LASER_OFF) ? send_urgent_cmd_and_wait_ack(&cmds[i])
-                                                              : send_business_cmd_and_wait_ack(&cmds[i]);
-                if (!sent_ok) {
+                if (!send_business_cmd_and_wait_ack(&cmds[i])) {
                     uart_send_str("error:send_failed\r\n");
                     return;
                 }
@@ -443,7 +382,6 @@ int task_tx_sender_entry(void *arg)
     osal_printk("[wireless tx sender] task started\r\n");
 
     motion_cmd_t cmd;
-    motion_cmd_t batch_cmd;
     while (1) {
         g_tx_sender_state = TX_SENDER_IDLE;
         g_tx_sender_inflight = 0;
@@ -465,57 +403,12 @@ int task_tx_sender_entry(void *arg)
         }
 
         g_tx_sender_state = TX_SENDER_SEND;
-        g_tx_sender_inflight = 0;
-        g_tx_sender_inflight_base_seq = cmd.seq;
-        uint16_t last_seq = cmd.seq;
-
         if (!submit_business_cmd(&cmd)) {
             g_tx_sender_state = TX_SENDER_FAIL;
-            osal_printk("[wireless tx sender] send failed seq=%u cmd=0x%x\r\n", cmd.seq, cmd.cmd);
+            osal_printk("[wireless tx sender] send failed seq=%u cmd=0x%x; re-enqueue\r\n", cmd.seq, cmd.cmd);
+            sle_laser_client_force_clear_pending();
+            tx_queue_push_front(&cmd);
             osal_msleep(50);
-            continue;
-        }
-        g_tx_sender_inflight++;
-
-        while (g_tx_sender_inflight < SLE_TX_BUSINESS_MAX_PENDING) {
-            if (sle_laser_client_has_status_rx() && sle_laser_client_get_queue_free() < FLOW_CTRL_PAUSE_THRESHOLD) {
-                break;
-            }
-            if (!tx_queue_try_pop(&batch_cmd)) {
-                break;
-            }
-            if (!submit_business_cmd(&batch_cmd)) {
-                g_tx_sender_state = TX_SENDER_FAIL;
-                osal_printk("[wireless tx sender] send failed seq=%u cmd=0x%x\r\n", batch_cmd.seq, batch_cmd.cmd);
-                break;
-            }
-            last_seq = batch_cmd.seq;
-            g_tx_sender_inflight++;
-        }
-
-        g_tx_sender_state = TX_SENDER_DRAIN;
-        {
-            bool acked = false;
-            for (uint32_t attempt = 0; attempt <= CMD_RETRY_MAX; attempt++) {
-                if (attempt > 0U) {
-                    g_tx_sender_retry_count++;
-                    g_tx_sender_state = TX_SENDER_RETRY;
-                    sle_laser_client_force_clear_pending();
-                    if (!submit_business_cmd(&cmd)) {
-                        break;
-                    }
-                }
-                if (wait_cmd_remote_ack(last_seq)) {
-                    g_tx_sender_ack_count += g_tx_sender_inflight;
-                    acked = true;
-                    break;
-                }
-            }
-            if (!acked) {
-                osal_printk("[wireless tx sender] batch ack timeout base=%u last=%u inflight=%u remote=%u\r\n",
-                            g_tx_sender_inflight_base_seq, last_seq, g_tx_sender_inflight,
-                            sle_laser_client_get_last_ack_seq());
-            }
         }
     }
     return 0;
@@ -548,7 +441,9 @@ int task_uart_rx_entry(void *arg)
             continue;
         }
         if (ch == '!' || ch == '~') {
-            osal_printk("[wireless tx uart] realtime control 0x%x ignored\r\n", ch);
+            if (ch == '!') {
+                handle_estop();
+            }
             continue;
         }
         if (ch == '\n' || ch == '\r') {

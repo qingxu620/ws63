@@ -1,0 +1,68 @@
+#===============================================================================
+# @brief WS63 SLE Laser Marker Kconfig
+#===============================================================================
+
+menu "WS63 SLE Laser Configuration"
+    depends on ENABLE_SLE_LASER_SAMPLE
+
+choice
+    prompt "SLE Laser board role (板卡角色)"
+    default SLE_LASER_RECEIVER
+
+config SLE_LASER_RECEIVER
+    bool "Build RECEIVER firmware (接收板：连接振镜/激光，执行打标)"
+    select SPI_SUPPORT_MASTER
+    help
+        Build receiver firmware. Receives G-code via SLE and executes
+        laser marking using the same logic as ws63_laser_single.
+
+config SLE_LASER_TRANSMITTER
+    bool "Build TRANSMITTER firmware (发射板：连接LaserGRBL，透传G-code)"
+    help
+        Build transmitter firmware. Receives G-code from UART and
+        forwards it to receiver via SLE. No G-code parsing, just passthrough.
+
+endchoice
+
+comment "CURRENT BUILD TARGET: RECEIVER / 接收板固件"
+    depends on SLE_LASER_RECEIVER
+
+comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件"
+    depends on SLE_LASER_TRANSMITTER
+
+comment "UART configuration"
+config SLE_LASER_UART_BAUD
+    int
+    prompt "UART baud rate"
+    range 9600 1000000
+    default 115200
+
+config SLE_LASER_UART_BUS
+    int
+    prompt "UART bus number"
+    default 1
+
+config SLE_LASER_UART_TX_PIN
+    int
+    prompt "UART TX pin"
+    default 15
+
+config SLE_LASER_UART_RX_PIN
+    int
+    prompt "UART RX pin"
+    default 16
+
+comment "Laser work area"
+config SLE_LASER_WORK_AREA_X_MM
+    int
+    prompt "Work area X size in mm"
+    range 1 300
+    default 70
+
+config SLE_LASER_WORK_AREA_Y_MM
+    int
+    prompt "Work area Y size in mm"
+    range 1 300
+    default 70
+
+endmenu

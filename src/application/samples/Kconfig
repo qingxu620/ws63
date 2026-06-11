@@ -141,5 +141,19 @@ comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件（烧录到连接La
 source "ws63_laser_wireless/Kconfig"
 endif
 
+config ENABLE_SLE_LASER_SAMPLE
+    bool
+    prompt "Enable WS63 SLE Laser Marker (SLE无线激光打标 - 极简透传设计)"
+    default n
+    depends on SAMPLE_ENABLE
+    help
+        This option enables WS63 SLE laser marker with minimal passthrough design.
+        Transmitter: UART->SLE passthrough (no G-code parsing).
+        Receiver: Reuses ws63_laser_single logic with SLE input.
+
+if ENABLE_SLE_LASER_SAMPLE
+source "ws63_sle_laser/Kconfig"
+endif
+
 # 注册你的 User 配置菜单
 source "application/samples/User/Kconfig"

@@ -14,6 +14,7 @@ extern "C" {
 
 errcode_t sle_laser_server_init(void);
 errcode_t sle_laser_server_send_status(const uint8_t *data, uint16_t len);
+void sle_laser_server_flush_pending_ack(void);
 uint16_t sle_laser_server_get_conn_id(void);
 uint32_t sle_laser_server_get_heartbeat_rx_count(void);
 uint32_t sle_laser_server_get_business_rx_count(void);

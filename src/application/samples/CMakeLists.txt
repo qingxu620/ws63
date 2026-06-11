@@ -37,6 +37,8 @@ elseif(DEFINED CONFIG_ENABLE_LASER_WIRELESS_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_wireless ws63_laser_wireless)
 elseif(DEFINED CONFIG_ENABLE_LASER_MARKER_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_test ws63_test)
+elseif(DEFINED CONFIG_ENABLE_SLE_LASER_SAMPLE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_sle_laser ws63_sle_laser)
 endif()
 
 add_subdirectory_if_exist(User)
