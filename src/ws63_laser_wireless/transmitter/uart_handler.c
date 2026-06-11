@@ -105,10 +105,12 @@ static void send_realtime_status(void)
 
 static void uart_log_link_state(const char *reason)
 {
-    osal_printk("[wireless tx uart] %s: conn=%u ready=%u qfree=%u ack=%u pending=%u\r\n", reason,
-                sle_laser_client_is_connected() ? 1U : 0U, sle_laser_client_is_ready() ? 1U : 0U,
+    osal_printk("[wireless tx uart] %s: conn=%u handles=%u srx=%u ready=%u qfree=%u ack=%u pending=%u age=%u\r\n",
+                reason,
+                sle_laser_client_is_connected() ? 1U : 0U, sle_laser_client_has_handles_ready() ? 1U : 0U,
+                sle_laser_client_has_status_rx() ? 1U : 0U, sle_laser_client_is_ready() ? 1U : 0U,
                 sle_laser_client_get_queue_free(), sle_laser_client_get_last_ack_seq(),
-                sle_laser_client_get_pending_writes());
+                sle_laser_client_get_pending_writes(), sle_laser_client_get_status_age_ms());
 }
 
 static bool wait_wireless_ready(uint32_t timeout_ms)
@@ -345,12 +347,12 @@ static void process_line(const char *line, int len)
     char response[1024];
     if (strcmp(line, "$D") == 0) {
         snprintf(response, sizeof(response),
-                 "[MSG:wireless tx conn=%u handles=%u ready=%u srx=%u status=%u qfree=%u ack=%u pending=%u wr=%u ok=%u]\r\n"
+                 "[MSG:wireless tx conn=%u handles=%u ready=%u srx=%u sage=%u status=%u qfree=%u ack=%u pending=%u wr=%u ok=%u]\r\n"
                  "[MSG:fail=%u submit_fail=%u notify=%u txq=%u enq=%u deq=%u sent=%u acked=%u retry=%u drop=%u sender=%u ifl=%u ibase=%u ackms=%u ackmax=%u ackto=%u]\r\n"
                  "[MSG:rt=%u startup=%u reset=%u ready_to=%u]\r\nok\r\n",
                  sle_laser_client_is_connected() ? 1U : 0U, sle_laser_client_has_handles_ready() ? 1U : 0U,
                  sle_laser_client_is_ready() ? 1U : 0U, sle_laser_client_has_status_rx() ? 1U : 0U,
-                 sle_laser_client_get_remote_status(),
+                 sle_laser_client_get_status_age_ms(), sle_laser_client_get_remote_status(),
                  sle_laser_client_get_queue_free(), sle_laser_client_get_last_ack_seq(),
                  sle_laser_client_get_pending_writes(), sle_laser_client_get_write_req_count(),
                  sle_laser_client_get_write_cfm_ok_count(), sle_laser_client_get_write_cfm_fail_count(),
@@ -480,7 +482,6 @@ int task_uart_rx_entry(void *arg)
     osal_printk("[wireless tx uart] task started\r\n");
     osal_msleep(100);
     send_grbl_startup("boot");
-    send_realtime_status();
 
     uint8_t ch;
     while (1) {
@@ -495,7 +496,6 @@ int task_uart_rx_entry(void *arg)
             g_rx_pos = 0;
             tx_queue_flush();
             send_grbl_startup("ctrl-x");
-            send_realtime_status();
             continue;
         }
         if (ch == '?') {

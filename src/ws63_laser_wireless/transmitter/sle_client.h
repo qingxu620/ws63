@@ -37,6 +37,7 @@ uint32_t sle_laser_client_get_write_cfm_ok_count(void);
 uint32_t sle_laser_client_get_write_cfm_fail_count(void);
 uint32_t sle_laser_client_get_write_submit_fail_count(void);
 uint32_t sle_laser_client_get_notify_rx_count(void);
+uint32_t sle_laser_client_get_status_age_ms(void);
 
 #ifdef __cplusplus
 }

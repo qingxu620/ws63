@@ -31,6 +31,9 @@ cmake_install.cmake
 *.dylib
 *.dll
 
+# 允许编译器工具链中的静态库
+!src/tools/bin/compiler/**/*.a
+
 # 链接器脚本生成文件
 *.lds
 *.ld

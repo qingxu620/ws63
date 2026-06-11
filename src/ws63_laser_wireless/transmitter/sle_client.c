@@ -46,6 +46,7 @@ static volatile uint16_t g_last_ack_seq = 0;
 static double g_remote_x = 0.0;
 static double g_remote_y = 0.0;
 static volatile uint32_t g_feedback_seq = 0;
+static volatile uint32_t g_last_status_rx_ms = 0;
 static uint32_t g_last_notify_log_ms = 0;
 static uint32_t g_notify_rx_count = 0;
 static uint32_t g_write_req_count = 0;
@@ -91,6 +92,7 @@ static void reset_link_runtime(void)
     g_remote_status = STATUS_IDLE;
     g_queue_free = 0;
     g_last_ack_seq = 0;
+    g_last_status_rx_ms = 0;
     g_last_notify_log_ms = 0;
     g_notify_rx_count = 0;
     g_write_req_count = 0;
@@ -403,6 +405,7 @@ static void notification_cbk(uint8_t client_id, uint16_t conn_id, ssapc_handle_v
         if (status_pkt_check_crc(&full.base)) {
             bool first = !g_status_rx_seen;
             g_status_rx_seen = true;
+            g_last_status_rx_ms = (uint32_t)uapi_systick_get_ms();
             update_status_from_full(&full);
             g_notify_rx_count++;
             if (first) {
@@ -422,6 +425,7 @@ static void notification_cbk(uint8_t client_id, uint16_t conn_id, ssapc_handle_v
         if (status_pkt_check_crc(&base)) {
             bool first = !g_status_rx_seen;
             g_status_rx_seen = true;
+            g_last_status_rx_ms = (uint32_t)uapi_systick_get_ms();
             update_status_from_base(&base);
             g_notify_rx_count++;
             if (first) {
@@ -567,7 +571,7 @@ bool sle_laser_client_can_send_heartbeat(void)
 
 bool sle_laser_client_is_ready(void)
 {
-    return sle_laser_client_can_send_heartbeat();
+    return sle_laser_client_can_send_heartbeat() && g_status_rx_seen;
 }
 
 bool sle_laser_client_wait_write_idle(uint32_t timeout_ms)
@@ -707,4 +711,13 @@ uint32_t sle_laser_client_get_write_submit_fail_count(void)
 uint32_t sle_laser_client_get_notify_rx_count(void)
 {
     return g_notify_rx_count;
+}
+
+uint32_t sle_laser_client_get_status_age_ms(void)
+{
+    uint32_t last = g_last_status_rx_ms;
+    if (last == 0U) {
+        return 0xFFFFFFFFU;
+    }
+    return (uint32_t)uapi_systick_get_ms() - last;
 }
