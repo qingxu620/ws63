@@ -174,11 +174,25 @@ bool grbl_process_dollar(const char *line, char *response, int resp_size)
                  g_absolute_mode ? 90 : 91, g_laser_enabled ? 3 : 5, (int)g_feed_rate, (int)g_laser_power);
     } else if (strcmp(line, "$$") == 0) {
         snprintf(response, (size_t)resp_size,
-                 "$0=10\r\n$1=25\r\n$10=1\r\n$30=%d\r\n$31=0\r\n$32=1\r\n$100=250.000\r\n$101=250.000\r\nok\r\n",
-                 (int)LASER_S_MAX);
+                 "$0=10\r\n$1=25\r\n$2=0\r\n$3=0\r\n$4=0\r\n$5=0\r\n$6=0\r\n$10=1\r\n$11=0.010\r\n"
+                 "$12=0.002\r\n$13=0\r\n$20=0\r\n$21=0\r\n$22=0\r\n$23=0\r\n$24=25.000\r\n$25=500.000\r\n"
+                 "$26=250\r\n$27=1.000\r\n$30=%d\r\n$31=0\r\n$32=1\r\n$100=250.000\r\n$101=250.000\r\n"
+                 "$102=250.000\r\n$110=8000.000\r\n$111=8000.000\r\n$112=1000.000\r\n$120=1000.000\r\n"
+                 "$121=1000.000\r\n$122=100.000\r\n$130=%d.000\r\n$131=%d.000\r\n$132=0.000\r\nok\r\n",
+                 (int)LASER_S_MAX, (int)GALVO_WORK_AREA_X_MM, (int)GALVO_WORK_AREA_Y_MM);
+    } else if (strcmp(line, "$#") == 0) {
+        snprintf(response, (size_t)resp_size,
+                 "[G54:0.000,0.000,0.000]\r\n[G55:0.000,0.000,0.000]\r\n[G56:0.000,0.000,0.000]\r\n"
+                 "[G57:0.000,0.000,0.000]\r\n[G58:0.000,0.000,0.000]\r\n[G59:0.000,0.000,0.000]\r\n"
+                 "[G28:0.000,0.000,0.000]\r\n[G30:0.000,0.000,0.000]\r\n[G92:0.000,0.000,0.000]\r\n"
+                 "[TLO:0.000]\r\n[PRB:0.000,0.000,0.000:0]\r\nok\r\n");
+    } else if (strcmp(line, "$N") == 0) {
+        snprintf(response, (size_t)resp_size, "$N0=\r\n$N1=\r\nok\r\n");
     } else if (strcmp(line, "$C") == 0) {
         snprintf(response, (size_t)resp_size, "[GC:G0 G54 G17 G21 G90 G94 M5]\r\nok\r\n");
     } else if (strcmp(line, "$X") == 0 || strcmp(line, "$H") == 0) {
+        snprintf(response, (size_t)resp_size, "ok\r\n");
+    } else if (strncmp(line, "$RST=", 5) == 0) {
         snprintf(response, (size_t)resp_size, "ok\r\n");
     } else if (strcmp(line, "$") == 0) {
         snprintf(response, (size_t)resp_size,

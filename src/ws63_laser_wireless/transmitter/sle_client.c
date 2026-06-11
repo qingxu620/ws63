@@ -53,6 +53,10 @@ static uint32_t g_write_cfm_ok_count = 0;
 static uint32_t g_write_cfm_fail_count = 0;
 static uint32_t g_write_submit_fail_count = 0;
 static uint32_t g_business_write_req_count = 0;
+static osal_semaphore g_ack_sem;
+static osal_semaphore g_write_sem;
+static bool g_ack_sem_ready = false;
+static bool g_write_sem_ready = false;
 
 static uint8_t g_target_addr[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
 
@@ -60,6 +64,16 @@ static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
 {
     return (uuid != NULL) && (uuid->len == 2) && (uuid->uuid[14] == (uint8_t)(expect & 0xFF)) &&
            (uuid->uuid[15] == (uint8_t)((expect >> 8) & 0xFF));
+}
+
+static bool seq_reached(uint16_t ack_seq, uint16_t target_seq)
+{
+    return (uint16_t)(ack_seq - target_seq) < 0x8000U;
+}
+
+static bool cmd_requires_write_cfm(const motion_cmd_t *cmd)
+{
+    return cmd != NULL && (cmd->cmd == CMD_LASER_OFF || cmd->cmd == CMD_EMERGENCY_STOP);
 }
 
 static void reset_link_runtime(void)
@@ -329,13 +343,20 @@ static void write_cfm_cbk(uint8_t client_id, uint16_t conn_id, ssapc_write_resul
     if (status != ERRCODE_SLE_SUCCESS) {
         g_write_cfm_fail_count++;
         osal_printk("[wireless tx] write cfm fail: 0x%x\r\n", status);
+        if (g_write_sem_ready) {
+            osal_sem_up(&g_write_sem);
+        }
         return;
     }
     g_write_cfm_ok_count++;
+    if (g_write_sem_ready) {
+        osal_sem_up(&g_write_sem);
+    }
 }
 
 static void update_status_from_full(const status_full_pkt_t *full)
 {
+    uint16_t old_ack = g_last_ack_seq;
     g_feedback_seq++;
     g_remote_status = full->base.status;
     g_queue_free = full->base.queue_free;
@@ -344,15 +365,28 @@ static void update_status_from_full(const status_full_pkt_t *full)
     g_remote_y = (double)full->cur_y;
     g_feedback_seq++;
     gcode_processor_update_feedback_pos(g_remote_x, g_remote_y);
+    if (g_ack_sem_ready && old_ack != g_last_ack_seq) {
+        if (g_last_ack_seq <= 16U || ((g_last_ack_seq % 64U) == 0U)) {
+            osal_printk("[wireless tx] ack notify seq=%u free=%u full\r\n", g_last_ack_seq, g_queue_free);
+        }
+        osal_sem_up(&g_ack_sem);
+    }
 }
 
 static void update_status_from_base(const status_pkt_t *base)
 {
+    uint16_t old_ack = g_last_ack_seq;
     g_feedback_seq++;
     g_remote_status = base->status;
     g_queue_free = base->queue_free;
     g_last_ack_seq = base->ack_seq;
     g_feedback_seq++;
+    if (g_ack_sem_ready && old_ack != g_last_ack_seq) {
+        if (g_last_ack_seq <= 16U || ((g_last_ack_seq % 64U) == 0U)) {
+            osal_printk("[wireless tx] ack notify seq=%u free=%u\r\n", g_last_ack_seq, g_queue_free);
+        }
+        osal_sem_up(&g_ack_sem);
+    }
 }
 
 static void notification_cbk(uint8_t client_id, uint16_t conn_id, ssapc_handle_value_t *data, errcode_t status)
@@ -410,6 +444,20 @@ static void indication_cbk(uint8_t client_id, uint16_t conn_id, ssapc_handle_val
 
 errcode_t sle_laser_client_init(void)
 {
+    if (!g_ack_sem_ready) {
+        if (osal_sem_init(&g_ack_sem, 0) != OSAL_SUCCESS) {
+            osal_printk("[wireless tx] ack sem init failed\r\n");
+            return ERRCODE_FAIL;
+        }
+        g_ack_sem_ready = true;
+    }
+    if (!g_write_sem_ready) {
+        if (osal_sem_init(&g_write_sem, 0) != OSAL_SUCCESS) {
+            osal_printk("[wireless tx] write sem init failed\r\n");
+            return ERRCODE_FAIL;
+        }
+        g_write_sem_ready = true;
+    }
     reset_link_runtime();
     g_conn_id = SLE_CONN_INVALID;
     g_seek_active = false;
@@ -449,11 +497,12 @@ errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd)
         return ERRCODE_SLE_FAIL;
     }
 
+    bool need_cfm = cmd_requires_write_cfm(cmd);
     uint16_t pending_limit = (cmd->cmd == CMD_HEARTBEAT) ? SLE_TX_HEARTBEAT_MAX_PENDING : SLE_TX_BUSINESS_MAX_PENDING;
-    if (cmd->cmd != CMD_HEARTBEAT && !sle_laser_client_is_ready()) {
+    if (cmd->cmd != CMD_HEARTBEAT && !sle_laser_client_can_send_heartbeat()) {
         return ERRCODE_SLE_FAIL;
     }
-    if (g_pending_writes >= pending_limit) {
+    if (need_cfm && g_pending_writes >= pending_limit) {
         return ERRCODE_SLE_BUSY;
     }
 
@@ -462,19 +511,24 @@ errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd)
     param.type = SSAP_PROPERTY_TYPE_VALUE;
     param.data_len = sizeof(*cmd);
     param.data = (uint8_t *)cmd;
-    errcode_t ret = ssapc_write_req(SLE_CLIENT_ID_DEFAULT, g_conn_id, &param);
+    errcode_t ret = need_cfm ? ssapc_write_req(SLE_CLIENT_ID_DEFAULT, g_conn_id, &param)
+                             : ssapc_write_cmd(SLE_CLIENT_ID_DEFAULT, g_conn_id, &param);
     if (ret == ERRCODE_SLE_SUCCESS) {
-        unsigned int irq_state = osal_irq_lock();
-        g_pending_writes++;
-        osal_irq_restore(irq_state);
+        if (need_cfm) {
+            unsigned int irq_state = osal_irq_lock();
+            g_pending_writes++;
+            osal_irq_restore(irq_state);
+        } else {
+            g_write_cfm_ok_count++;
+        }
         g_write_req_count++;
         if (cmd->cmd != CMD_HEARTBEAT) {
             g_business_write_req_count++;
             g_last_business_write_ms = (uint32_t)uapi_systick_get_ms();
             if (g_business_write_req_count <= 16U || ((g_business_write_req_count % 64U) == 0U)) {
-                osal_printk("[wireless tx] business write=%u seq=%u cmd=0x%x ack=%u pending=%u total_wr=%u\r\n",
-                            g_business_write_req_count, cmd->seq, cmd->cmd, g_last_ack_seq, g_pending_writes,
-                            g_write_req_count);
+                osal_printk("[wireless tx] business write=%u seq=%u cmd=0x%x ack=%u pending=%u total_wr=%u cfm=%u\r\n",
+                            g_business_write_req_count, cmd->seq, cmd->cmd, g_last_ack_seq,
+                            g_pending_writes, g_write_req_count, need_cfm ? 1U : 0U);
             }
         }
         return ret;
@@ -484,6 +538,11 @@ errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd)
     osal_printk("[wireless tx] write submit fail: cmd=0x%x seq=%u ret=0x%x pending=%u\r\n", cmd->cmd, cmd->seq,
                 ret, g_pending_writes);
     return ret;
+}
+
+void sle_laser_client_note_business_activity(void)
+{
+    g_last_business_write_ms = (uint32_t)uapi_systick_get_ms();
 }
 
 bool sle_laser_client_is_connected(void)
@@ -508,7 +567,32 @@ bool sle_laser_client_can_send_heartbeat(void)
 
 bool sle_laser_client_is_ready(void)
 {
-    return sle_laser_client_can_send_heartbeat() && g_status_rx_seen;
+    return sle_laser_client_can_send_heartbeat();
+}
+
+bool sle_laser_client_wait_write_idle(uint32_t timeout_ms)
+{
+    uint32_t waited_ms = 0;
+    if (!g_write_sem_ready) {
+        return g_pending_writes == 0U;
+    }
+
+    while (sle_laser_client_can_send_heartbeat()) {
+        if (g_pending_writes == 0U) {
+            return true;
+        }
+        if (waited_ms >= timeout_ms) {
+            return false;
+        }
+
+        uint32_t wait_ms = timeout_ms - waited_ms;
+        if (wait_ms > 50U) {
+            wait_ms = 50U;
+        }
+        (void)osal_sem_down_timeout(&g_write_sem, wait_ms);
+        waited_ms += wait_ms;
+    }
+    return false;
 }
 
 uint8_t sle_laser_client_get_remote_status(void)
@@ -553,6 +637,31 @@ uint8_t sle_laser_client_get_queue_free(void)
 uint16_t sle_laser_client_get_last_ack_seq(void)
 {
     return g_last_ack_seq;
+}
+
+bool sle_laser_client_wait_ack(uint16_t seq, uint32_t timeout_ms)
+{
+    uint32_t waited_ms = 0;
+    if (!g_ack_sem_ready) {
+        return seq_reached(g_last_ack_seq, seq);
+    }
+
+    while (sle_laser_client_can_send_heartbeat()) {
+        if (seq_reached(g_last_ack_seq, seq)) {
+            return true;
+        }
+        if (waited_ms >= timeout_ms) {
+            return false;
+        }
+
+        uint32_t wait_ms = timeout_ms - waited_ms;
+        if (wait_ms > 50U) {
+            wait_ms = 50U;
+        }
+        (void)osal_sem_down_timeout(&g_ack_sem, wait_ms);
+        waited_ms += wait_ms;
+    }
+    return false;
 }
 
 uint16_t sle_laser_client_get_cmd_handle(void)

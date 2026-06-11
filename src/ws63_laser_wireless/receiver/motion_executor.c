@@ -328,6 +328,7 @@ void motion_executor_flush(void)
     while (osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
     }
     osal_mutex_unlock(&g_queue_mutex);
+    g_abort_requested = false;
     laser_force_off();
 }
 

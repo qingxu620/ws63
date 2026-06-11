@@ -32,20 +32,35 @@ static int heartbeat_task(void *arg)
 {
     unused(arg);
     motion_cmd_t hb = {0};
+    uint32_t last_idle_heartbeat_ms = 0;
     while (1) {
         uint32_t sleep_ms = HEARTBEAT_INTERVAL_MS;
         uint32_t now = (uint32_t)uapi_systick_get_ms();
+        bool need_bootstrap = !sle_laser_client_has_status_rx();
+        bool need_idle_heartbeat = false;
+
+#if SLE_TX_HEARTBEAT_IDLE_ENABLE
         uint32_t last_business = sle_laser_client_get_last_business_write_ms();
         bool suppress = (last_business != 0U) &&
                         ((uint32_t)(now - last_business) < SLE_TX_HEARTBEAT_SUPPRESS_AFTER_BUSINESS_MS);
+        need_idle_heartbeat = sle_laser_client_has_status_rx() && !suppress &&
+                              ((last_idle_heartbeat_ms == 0U) ||
+                               ((uint32_t)(now - last_idle_heartbeat_ms) >= HEARTBEAT_IDLE_INTERVAL_MS));
+#else
+        unused(now);
+        unused(last_idle_heartbeat_ms);
+#endif
 
-        if (sle_laser_client_can_send_heartbeat() && !suppress) {
+        if (sle_laser_client_can_send_heartbeat() && sle_laser_client_get_pending_writes() == 0U &&
+            (need_bootstrap || need_idle_heartbeat)) {
             memset(&hb, 0, sizeof(hb));
             hb.cmd = CMD_HEARTBEAT;
             motion_cmd_set_crc(&hb);
             errcode_t ret = sle_laser_client_send_cmd(&hb);
             if (ret == ERRCODE_SLE_BUSY) {
                 sleep_ms = SLE_TX_HEARTBEAT_BUSY_RETRY_INTERVAL_MS;
+            } else if (ret == ERRCODE_SUCC && !need_bootstrap) {
+                last_idle_heartbeat_ms = now;
             }
         }
         osal_msleep(sleep_ms);

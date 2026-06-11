@@ -114,7 +114,25 @@ static int32_t milli_from_float(float value)
     return (int32_t)((scaled >= 0.0f) ? (scaled + 0.5f) : (scaled - 0.5f));
 }
 
-static void sle_send_status_pkt(uint8_t status, uint8_t error_code, uint16_t ack_seq)
+static void sle_send_ack_pkt(uint8_t status, uint8_t error_code, uint16_t ack_seq)
+{
+    status_pkt_t pkt = {0};
+    pkt.status = status;
+    pkt.error_code = error_code;
+    pkt.ack_seq = ack_seq;
+    pkt.queue_free = wireless_queue_free_count();
+    status_pkt_set_crc(&pkt);
+
+    errcode_t ret = sle_laser_server_send_status((const uint8_t *)&pkt, sizeof(pkt));
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[wireless rx] send ack fail: 0x%x\r\n", ret);
+    } else if (ack_seq <= 16U || ((ack_seq % 64U) == 0U)) {
+        osal_printk("[wireless rx] ack tx seq=%u status=%u err=%u qfree=%u\r\n", ack_seq, status, error_code,
+                    pkt.queue_free);
+    }
+}
+
+static void sle_send_full_status_pkt(uint8_t status, uint8_t error_code, uint16_t ack_seq)
 {
     status_full_pkt_t full = {0};
     full.base.status = status;
@@ -127,7 +145,7 @@ static void sle_send_status_pkt(uint8_t status, uint8_t error_code, uint16_t ack
 
     errcode_t ret = sle_laser_server_send_status((const uint8_t *)&full, sizeof(full));
     if (ret != ERRCODE_SLE_SUCCESS) {
-        osal_printk("[wireless rx] send status fail: 0x%x\r\n", ret);
+        osal_printk("[wireless rx] send full status fail: 0x%x\r\n", ret);
         return;
     }
     g_last_status_report_ms = uapi_systick_get_ms();
@@ -229,7 +247,7 @@ static void ssaps_write_request_cbk(uint8_t server_id,
     uint8_t validate_err = STATUS_ERR_NONE;
     if (!validate_motion_cmd(&cmd, &validate_err)) {
         osal_printk("[wireless rx] invalid cmd=0x%x seq=%u err=%u\r\n", cmd.cmd, cmd.seq, validate_err);
-        sle_send_status_pkt(STATUS_ERROR, validate_err, g_last_accepted_seq);
+        sle_send_ack_pkt(STATUS_ERROR, validate_err, g_last_accepted_seq);
         return;
     }
 
@@ -243,7 +261,7 @@ static void ssaps_write_request_cbk(uint8_t server_id,
         }
         if ((g_last_status_report_ms == 0) ||
             ((now - g_last_status_report_ms) >= SLE_LASER_STATUS_REPORT_INTERVAL_MS)) {
-            sle_send_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
+            sle_send_full_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
         }
         return;
     }
@@ -254,20 +272,20 @@ static void ssaps_write_request_cbk(uint8_t server_id,
         motion_executor_flush();
         laser_force_off();
         g_last_accepted_seq = cmd.seq;
-        sle_send_status_pkt(STATUS_ERROR, STATUS_ERR_ESTOP, g_last_accepted_seq);
+        sle_send_ack_pkt(STATUS_ERROR, STATUS_ERR_ESTOP, g_last_accepted_seq);
         return;
     }
 
     if (wireless_seq_is_duplicate(cmd.seq)) {
         osal_printk("[wireless rx] duplicate seq=%u cmd=0x%x; resend ack\r\n", cmd.seq, cmd.cmd);
-        sle_send_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
+        sle_send_ack_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
         return;
     }
 
     if (!wireless_seq_is_new(cmd.seq)) {
         osal_printk("[wireless rx] stale seq=%u last=%u cmd=0x%x; resend ack\r\n", cmd.seq, g_last_accepted_seq,
                     cmd.cmd);
-        sle_send_status_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
+        sle_send_ack_pkt(sle_runtime_status(), STATUS_ERR_NONE, g_last_accepted_seq);
         return;
     }
 
@@ -276,7 +294,7 @@ static void ssaps_write_request_cbk(uint8_t server_id,
                     motion_executor_queue_depth(), motion_executor_queue_ready() ? 1U : 0U,
                     motion_executor_worker_started() ? 1U : 0U,
                     motion_executor_abort_requested() ? 1U : 0U, motion_executor_is_busy() ? 1U : 0U);
-        sle_send_status_pkt(STATUS_ERROR, STATUS_ERR_QUEUE_FULL, g_last_accepted_seq);
+        sle_send_ack_pkt(STATUS_ERROR, STATUS_ERR_QUEUE_FULL, g_last_accepted_seq);
         return;
     }
 
@@ -288,7 +306,7 @@ static void ssaps_write_request_cbk(uint8_t server_id,
                     milli_from_float(cmd.target_y), milli_from_float(cmd.feed_rate), cmd.laser_pwr,
                     wireless_queue_free_count());
     }
-    sle_send_status_pkt(STATUS_RUNNING, STATUS_ERR_NONE, g_last_accepted_seq);
+    sle_send_ack_pkt(STATUS_RUNNING, STATUS_ERR_NONE, g_last_accepted_seq);
 }
 
 static void ssaps_mtu_changed_cbk(uint8_t server_id, uint16_t conn_id, ssap_exchange_info_t *mtu_size, errcode_t status)
@@ -491,8 +509,8 @@ static errcode_t sle_laser_adv_init(void)
     param.announce_channel_map = SLE_ADV_CHANNEL_MAP_DEFAULT;
     param.announce_interval_min = 0xC8;
     param.announce_interval_max = 0xC8;
-    param.conn_interval_min = 0x14;
-    param.conn_interval_max = 0x14;
+    param.conn_interval_min = SLE_CONN_INTERVAL_MIN;
+    param.conn_interval_max = SLE_CONN_INTERVAL_MAX;
     param.conn_max_latency = 0;
     param.conn_supervision_timeout = 0x1F4;
     param.announce_tx_power = 10;

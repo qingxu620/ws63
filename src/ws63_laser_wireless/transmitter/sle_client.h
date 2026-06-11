@@ -16,15 +16,18 @@ extern "C" {
 
 errcode_t sle_laser_client_init(void);
 errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd);
+void sle_laser_client_note_business_activity(void);
 bool sle_laser_client_is_connected(void);
 bool sle_laser_client_has_handles_ready(void);
 bool sle_laser_client_has_status_rx(void);
 bool sle_laser_client_can_send_heartbeat(void);
 bool sle_laser_client_is_ready(void);
+bool sle_laser_client_wait_write_idle(uint32_t timeout_ms);
 uint8_t sle_laser_client_get_remote_status(void);
 void sle_laser_client_get_feedback_snapshot(uint8_t *status, double *x, double *y);
 uint8_t sle_laser_client_get_queue_free(void);
 uint16_t sle_laser_client_get_last_ack_seq(void);
+bool sle_laser_client_wait_ack(uint16_t seq, uint32_t timeout_ms);
 uint16_t sle_laser_client_get_cmd_handle(void);
 uint16_t sle_laser_client_get_status_handle(void);
 uint16_t sle_laser_client_get_pending_writes(void);
