@@ -1,3 +1,428 @@
-.cache/
+# =============================================================================
+#  HiSilicon WS63 嵌入式项目 .gitignore
+#  适用于 CMake + C/C++ + Python 工具链的嵌入式开发项目
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. 构建产物和缓存
+# ------------------------------------------------------------------------------
+
+# CMake 构建目录
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# 编译产物
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.s19
+*.mot
+*.ihx
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+# 链接器脚本生成文件
+*.lds
+*.ld
+
+# 预处理器输出
+*.i
+*.ii
+*.s
+*.asm
+
+# 依赖文件
+*.d
+*.dep
+
+# 编译数据库
+compile_commands.json
+compile_flags.txt
+
+# ccache 缓存
+.ccache/
+.ccache_*
+
+# -----------------------------------------------------------------------------
+# 2. 开发工具和 IDE 配置
+# ------------------------------------------------------------------------------
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs (CLion, IntelliJ, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# Eclipse
+.project
+.cproject
+.settings/
+.buildpath
+
+# Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Vim
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Xcode
+*.xcworkspace
+*.xcuserdata
+xcuserdata/
+
+# Keil MDK-ARM
+*.uvguix.*
+*.uvoptx
+*.uvgx
+*.lst
+*.crf
+*.htm
+*.tra
+*.dep
+*.lnp
+*.d
+*.o
+*.elf
+*.axf
+*.hex
+*.bin
+*.map
+*.sct
+*.tra
+*.htm
+*.lst
+*.i
+*.s
+*.dep
+
+# IAR Embedded Workbench
+*.xcl
+*.dbgdt
+*.dni
+*.wsdt
+*.dep
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.s
+
+# STM32CubeIDE
+*.launch
+
+# -----------------------------------------------------------------------------
+# 3. 操作系统生成的文件
+# ------------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+.nfs*
+
+# Windows NTFS Zone.Identifier
+*:Zone.Identifier
+
+# -----------------------------------------------------------------------------
+# 4. Python 相关
+# ------------------------------------------------------------------------------
+
+# Python 字节码
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Python 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Python 分发/打包
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+*.zip
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# 5. 敏感配置和密钥文件
+# ------------------------------------------------------------------------------
+
+# 私钥和证书
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.store
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# 配置文件中的敏感信息
+config.ini
+config.yml
+config.yaml
+config.json
+!config.example.*
+!config.sample.*
+
+# 签名工具输出
+*.signed
+*.sign
+signature_*
+
+# 调试和日志文件
+*.log
+*.logs
+debug_*.txt
+output_*.txt
+
+# -----------------------------------------------------------------------------
+# 6. 项目特定忽略项
+# ------------------------------------------------------------------------------
+
+# 临时构建文件
+*.config.old
+mconfig.h
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 项目特定临时文件
+ws63_test/temp_*.png
+ws63_test/temp_*.jpg
+ws63_test/temp_*.jpeg
+
+# 菜单配置备份
+*.config.old
+menuconfig/*.config.old
+
+# 二进制工具输出
+interim_binary/
+output/
+
+# 测试输出
+test_output/
+test_results/
+*.test
+
+# 文档生成
+docs/_build/
+docs/build/
+
+# 静态分析报告
+cppcheck_*
+cpplint_*
+*.gcov
+*.gcda
+*.gcno
+coverage_*
+
+# 性能分析
+gmon.out
+perf.data
+perf.data.old
+perf.*
+
+# 调试核心转储
+core
+core.*
+vgcore.*
+
+# -----------------------------------------------------------------------------
+# 7. 依赖管理和包管理
+# ------------------------------------------------------------------------------
+
+# Conda
+.conda/
+conda-meta/
+
+# vcpkg
+vcpkg_installed/
+
+# Conan
+conaninfo.txt
+conanbuildinfo.*
+graph_info.json
+
+# -----------------------------------------------------------------------------
+# 8. 版本控制和协作
+# ------------------------------------------------------------------------------
+
+# Git 子模块缓存
+.gitmodules.bak
+
+# 代码审查工具
+.reviewboardrc
+
+# CI/CD 缓存
+.ci-cache/
+.ci_output/
+
+# Docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# -----------------------------------------------------------------------------
+# 9. 第三方库（嵌套 git 仓库）
+# ------------------------------------------------------------------------------
+
+# 4.0inch SPI 显示库
 src/4.0inch_SPI/1-Demo/Demo_UNO_Mega2560/Install libraries/LCDWIKI_GUI/
 src/4.0inch_SPI/1-Demo/Demo_UNO_Mega2560/Install libraries/LCDWIKI_SPI/
+
+# -----------------------------------------------------------------------------
+# 10. 自定义规则（根据项目需求添加）
+# ------------------------------------------------------------------------------
+
+# 忽略所有 .o 文件，但保留编译器工具链中的
+# （注释掉，因为编译器工具链应该被包含）
+# !src/tools/bin/compiler/**/*.o
+
+# 忽略特定目录的构建产物
+src/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/.config
+src/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/.config.old
+
+# 忽略生成的配置头文件
+**/mconfig.h
+**/auto_config.h
+**/generated_config.h
+
+# 忽略编译器生成的依赖文件
+**/*.d
+**/*.dep
+
+# 忽略所有构建目录
+**/build/
+**/out/
+**/output/
+**/cmake-build-*/
+
+# 忽略所有缓存目录
+**/.cache/
+**/__pycache__/
+**/node_modules/
+**/bower_components/
+
+# 忽略所有临时文件
+**/*.tmp
+**/*.temp
+**/*.bak
+**/*.backup
+**/*.orig
+**/*~
+
+# 忽略所有日志文件
+**/*.log
+**/*.logs
+
+# 忽略所有核心转储
+**/core
+**/core.*
+**/vgcore.*
+
+# 忽略所有性能分析文件
+**/gmon.out
+**/perf.data
+**/perf.data.old
