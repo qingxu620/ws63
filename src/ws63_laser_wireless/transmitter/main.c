@@ -51,8 +51,9 @@ static int heartbeat_task(void *arg)
         unused(last_idle_heartbeat_ms);
 #endif
 
-        if (sle_laser_client_can_send_heartbeat() && sle_laser_client_get_pending_writes() == 0U &&
+        if (sle_laser_client_can_send_heartbeat() &&
             (need_bootstrap || need_idle_heartbeat)) {
+            sle_laser_client_run_pending_watchdog();
             memset(&hb, 0, sizeof(hb));
             hb.cmd = CMD_HEARTBEAT;
             motion_cmd_set_crc(&hb);

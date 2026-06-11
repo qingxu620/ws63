@@ -31,8 +31,26 @@ cmake_install.cmake
 *.dylib
 *.dll
 
-# 允许编译器工具链中的静态库
+# =============================================================================
+# 允许编译器工具链中必须追踪的二进制文件（防止误删导致编译失败）
+# =============================================================================
 !src/tools/bin/compiler/**/*.a
+!src/tools/bin/compiler/**/*.o
+!src/tools/bin/compiler/**/*.so
+!src/tools/bin/compiler/**/*.bin
+!src/tools/bin/compiler/**/*.dll
+!src/tools/bin/compiler/**/*.exe
+
+# 允许内核预编译库
+!src/kernel/liteos/**/*.a
+
+# 允许驱动预编译库
+!src/drivers/chips/**/*.a
+
+# 允许固件二进制文件
+!src/middleware/services/**/*.bin
+!src/application/ws63/**/*.bin
+!src/interim_binary/**/*.bin
 
 # 链接器脚本生成文件
 *.lds

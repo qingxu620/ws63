@@ -60,6 +60,10 @@ static uint32_t g_heartbeat_rx_count = 0;
 static uint32_t g_business_rx_count = 0;
 static uint64_t g_last_heartbeat_log_ms = 0;
 static uint64_t g_last_status_report_ms = 0;
+static osal_semaphore g_safety_sem;
+static bool g_safety_sem_ready = false;
+static volatile bool g_safety_off_pending = false;
+static volatile uint16_t g_safety_off_seq = 0;
 
 static uint8_t sle_uuid_base[] = {0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
                                   0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -93,6 +97,77 @@ static uint8_t sle_runtime_status(void)
         return STATUS_RUNNING;
     }
     return STATUS_IDLE;
+}
+
+static void mark_safety_off_pending(uint16_t seq)
+{
+    unsigned int irq_state = osal_irq_lock();
+    g_safety_off_pending = true;
+    g_safety_off_seq = seq;
+    osal_irq_restore(irq_state);
+    motion_executor_request_abort();
+}
+
+static void signal_safety_off(void)
+{
+    if (g_safety_sem_ready) {
+        osal_sem_up(&g_safety_sem);
+    }
+}
+
+static int safety_off_task(void *arg)
+{
+    unused(arg);
+    osal_printk("[wireless rx] safety task started\r\n");
+
+    while (1) {
+        if (osal_sem_down(&g_safety_sem) != OSAL_SUCCESS) {
+            osal_msleep(1);
+            continue;
+        }
+
+        uint16_t seq = 0;
+        unsigned int irq_state = osal_irq_lock();
+        if (g_safety_off_pending) {
+            g_safety_off_pending = false;
+            seq = g_safety_off_seq;
+        }
+        osal_irq_restore(irq_state);
+
+        if (seq == 0U) {
+            continue;
+        }
+
+        osal_printk("[wireless rx] safety off execute seq=%u\r\n", seq);
+        motion_executor_request_abort();
+        motion_executor_flush();
+        laser_force_off();
+    }
+
+    return 0;
+}
+
+static errcode_t safety_off_task_start(void)
+{
+    if (!g_safety_sem_ready && osal_sem_init(&g_safety_sem, 0) != OSAL_SUCCESS) {
+        osal_printk("[wireless rx] safety sem init failed\r\n");
+        return ERRCODE_FAIL;
+    }
+    g_safety_sem_ready = true;
+
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(safety_off_task, NULL, "rx_safety", TASK_STACK_SIZE_DEFAULT);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        osal_printk("[wireless rx] create safety task failed\r\n");
+        return ERRCODE_FAIL;
+    }
+    if (osal_kthread_set_priority(task, TASK_PRIO_SLE) != OSAL_SUCCESS) {
+        osal_printk("[wireless rx] set safety priority failed\r\n");
+    }
+    osal_kfree(task);
+    osal_kthread_unlock();
+    return ERRCODE_SUCC;
 }
 
 static bool wireless_seq_is_new(uint16_t seq)
@@ -289,7 +364,17 @@ static void ssaps_write_request_cbk(uint8_t server_id,
         return;
     }
 
-    if (!motion_executor_enqueue(&cmd)) {
+    if (cmd.cmd == CMD_LASER_OFF) {
+        osal_printk("[wireless rx] laser off seq=%u; ack first, defer force off\r\n", cmd.seq);
+        mark_safety_off_pending(cmd.seq);
+        g_last_accepted_seq = cmd.seq;
+        g_business_rx_count++;
+        sle_send_ack_pkt(STATUS_IDLE, STATUS_ERR_NONE, g_last_accepted_seq);
+        signal_safety_off();
+        return;
+    }
+
+    if (!motion_executor_enqueue_deferred(&cmd)) {
         osal_printk("[wireless rx] enqueue fail seq=%u depth=%u ready=%u worker=%u abort=%u busy=%u\r\n", cmd.seq,
                     motion_executor_queue_depth(), motion_executor_queue_ready() ? 1U : 0U,
                     motion_executor_worker_started() ? 1U : 0U,
@@ -307,6 +392,7 @@ static void ssaps_write_request_cbk(uint8_t server_id,
                     wireless_queue_free_count());
     }
     sle_send_ack_pkt(STATUS_RUNNING, STATUS_ERR_NONE, g_last_accepted_seq);
+    motion_executor_signal_worker();
 }
 
 static void ssaps_mtu_changed_cbk(uint8_t server_id, uint16_t conn_id, ssap_exchange_info_t *mtu_size, errcode_t status)
@@ -609,11 +695,16 @@ static void sle_server_enable_cbk(void)
 
 errcode_t sle_laser_server_init(void)
 {
+    errcode_t ret = safety_off_task_start();
+    if (ret != ERRCODE_SUCC) {
+        return ret;
+    }
+
     sle_server_announce_register_cbks();
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
 
-    errcode_t ret = enable_sle();
+    ret = enable_sle();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[wireless rx] enable_sle fail: 0x%x\r\n", ret);
         return ret;

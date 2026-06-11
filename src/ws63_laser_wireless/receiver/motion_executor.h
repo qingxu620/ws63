@@ -16,6 +16,8 @@ extern "C" {
 void motion_executor_init(void);
 errcode_t motion_executor_start_task(void);
 bool motion_executor_enqueue(const motion_cmd_t *cmd);
+bool motion_executor_enqueue_deferred(const motion_cmd_t *cmd);
+void motion_executor_signal_worker(void);
 void motion_executor_flush(void);
 void motion_executor_execute(const motion_cmd_t *cmd);
 void motion_executor_set_origin(void);

@@ -63,12 +63,15 @@ add_custom_command(TARGET ${TARGET_NAME} PRE_BUILD
     VERBATIM
 )
 
-target_link_directories(${TARGET_NAME}
-    PRIVATE
-    ${LIB_GCC}
-    ${LIB_C}
-    ${LIB_CXX}
-)
+if(DEFINED LIB_GCC)
+    target_link_options(${TARGET_NAME} PRIVATE -L${LIB_GCC})
+endif()
+if(DEFINED LIB_C)
+    target_link_options(${TARGET_NAME} PRIVATE -L${LIB_C})
+endif()
+if(DEFINED LIB_CXX)
+    target_link_options(${TARGET_NAME} PRIVATE -L${LIB_CXX})
+endif()
 
 target_link_libraries(${TARGET_NAME}
 PRIVATE

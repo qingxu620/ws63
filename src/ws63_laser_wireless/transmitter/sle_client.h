@@ -16,6 +16,7 @@ extern "C" {
 
 errcode_t sle_laser_client_init(void);
 errcode_t sle_laser_client_send_cmd(const motion_cmd_t *cmd);
+errcode_t sle_laser_client_send_cmd_no_cfm(const motion_cmd_t *cmd);
 void sle_laser_client_note_business_activity(void);
 bool sle_laser_client_is_connected(void);
 bool sle_laser_client_has_handles_ready(void);
@@ -38,6 +39,9 @@ uint32_t sle_laser_client_get_write_cfm_fail_count(void);
 uint32_t sle_laser_client_get_write_submit_fail_count(void);
 uint32_t sle_laser_client_get_notify_rx_count(void);
 uint32_t sle_laser_client_get_status_age_ms(void);
+void sle_laser_client_force_clear_pending(void);
+uint32_t sle_laser_client_get_force_clear_count(void);
+void sle_laser_client_run_pending_watchdog(void);
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,7 @@
 #include "soc_osal.h"
 #include "systick.h"
 #include "uart.h"
+#include "wireless_crc16.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -307,6 +308,31 @@ static bool send_business_cmd_and_wait_ack(const motion_cmd_t *cmd)
     return false;
 }
 
+static bool send_urgent_cmd_and_wait_ack(const motion_cmd_t *cmd)
+{
+    if (cmd == NULL) {
+        return false;
+    }
+
+    for (uint32_t attempt = 0; attempt <= CMD_RETRY_MAX; attempt++) {
+        if (attempt > 0U) {
+            g_tx_sender_retry_count++;
+            g_tx_sender_state = TX_SENDER_RETRY;
+        }
+
+        if (!submit_business_cmd(cmd)) {
+            return false;
+        }
+
+        g_tx_sender_state = TX_SENDER_WAIT_ACK;
+        if (wait_cmd_remote_ack(cmd->seq)) {
+            g_tx_sender_ack_count++;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void handle_estop(void)
 {
     motion_cmd_t cmd;
@@ -348,8 +374,8 @@ static void process_line(const char *line, int len)
     if (strcmp(line, "$D") == 0) {
         snprintf(response, sizeof(response),
                  "[MSG:wireless tx conn=%u handles=%u ready=%u srx=%u sage=%u status=%u qfree=%u ack=%u pending=%u wr=%u ok=%u]\r\n"
-                 "[MSG:fail=%u submit_fail=%u notify=%u txq=%u enq=%u deq=%u sent=%u acked=%u retry=%u drop=%u sender=%u ifl=%u ibase=%u ackms=%u ackmax=%u ackto=%u]\r\n"
-                 "[MSG:rt=%u startup=%u reset=%u ready_to=%u]\r\nok\r\n",
+                  "[MSG:fail=%u submit_fail=%u notify=%u txq=%u enq=%u deq=%u sent=%u acked=%u retry=%u drop=%u sender=%u ifl=%u ibase=%u ackms=%u ackmax=%u ackto=%u]\r\n"
+                 "[MSG:rt=%u startup=%u reset=%u ready_to=%u force_clr=%u]\r\nok\r\n",
                  sle_laser_client_is_connected() ? 1U : 0U, sle_laser_client_has_handles_ready() ? 1U : 0U,
                  sle_laser_client_is_ready() ? 1U : 0U, sle_laser_client_has_status_rx() ? 1U : 0U,
                  sle_laser_client_get_status_age_ms(), sle_laser_client_get_remote_status(),
@@ -361,7 +387,8 @@ static void process_line(const char *line, int len)
                  g_tx_sender_ack_count, g_tx_sender_retry_count, g_tx_queue_drop_count, g_tx_sender_state,
                  g_tx_sender_inflight, g_tx_sender_inflight_base_seq, g_tx_ack_wait_last_ms,
                  g_tx_ack_wait_max_ms, g_tx_sender_ack_timeout_count, g_realtime_status_count,
-                 g_startup_banner_count, g_soft_reset_count, g_ready_wait_timeout_count);
+                 g_startup_banner_count, g_soft_reset_count, g_ready_wait_timeout_count,
+                 sle_laser_client_get_force_clear_count());
         uart_send_str(response);
         return;
     }
@@ -390,7 +417,9 @@ static void process_line(const char *line, int len)
         if (has_critical) {
             tx_queue_flush();
             for (int i = 0; i < cmd_count; i++) {
-                if (!send_business_cmd_and_wait_ack(&cmds[i])) {
+                bool sent_ok = (cmds[i].cmd == CMD_LASER_OFF) ? send_urgent_cmd_and_wait_ack(&cmds[i])
+                                                              : send_business_cmd_and_wait_ack(&cmds[i]);
+                if (!sent_ok) {
                     uart_send_str("error:send_failed\r\n");
                     return;
                 }
@@ -465,12 +494,28 @@ int task_tx_sender_entry(void *arg)
         }
 
         g_tx_sender_state = TX_SENDER_DRAIN;
-        if (wait_cmd_remote_ack(last_seq)) {
-            g_tx_sender_ack_count += g_tx_sender_inflight;
-        } else {
-            osal_printk("[wireless tx sender] batch ack timeout base=%u last=%u inflight=%u remote=%u\r\n",
-                        g_tx_sender_inflight_base_seq, last_seq, g_tx_sender_inflight,
-                        sle_laser_client_get_last_ack_seq());
+        {
+            bool acked = false;
+            for (uint32_t attempt = 0; attempt <= CMD_RETRY_MAX; attempt++) {
+                if (attempt > 0U) {
+                    g_tx_sender_retry_count++;
+                    g_tx_sender_state = TX_SENDER_RETRY;
+                    sle_laser_client_force_clear_pending();
+                    if (!submit_business_cmd(&cmd)) {
+                        break;
+                    }
+                }
+                if (wait_cmd_remote_ack(last_seq)) {
+                    g_tx_sender_ack_count += g_tx_sender_inflight;
+                    acked = true;
+                    break;
+                }
+            }
+            if (!acked) {
+                osal_printk("[wireless tx sender] batch ack timeout base=%u last=%u inflight=%u remote=%u\r\n",
+                            g_tx_sender_inflight_base_seq, last_seq, g_tx_sender_inflight,
+                            sle_laser_client_get_last_ack_seq());
+            }
         }
     }
     return 0;

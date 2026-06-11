@@ -73,3 +73,18 @@ Select exactly one role:
 
 Keep `ENABLE_LASER_SINGLE_SAMPLE` disabled while building this target, because
 the samples CMake file selects one laser sample at a time.
+
+## LiteOS Task Priority Rule
+
+LiteOS task priorities use smaller numbers for higher priority. For this
+project, keep SLE callbacks above motion execution so wireless control packets
+such as `M5` are not delayed by long movement segments:
+
+```c
+#define TASK_PRIO_SLE    2
+#define TASK_PRIO_UART   3
+#define TASK_PRIO_MOTION 4
+```
+
+Do not raise a task priority by increasing the number; that lowers its priority
+on LiteOS.
