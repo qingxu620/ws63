@@ -1,10 +1,10 @@
 /**
  * @file sle_passthrough.h
- * @brief Bidirectional SLE-UART bridge for G-code passthrough.
+ * @brief Bidirectional SLE-UART transparent byte bridge.
  *
  * This module acts as a "wireless serial port":
- *   UART RX → SLE TX (G-code to receiver)
- *   SLE RX → UART TX (ok/error/status from receiver)
+ *   UART RX -> SLE TX
+ *   SLE RX  -> UART TX
  */
 #ifndef SLE_PASSTHROUGH_H
 #define SLE_PASSTHROUGH_H
@@ -19,8 +19,8 @@ extern "C" {
 
 /* SLE service/property UUIDs - must match receiver */
 #define SLE_PASSTHROUGH_SERVICE_UUID    0x1A0B
-#define SLE_PASSTHROUGH_DATA_CHAR_UUID  0x1A01   /* TX: G-code data */
-#define SLE_PASSTHROUGH_RESP_CHAR_UUID  0x1A02   /* RX: ok/error/status */
+#define SLE_PASSTHROUGH_DATA_CHAR_UUID  0x1A01   /* TX -> RX raw bytes */
+#define SLE_PASSTHROUGH_RESP_CHAR_UUID  0x1A02   /* RX -> TX raw bytes */
 
 /* SLE device name for receiver to discover */
 #define SLE_RECEIVER_NAME "sle_laser_rx"
@@ -32,9 +32,9 @@ extern "C" {
 errcode_t sle_passthrough_init(void);
 
 /**
- * @brief Send a G-code line to receiver via SLE
- * @param line G-code string (null-terminated)
- * @param len Length of the string
+ * @brief Send raw bytes to receiver via SLE
+ * @param line Byte buffer
+ * @param len Byte count
  * @return ERRCODE_SUCC on success
  */
 errcode_t sle_passthrough_send_line(const char *line, uint16_t len);
@@ -59,14 +59,14 @@ void sle_passthrough_poll_connect(void);
 const char *sle_passthrough_get_status(void);
 
 /**
- * @brief Callback for receiving response data from receiver
- * @param data Response data (ok/error/status)
+ * @brief Callback for receiving raw bytes from receiver
+ * @param data Response bytes
  * @param length Length of data
  */
 typedef void (*sle_response_cb_t)(const uint8_t *data, uint16_t length);
 
 /**
- * @brief Set callback for response data from receiver
+ * @brief Set callback for raw bytes from receiver
  * @param cb Callback function
  */
 void sle_passthrough_set_response_cb(sle_response_cb_t cb);

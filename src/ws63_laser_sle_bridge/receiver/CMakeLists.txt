@@ -1,11 +1,11 @@
 #===============================================================================
-# @brief WS63 SLE Laser Receiver sources
+# @brief WS63 Laser SLE Bridge receiver sources
 #===============================================================================
 
 set(SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/main.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/stream_io.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/sle_receiver.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../common/crc16.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcode_parser.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcode_processor.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/motion_executor.c"

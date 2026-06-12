@@ -27,10 +27,12 @@ PC ← UART ← 发射板 ← SLE ← 接收板 ← ok/error
 
 没有回传，LaserGRBL会卡在"Waiting"，因为收不到`ok`。
 
-### 2. 分包处理
+### 2. 字节流分包处理
 
 SLE是按包收发的，不能假设一包就是一行G-code：
-- 接收端逐字节塞进G-code行缓冲
+- 发射端把普通G-code行连同换行一起发出，实时命令单字节立即发出
+- 接收端SLE回调只负责把字节写入环形缓冲
+- 独立G-code任务逐字节塞进行缓冲
 - 遇到`\n`或`\r`才解析一行
 
 ### 3. 实时命令
@@ -46,6 +48,7 @@ GRBL协议中的实时命令不能等到换行再处理：
 保留GRBL风格的`ok`节奏：
 - 接收一行 → 缓冲成功 → 返回ok
 - 发射板不自己伪造ok，必须等接收板真正返回
+- 接收端队列达到水位时延迟返回ok，让LaserGRBL自然降速
 
 ## 文件结构
 
@@ -78,7 +81,7 @@ ws63_sle_laser/
 // UART RX → SLE TX
 void process_char(uint8_t ch) {
     if (ch == '\n' || ch == '\r') {
-        sle_passthrough_send_line(g_line, g_line_pos);
+        sle_passthrough_send_line(g_line_with_lf, len);
     }
 }
 
@@ -91,8 +94,13 @@ void on_sle_response(const uint8_t *data, uint16_t length) {
 ### 接收板
 
 ```c
-// SLE RX → G-code处理
-void sle_gcode_line_received(const char *line, uint16_t len) {
+// SLE RX → 字节流缓冲
+void sle_gcode_stream_received(const uint8_t *data, uint16_t len) {
+    stream_ring_push(data, len);
+}
+
+// G-code任务 → 组行处理
+void gcode_stream_task(void) {
     process_line(line, len);  // 和ws63_laser_single一样
 }
 

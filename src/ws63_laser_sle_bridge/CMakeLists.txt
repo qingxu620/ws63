@@ -1,10 +1,10 @@
 #===============================================================================
-# @brief WS63 SLE Laser Marker - minimal passthrough design
+# @brief WS63 laser SLE transparent bridge sample
 #===============================================================================
 
-if(DEFINED CONFIG_SLE_LASER_TRANSMITTER)
+if(DEFINED CONFIG_LASER_SLE_BRIDGE_TRANSMITTER)
     add_subdirectory_if_exist(transmitter)
-elseif(DEFINED CONFIG_SLE_LASER_RECEIVER)
+elseif(DEFINED CONFIG_LASER_SLE_BRIDGE_RECEIVER)
     add_subdirectory_if_exist(receiver)
 endif()
 

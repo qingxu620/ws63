@@ -1,0 +1,73 @@
+#===============================================================================
+# @brief WS63 laser SLE transparent bridge Kconfig
+#===============================================================================
+
+menu "WS63 Laser SLE Bridge Configuration"
+    depends on ENABLE_LASER_SLE_BRIDGE_SAMPLE
+
+choice
+    prompt "SLE bridge board role (板卡角色)"
+    default LASER_SLE_BRIDGE_RECEIVER
+
+config LASER_SLE_BRIDGE_RECEIVER
+    bool "Build RECEIVER firmware (接收板：唯一 Grbl 控制器)"
+    select SPI_SUPPORT_MASTER
+    help
+        Build the receiver firmware. It is the only Grbl-compatible device,
+        receives raw UART bytes through SLE, and executes laser motion locally.
+
+config LASER_SLE_BRIDGE_TRANSMITTER
+    bool "Build TRANSMITTER firmware (发射板：透明无线串口线)"
+    help
+        Build the transmitter firmware. It only bridges COM UART bytes and SLE
+        bytes, without parsing G-code and without generating Grbl responses.
+
+endchoice
+
+comment "CURRENT BUILD TARGET: RECEIVER / 接收板固件"
+    depends on LASER_SLE_BRIDGE_RECEIVER
+
+comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件"
+    depends on LASER_SLE_BRIDGE_TRANSMITTER
+
+comment "Bridge UART configuration"
+config LASER_SLE_BRIDGE_UART_BAUD
+    int
+    prompt "LaserGRBL UART baud rate"
+    range 9600 1000000
+    default 115200
+
+config LASER_SLE_BRIDGE_UART_BUS
+    int
+    prompt "LaserGRBL UART bus number"
+    default 1
+
+config LASER_SLE_BRIDGE_UART_TX_PIN
+    int
+    prompt "LaserGRBL UART TX pin"
+    default 15
+
+config LASER_SLE_BRIDGE_UART_RX_PIN
+    int
+    prompt "LaserGRBL UART RX pin"
+    default 16
+
+comment "Laser work area"
+config LASER_SLE_BRIDGE_WORK_AREA_X_MM
+    int
+    prompt "Work area X size in mm"
+    range 1 300
+    default 70
+
+config LASER_SLE_BRIDGE_WORK_AREA_Y_MM
+    int
+    prompt "Work area Y size in mm"
+    range 1 300
+    default 70
+
+config LASER_SLE_BRIDGE_STATUS_PERIODIC
+    bool
+    prompt "Send periodic Grbl status reports"
+    default n
+
+endmenu

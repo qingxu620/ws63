@@ -1,9 +1,10 @@
 /**
  * @file sle_passthrough.c
- * @brief SLE connection for bidirectional G-code passthrough.
+ * @brief SLE connection for bidirectional raw byte passthrough.
  */
 #include "sle_passthrough.h"
 #include "common_def.h"
+#include "config.h"
 #include "errcode.h"
 #include "securec.h"
 #include "soc_osal.h"
@@ -44,6 +45,9 @@ static uint16_t g_data_handle = 0;
 static uint16_t g_resp_handle = 0;
 static sle_response_cb_t g_response_cb = NULL;
 static uint32_t g_last_connect_ms = 0;
+static osal_semaphore g_write_cfm_sem;
+static volatile errcode_t g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+static volatile bool g_write_cfm_sem_ready = false;
 
 /* Compatible with current ws63_sle_laser and ws63_test receiver defaults. */
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
@@ -336,6 +340,10 @@ static void write_cfm_cbk(uint8_t client_id, uint16_t conn_id,
     if (status != ERRCODE_SLE_SUCCESS) {
         osal_printk("[tx] write cfm fail: 0x%x\r\n", status);
     }
+    g_last_write_cfm_status = status;
+    if (g_write_cfm_sem_ready) {
+        osal_sem_up(&g_write_cfm_sem);
+    }
 }
 
 static void notification_cbk(uint8_t client_id, uint16_t conn_id,
@@ -371,6 +379,10 @@ errcode_t sle_passthrough_init(void)
     g_data_handle = 0;
     g_resp_handle = 0;
     g_last_connect_ms = 0;
+    g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
+        g_write_cfm_sem_ready = true;
+    }
 
     /* Register callbacks - minimal set for fast connection */
     sle_announce_seek_callbacks_t seek_cbk = {0};
@@ -412,7 +424,22 @@ errcode_t sle_passthrough_send_line(const char *line, uint16_t len)
     param.data_len = len;
     param.data = (uint8_t *)line;
 
-    return ssapc_write_cmd(SLE_CLIENT_ID, g_conn_id, &param);
+    if (!g_write_cfm_sem_ready) {
+        return ERRCODE_SLE_FAIL;
+    }
+    while (osal_sem_down_timeout(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
+    }
+
+    g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    errcode_t ret = ssapc_write_req(SLE_CLIENT_ID, g_conn_id, &param);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        return ret;
+    }
+    if (osal_sem_down_timeout(&g_write_cfm_sem, SLE_BRIDGE_WRITE_CFM_TIMEOUT_MS) != OSAL_SUCCESS) {
+        return ERRCODE_SLE_TIMEOUT;
+    }
+
+    return g_last_write_cfm_status;
 }
 
 bool sle_passthrough_is_connected(void)

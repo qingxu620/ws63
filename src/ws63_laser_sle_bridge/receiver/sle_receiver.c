@@ -1,15 +1,15 @@
 /**
  * @file sle_receiver.c
- * @brief SLE receiver - receives internal motion packets and sends status back.
+ * @brief SLE receiver - raw byte bridge server.
  *
  * Reference: ws63_laser_wireless/receiver/sle_server.c
  */
 #include "sle_receiver.h"
-#include "protocol.h"
 #include "common_def.h"
 #include "errcode.h"
 #include "securec.h"
 #include "soc_osal.h"
+#include "stream_io.h"
 #include "systick.h"
 
 /* SLE headers */
@@ -63,11 +63,6 @@ static uint8_t sle_uuid_base[] = {
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-/* External callbacks from main.c. */
-extern void sle_gcode_stream_received(const uint8_t *data, uint16_t len);
-extern void sle_motion_cmd_received(const uint8_t *data, uint16_t len);
-extern void sle_motion_link_reset(void);
-
 static void sle_uuid_set_base(sle_uuid_t *out)
 {
     (void)memcpy_s(out->uuid, SLE_UUID_LEN, sle_uuid_base, SLE_UUID_LEN);
@@ -93,16 +88,12 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
-    if (write_cb_para->length == sizeof(motion_cmd_t)) {
-        sle_motion_cmd_received(write_cb_para->value, write_cb_para->length);
-    } else {
-        uint16_t offset = 0;
-        while (offset < write_cb_para->length) {
-            uint16_t remain = (uint16_t)(write_cb_para->length - offset);
-            uint16_t chunk_len = (remain > SLE_STREAM_CHUNK_MAX) ? SLE_STREAM_CHUNK_MAX : remain;
-            sle_gcode_stream_received(&write_cb_para->value[offset], chunk_len);
-            offset = (uint16_t)(offset + chunk_len);
-        }
+    uint16_t offset = 0;
+    while (offset < write_cb_para->length) {
+        uint16_t remain = (uint16_t)(write_cb_para->length - offset);
+        uint16_t chunk_len = (remain > SLE_STREAM_CHUNK_MAX) ? SLE_STREAM_CHUNK_MAX : remain;
+        stream_io_receive(&write_cb_para->value[offset], chunk_len);
+        offset = (uint16_t)(offset + chunk_len);
     }
 }
 
@@ -239,11 +230,11 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         g_conn_id = conn_id;
-        sle_motion_link_reset();
+        stream_io_notify_connected();
         osal_printk("[rx] SLE connected conn_id=%u\r\n", conn_id);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         g_conn_id = SLE_CONN_INVALID;
-        sle_motion_link_reset();
+        stream_io_notify_disconnected();
         osal_printk("[rx] SLE disconnected\r\n");
         sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
     }

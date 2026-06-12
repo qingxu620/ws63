@@ -1,10 +1,10 @@
 /**
  * @file sle_receiver.h
- * @brief SLE receiver module - receives G-code and sends response back.
+ * @brief SLE receiver module - raw byte bridge server.
  *
  * This module:
- *   - Receives G-code strings from transmitter via SLE
- *   - Sends response (ok/error/status) back to transmitter via SLE
+ *   - Receives raw UART bytes from transmitter via SLE
+ *   - Sends receiver Grbl output bytes back to transmitter via SLE
  */
 #ifndef SLE_RECEIVER_H
 #define SLE_RECEIVER_H
@@ -19,8 +19,8 @@ extern "C" {
 
 /* SLE service/property UUIDs - must match transmitter */
 #define SLE_RECEIVER_SERVICE_UUID    0x1A0B
-#define SLE_RECEIVER_DATA_CHAR_UUID  0x1A01   /* RX: G-code data from transmitter */
-#define SLE_RECEIVER_RESP_CHAR_UUID  0x1A02   /* TX: response to transmitter */
+#define SLE_RECEIVER_DATA_CHAR_UUID  0x1A01   /* TX -> RX raw bytes */
+#define SLE_RECEIVER_RESP_CHAR_UUID  0x1A02   /* RX -> TX raw bytes */
 
 /* SLE device name for advertising */
 #define SLE_RECEIVER_NAME "sle_laser_rx"
@@ -38,8 +38,8 @@ errcode_t sle_receiver_init(void);
 bool sle_receiver_is_connected(void);
 
 /**
- * @brief Send response data back to transmitter
- * @param data Response data (text or binary status packet)
+ * @brief Send raw response bytes back to transmitter
+ * @param data Response bytes
  * @param len Length of data
  * @return ERRCODE_SUCC on success
  */

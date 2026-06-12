@@ -6,7 +6,6 @@
 #include "screen_config.h"
 
 #include "gpio.h"
-#include "i2c.h"
 #include "pinctrl.h"
 #include "soc_osal.h"
 #include "spi.h"
@@ -54,12 +53,17 @@ errcode_t screen_board_init(void)
         return ret;
     }
 
-    uapi_pin_set_mode(SCREEN_TOUCH_SCL_PIN, SCREEN_TOUCH_I2C_PIN_MODE);
-    uapi_pin_set_mode(SCREEN_TOUCH_SDA_PIN, SCREEN_TOUCH_I2C_PIN_MODE);
-    ret = uapi_i2c_master_init(SCREEN_TOUCH_I2C_BUS,
-                               SCREEN_TOUCH_I2C_BAUDRATE,
-                               SCREEN_TOUCH_I2C_HSCODE);
-    return ret;
+    /* Initialize software I2C pins (open-drain with pull-up) */
+    uapi_pin_set_mode(SCREEN_TOUCH_SCL_PIN, HAL_PIO_FUNC_GPIO);
+    uapi_pin_set_mode(SCREEN_TOUCH_SDA_PIN, HAL_PIO_FUNC_GPIO);
+    uapi_pin_set_pull(SCREEN_TOUCH_SCL_PIN, PIN_PULL_TYPE_UP);
+    uapi_pin_set_pull(SCREEN_TOUCH_SDA_PIN, PIN_PULL_TYPE_UP);
+    uapi_gpio_set_dir(SCREEN_TOUCH_SCL_PIN, GPIO_DIRECTION_OUTPUT);
+    uapi_gpio_set_dir(SCREEN_TOUCH_SDA_PIN, GPIO_DIRECTION_OUTPUT);
+    uapi_gpio_set_val(SCREEN_TOUCH_SCL_PIN, GPIO_LEVEL_HIGH);
+    uapi_gpio_set_val(SCREEN_TOUCH_SDA_PIN, GPIO_LEVEL_HIGH);
+
+    return ERRCODE_SUCC;
 }
 
 void screen_board_delay_ms(uint32_t ms)
@@ -114,22 +118,130 @@ bool screen_touch_int_level(void)
     return uapi_gpio_get_val(SCREEN_TOUCH_INT_PIN) == GPIO_LEVEL_HIGH;
 }
 
+/* Software I2C (bit-bang) implementation */
+static inline void i2c_sda_high(void)
+{
+    uapi_gpio_set_val(SCREEN_TOUCH_SDA_PIN, GPIO_LEVEL_HIGH);
+}
+
+static inline void i2c_sda_low(void)
+{
+    uapi_gpio_set_val(SCREEN_TOUCH_SDA_PIN, GPIO_LEVEL_LOW);
+}
+
+static inline void i2c_scl_high(void)
+{
+    uapi_gpio_set_val(SCREEN_TOUCH_SCL_PIN, GPIO_LEVEL_HIGH);
+}
+
+static inline void i2c_scl_low(void)
+{
+    uapi_gpio_set_val(SCREEN_TOUCH_SCL_PIN, GPIO_LEVEL_LOW);
+}
+
+static inline bool i2c_sda_read(void)
+{
+    return uapi_gpio_get_val(SCREEN_TOUCH_SDA_PIN) == GPIO_LEVEL_HIGH;
+}
+
+static inline void i2c_delay(void)
+{
+    screen_board_delay_us(SCREEN_TOUCH_I2C_DELAY_US);
+}
+
+static void i2c_start(void)
+{
+    i2c_sda_high();
+    i2c_scl_high();
+    i2c_delay();
+    i2c_sda_low();
+    i2c_delay();
+    i2c_scl_low();
+    i2c_delay();
+}
+
+static void i2c_stop(void)
+{
+    i2c_sda_low();
+    i2c_scl_high();
+    i2c_delay();
+    i2c_sda_high();
+    i2c_delay();
+}
+
+static bool i2c_write_byte(uint8_t byte)
+{
+    for (int i = 0; i < 8; i++) {
+        if (byte & 0x80) {
+            i2c_sda_high();
+        } else {
+            i2c_sda_low();
+        }
+        byte <<= 1;
+        i2c_scl_high();
+        i2c_delay();
+        i2c_scl_low();
+        i2c_delay();
+    }
+    /* Read ACK */
+    i2c_sda_high(); /* release SDA */
+    i2c_scl_high();
+    i2c_delay();
+    bool ack = !i2c_sda_read();
+    i2c_scl_low();
+    i2c_delay();
+    return ack;
+}
+
+static uint8_t i2c_read_byte(bool ack)
+{
+    uint8_t byte = 0;
+    i2c_sda_high(); /* release SDA */
+    for (int i = 0; i < 8; i++) {
+        byte <<= 1;
+        i2c_scl_high();
+        i2c_delay();
+        if (i2c_sda_read()) {
+            byte |= 1;
+        }
+        i2c_scl_low();
+        i2c_delay();
+    }
+    /* Send ACK/NACK */
+    if (ack) {
+        i2c_sda_low();
+    } else {
+        i2c_sda_high();
+    }
+    i2c_scl_high();
+    i2c_delay();
+    i2c_scl_low();
+    i2c_delay();
+    return byte;
+}
+
 errcode_t screen_touch_i2c_write(uint8_t reg, const uint8_t *data, uint32_t len)
 {
-    uint8_t buf[16];
-    if (len > (sizeof(buf) - 1)) {
+    i2c_start();
+    /* Send device address + write bit */
+    if (!i2c_write_byte((SCREEN_TOUCH_I2C_ADDR << 1) | 0)) {
+        i2c_stop();
         return ERRCODE_FAIL;
     }
-
-    buf[0] = reg;
-    for (uint32_t i = 0; i < len; i++) {
-        buf[i + 1] = data[i];
+    /* Send register address */
+    if (!i2c_write_byte(reg)) {
+        i2c_stop();
+        return ERRCODE_FAIL;
     }
-
-    i2c_data_t i2c_data = {0};
-    i2c_data.send_buf = buf;
-    i2c_data.send_len = len + 1;
-    return uapi_i2c_master_write(SCREEN_TOUCH_I2C_BUS, SCREEN_TOUCH_I2C_ADDR, &i2c_data);
+    /* Send data */
+    for (uint32_t i = 0; i < len; i++) {
+        if (!i2c_write_byte(data[i])) {
+            i2c_stop();
+            return ERRCODE_FAIL;
+        }
+    }
+    i2c_stop();
+    return ERRCODE_SUCC;
 }
 
 errcode_t screen_touch_i2c_read(uint8_t reg, uint8_t *data, uint32_t len)
@@ -138,16 +250,29 @@ errcode_t screen_touch_i2c_read(uint8_t reg, uint8_t *data, uint32_t len)
         return ERRCODE_SUCC;
     }
 
-    i2c_data_t tx = {0};
-    tx.send_buf = &reg;
-    tx.send_len = 1;
-    errcode_t ret = uapi_i2c_master_write(SCREEN_TOUCH_I2C_BUS, SCREEN_TOUCH_I2C_ADDR, &tx);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
+    i2c_start();
+    /* Send device address + write bit */
+    if (!i2c_write_byte((SCREEN_TOUCH_I2C_ADDR << 1) | 0)) {
+        i2c_stop();
+        return ERRCODE_FAIL;
     }
-
-    i2c_data_t rx = {0};
-    rx.receive_buf = data;
-    rx.receive_len = len;
-    return uapi_i2c_master_read(SCREEN_TOUCH_I2C_BUS, SCREEN_TOUCH_I2C_ADDR, &rx);
+    /* Send register address */
+    if (!i2c_write_byte(reg)) {
+        i2c_stop();
+        return ERRCODE_FAIL;
+    }
+    /* Repeated start */
+    i2c_start();
+    /* Send device address + read bit */
+    if (!i2c_write_byte((SCREEN_TOUCH_I2C_ADDR << 1) | 1)) {
+        i2c_stop();
+        return ERRCODE_FAIL;
+    }
+    /* Read data */
+    for (uint32_t i = 0; i < len; i++) {
+        bool ack = (i < len - 1); /* ACK all except last byte */
+        data[i] = i2c_read_byte(ack);
+    }
+    i2c_stop();
+    return ERRCODE_SUCC;
 }
