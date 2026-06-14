@@ -33,6 +33,10 @@ static uint32_t g_executed_lines = 0;
 static uint32_t g_packet_count = 0;
 static uint32_t g_nack_count = 0;
 
+static uint8_t  g_last_ack_type = 0;
+static uint16_t g_last_ack_ack_seq = 0;
+static uint8_t  g_last_ack_status = 0;
+
 static const char *state_name(sle_job_state_t state)
 {
     switch (state) {
@@ -80,6 +84,9 @@ static void send_ack(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status
     ack.job_id = job_cache_job_id();
     ack.offset = job_cache_received();
     ack.credit = job_cache_free();
+    g_last_ack_type = ack_type;
+    g_last_ack_ack_seq = ack_seq;
+    g_last_ack_status = status;
     send_packet((status == JOB_STATUS_OK) ? PKT_ACK : PKT_NACK, &ack, sizeof(ack));
     if (status != JOB_STATUS_OK) {
         g_nack_count++;
@@ -183,15 +190,12 @@ static bool execute_line(const char *line)
     int cmd_count = 0;
     bool drain_and_off = line_contains_mcode(line, 5);
 
-    osal_printk("[JOB_EXEC] execute_line: \"%s\"\r\n", line);
     if (!gcode_process_line(line, (int)strlen(line), cmds, 4, &cmd_count)) {
         osal_printk("[JOB_EXEC] parse fail line=%u text=\"%s\"\r\n",
                     (unsigned int)(g_executed_lines + 1U), line);
         return false;
     }
-    osal_printk("[JOB_EXEC] parsed cmd_count=%d\r\n", cmd_count);
     for (int i = 0; i < cmd_count; i++) {
-        osal_printk("[JOB_EXEC] enqueue cmd[%d] type=%d\r\n", i, cmds[i].cmd);
         while (motion_executor_queue_depth() >= MOTION_QUEUE_OK_WATERMARK && !g_abort_requested) {
             osal_msleep(1);
         }
@@ -242,6 +246,7 @@ static int job_exec_task(void *arg)
                     return 0;
                 }
                 g_executed_lines++;
+                osal_msleep(1);
                 if ((g_executed_lines % JOB_STATUS_LOG_PERIOD_LINES) == 0) {
                     osal_printk("[JOB_EXEC] line=%u pos=%u queue=%u\r\n",
                                 (unsigned int)g_executed_lines, (unsigned int)pos,
@@ -425,9 +430,17 @@ void job_manager_on_packet(const uint8_t *data, uint16_t len)
 
     g_packet_count++;
     if (!seq_accepts(&pkt)) {
-        osal_printk("[JOB_RX] seq error type=0x%02x got=%u expect=%u state=%s\r\n",
-                    pkt.type, pkt.seq, g_expected_seq, state_name(g_state));
-        send_ack(pkt.type, pkt.seq, JOB_STATUS_BAD_SEQ);
+        if (pkt.seq == g_last_seq) {
+            send_ack(g_last_ack_type, g_last_ack_ack_seq, g_last_ack_status);
+        } else if (pkt.seq < g_last_seq) {
+            static uint32_t s_drop_count = 0;
+            if ((s_drop_count++ & 0x1F) == 0) {
+                osal_printk("[JOB_RX] drop old seq=%u last=%u expect=%u\r\n",
+                            pkt.seq, g_last_seq, g_expected_seq);
+            }
+        } else {
+            send_ack(pkt.type, pkt.seq, JOB_STATUS_BAD_SEQ);
+        }
         return;
     }
 
@@ -477,6 +490,9 @@ void job_manager_on_disconnect(void)
     g_exec_active = false;
     g_expected_seq = 1;
     g_last_seq = 0;
+    g_last_ack_type = 0;
+    g_last_ack_ack_seq = 0;
+    g_last_ack_status = 0;
 }
 
 void job_manager_init(void)
@@ -491,5 +507,8 @@ void job_manager_init(void)
     g_executed_lines = 0;
     g_packet_count = 0;
     g_nack_count = 0;
+    g_last_ack_type = 0;
+    g_last_ack_ack_seq = 0;
+    g_last_ack_status = 0;
     osal_printk("[JOB_RX] manager init cache=%u\r\n", (unsigned int)job_cache_size());
 }

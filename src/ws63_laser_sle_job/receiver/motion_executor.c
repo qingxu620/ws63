@@ -108,9 +108,7 @@ static bool delay_until_us_interruptible(uint64_t target_us)
         }
         if (chunk_us > 0U) {
             uapi_tcxo_delay_us(chunk_us);
-            if (chunk_us >= 2000U) {
-                osal_yield();
-            }
+            osal_yield();
         }
     }
 

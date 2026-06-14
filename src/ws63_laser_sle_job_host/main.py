@@ -23,6 +23,10 @@ BAUD_DEFAULT = 115200
 CMD_TIMEOUT_DEFAULT = 8.0
 UPLOAD_TIMEOUT_DEFAULT = 20.0
 DEFAULT_JOB_ID = 1
+EXEC_START_DELAY_AFTER_UPLOAD_S = 0.2
+JOB_DATA_CHUNK_SIZE = 64
+SERIAL_WRITE_BURST_SIZE = 32
+SERIAL_WRITE_BURST_GAP_S = 0.003
 
 
 def now_text() -> str:
@@ -142,10 +146,21 @@ class SleJobSerialClient:
     def write_bytes(self, payload: bytes, label: str) -> None:
         if not self.is_open() or self._serial is None:
             raise RuntimeError("串口未连接")
+        written_total = 0
         with self._write_lock:
-            self._serial.write(payload)
+            for offset in range(0, len(payload), SERIAL_WRITE_BURST_SIZE):
+                part = payload[offset : offset + SERIAL_WRITE_BURST_SIZE]
+                written = self._serial.write(part)
+                written_total += written
+                if written != len(part):
+                    break
+                if offset + len(part) < len(payload):
+                    self._serial.flush()
+                    time.sleep(SERIAL_WRITE_BURST_GAP_S)
             self._serial.flush()
-        self._on_log("tx", label)
+        if written_total != len(payload):
+            raise RuntimeError(f"串口写入不完整: {written_total}/{len(payload)} bytes")
+        self._on_log("tx", f"{label} uart={written_total}/{len(payload)}")
 
     def send_line(self, line: str) -> None:
         clean = line.strip()
@@ -196,7 +211,21 @@ class SleJobSerialClient:
             self.send_line(f"@BEGIN {job_id} {len(gcode)} {crc:04x}")
             ready = self.wait_for(f"@DATA_READY job={job_id}", timeout)
             self._on_log("status", f"DATA_READY {ready.elapsed_ms} ms")
-            self.write_bytes(gcode, f"<raw gcode> {len(gcode)} bytes crc=0x{crc:04x}")
+            offset = 0
+            while offset < len(gcode):
+                end = min(offset + JOB_DATA_CHUNK_SIZE, len(gcode))
+                chunk = gcode[offset:end]
+                self.write_bytes(
+                    chunk,
+                    f"<raw gcode chunk> off={offset} len={len(chunk)} next={end}/{len(gcode)} crc=0x{crc:04x}",
+                )
+                ack = self.wait_for(
+                    rf"@ACK type=2\b.*\bstatus=0\b.*\boffset={end}\b",
+                    timeout,
+                    regex=True,
+                )
+                self._on_log("status", f"DATA_ACK offset={end} {ack.elapsed_ms} ms")
+                offset = end
             done = self.wait_for(f"@JOB_READY job={job_id}", timeout)
             self._on_log("status", f"JOB_READY {done.elapsed_ms} ms")
 
@@ -276,6 +305,11 @@ class SleJobHostApp(tk.Tk):
         self._build_ui()
         self.refresh_ports()
         self.after(50, self._pump_logs)
+        self.enqueue_log(
+            "status",
+            f"上位机配置: job_data_chunk={JOB_DATA_CHUNK_SIZE}B "
+            f"serial_burst={SERIAL_WRITE_BURST_SIZE}B gap={int(SERIAL_WRITE_BURST_GAP_S * 1000)}ms",
+        )
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _build_ui(self) -> None:
@@ -546,6 +580,8 @@ class SleJobHostApp(tk.Tk):
             self.client.upload_job(job_id, gcode, timeout)
             self.after(0, self.progress_var.set, f"JOB_READY job={job_id}")
             if start_after:
+                self.enqueue_log("status", f"JOB_READY 后等待 {int(EXEC_START_DELAY_AFTER_UPLOAD_S * 1000)} ms 再执行")
+                time.sleep(EXEC_START_DELAY_AFTER_UPLOAD_S)
                 self._exec_start_worker()
         except Exception as exc:
             self.after(0, self.progress_var.set, "失败")
@@ -559,7 +595,7 @@ class SleJobHostApp(tk.Tk):
             job_id = self._job_id()
             result = self.client.send_control(
                 f"@EXEC_START {job_id}",
-                "status=0",
+                "@ACK type=16",
                 self._timeout(),
             )
             self.after(0, self.progress_var.set, f"执行启动 job={job_id}")
@@ -568,10 +604,10 @@ class SleJobHostApp(tk.Tk):
             self.enqueue_log("error", str(exc))
 
     def exec_stop(self) -> None:
-        self._run_worker(lambda: self._control_worker("@EXEC_STOP", "status=0", "已停止"))
+        self._run_worker(lambda: self._control_worker("@EXEC_STOP", "@ACK type=19", "已停止"))
 
     def abort_job(self) -> None:
-        self._run_worker(lambda: self._control_worker("@ABORT", "status=0", "已放弃任务"))
+        self._run_worker(lambda: self._control_worker("@ABORT", "@ACK type=4", "已放弃任务"))
 
     def query_status(self) -> None:
         self._run_worker(self._status_worker)
