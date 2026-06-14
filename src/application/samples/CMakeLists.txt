@@ -39,7 +39,7 @@ elseif(DEFINED CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_sle_job ws63_laser_sle_job)
 endif()
 
-add_subdirectory_if_exist(User)
+
 
 set(PRIVATE_HEADER
 )

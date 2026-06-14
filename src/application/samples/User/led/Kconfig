@@ -1,6 +1,0 @@
-config MY_LED_PIN
-    int
-    prompt "Choose my led pin."
-    default 2
-    help
-        Set the GPIO pin number for your LED.

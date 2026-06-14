@@ -2,65 +2,82 @@
 # @brief WS63 structured SLE laser job Kconfig
 #===============================================================================
 
-menu "WS63 Laser SLE Job Configuration"
+menu "WS63 SLE 离线任务包激光打标配置"
     depends on ENABLE_LASER_SLE_JOB_SAMPLE
 
 choice
-    prompt "SLE job board role"
+    prompt "SLE 任务板角色选择"
     default LASER_SLE_JOB_RECEIVER
 
 config LASER_SLE_JOB_RECEIVER
-    bool "Build RECEIVER firmware (RX: cache, verify, execute)"
+    bool "构建接收板固件（RX：缓存、校验、执行）"
     select SPI_SUPPORT_MASTER
     help
-        Receiver board. It receives structured SLE job packets, caches the
-        complete G-code task, validates CRC/offset/seq, then executes locally.
+        选择构建接收板（RX）固件。
+        接收板负责接收SLE结构化任务包，缓存完整的G-code任务，
+        进行CRC/偏移/序列号校验，通过后本地执行打标任务。
 
 config LASER_SLE_JOB_TRANSMITTER
-    bool "Build TRANSMITTER firmware (TX: UART job input to SLE packets)"
+    bool "构建发射板固件（TX：串口输入转SLE包）"
     help
-        Transmitter board. It reads the custom PC host protocol from UART and
-        sends structured packets through SLE. It does not emulate Grbl.
+        选择构建发射板（TX）固件。
+        发射板从串口读取PC上位机的自定义协议数据，
+        封装为SLE结构化包发送给接收板。不模拟Grbl协议。
 
 endchoice
 
-comment "CURRENT BUILD TARGET: RECEIVER / 接收板固件"
+comment "当前构建目标：接收板固件（RX）"
     depends on LASER_SLE_JOB_RECEIVER
 
-comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件"
+comment "当前构建目标：发射板固件（TX）"
     depends on LASER_SLE_JOB_TRANSMITTER
 
 config LASER_SLE_JOB_CACHE_SIZE
-    int "RX in-RAM G-code job cache size"
+    int "接收板G-code任务缓存大小（字节）"
     default 65536
     range 4096 262144
+    help
+        设置接收板RAM中用于缓存G-code任务的空间大小。
+        单位为字节，范围4KB-256KB。
+        根据任务复杂度和内存情况调整，默认64KB。
 
-comment "TX host UART configuration"
+comment "发射板串口配置（连接PC上位机）"
 config LASER_SLE_JOB_UART_BAUD
-    int "PC host UART baud rate"
+    int "PC上位机串口波特率"
     range 9600 1000000
     default 115200
+    help
+        设置发射板与PC上位机通信的串口波特率。
+        默认115200，需与上位机设置一致。
 
 config LASER_SLE_JOB_UART_BUS
-    int "PC host UART bus number"
+    int "PC上位机串口总线号"
     default 1
+    help
+        设置使用的UART总线编号（0, 1, 2）。
+        默认使用UART1。
 
 config LASER_SLE_JOB_UART_TX_PIN
-    int "PC host UART TX pin"
+    int "PC上位机串口TX引脚"
     default 15
+    help
+        设置串口发送引脚的GPIO编号。
+        默认GPIO15，需与硬件连接一致。
 
 config LASER_SLE_JOB_UART_RX_PIN
-    int "PC host UART RX pin"
+    int "PC上位机串口RX引脚"
     default 16
+    help
+        设置串口接收引脚的GPIO编号。
+        默认GPIO16，需与硬件连接一致。
 
-comment "Laser work area"
 config LASER_SLE_JOB_WORK_AREA_X_MM
-    int "Work area X size in mm"
+    int "X轴工作区域（mm）"
     range 1 300
     default 70
 
 config LASER_SLE_JOB_WORK_AREA_Y_MM
-    int "Work area Y size in mm"
+    int "Y轴工作区域（mm）"
     range 1 300
     default 70
 

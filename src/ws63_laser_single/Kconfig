@@ -2,33 +2,39 @@
 # @brief WS63 single-board laser marker Kconfig
 #===============================================================================
 
-menu "WS63 Single Board Laser Marker Configuration"
+menu "WS63 串口单板激光打标配置"
     depends on ENABLE_LASER_SINGLE_SAMPLE
 
-comment "Fixed pins: UART1 GPIO15/16, SPI0 GPIO7/9/10, PWM2 GPIO2"
+comment "固定引脚分配: UART1 GPIO15/16, SPI0 GPIO7/9/10, PWM2 GPIO2"
 
 config LASER_SINGLE_UART_BAUD
     int
-    prompt "LaserGRBL UART baud rate"
+    prompt "LaserGRBL 串口波特率"
     range 9600 1000000
     default 115200
+    help
+        设置与 LaserGRBL 通信的串口波特率。
+        默认 115200，可根据上位机设置调整。
 
 config LASER_SINGLE_WORK_AREA_X_MM
     int
-    prompt "Work area X size in mm"
+    prompt "X轴工作区域（mm）"
     range 1 300
     default 70
 
 config LASER_SINGLE_WORK_AREA_Y_MM
     int
-    prompt "Work area Y size in mm"
+    prompt "Y轴工作区域（mm）"
     range 1 300
     default 70
 
 config LASER_SINGLE_STATUS_PERIODIC
     bool
-    prompt "Send periodic Grbl status reports"
+    prompt "启用周期性状态报告"
     default n
+    help
+        启用后，控制器会定期发送Grbl状态报告。
+        通常LaserGRBL会主动发送'?'查询状态，此选项一般不需要开启。
 
 endmenu
 

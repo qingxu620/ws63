@@ -201,6 +201,63 @@ class SleJobSerialClient:
             self._on_log("status", f"JOB_READY {done.elapsed_ms} ms")
 
 
+class SerialLogMonitor:
+    def __init__(self, name: str, on_log: Callable[[str, str], None]) -> None:
+        self._name = name
+        self._on_log = on_log
+        self._serial: Optional[serial.Serial] = None
+        self._reader: Optional[threading.Thread] = None
+        self._running = threading.Event()
+
+    def is_open(self) -> bool:
+        return self._serial is not None and self._serial.is_open
+
+    def open(self, port: str, baud: int) -> None:
+        self.close()
+        self._serial = serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=0.2)
+        self._serial.reset_input_buffer()
+        self._running.set()
+        self._reader = threading.Thread(target=self._read_loop, name=f"{self._name}-reader", daemon=True)
+        self._reader.start()
+        self._on_log("status", f"{self._name} 已监听 {port} @ {baud}")
+
+    def close(self) -> None:
+        self._running.clear()
+        if self._reader is not None and self._reader.is_alive():
+            self._reader.join(timeout=0.5)
+        self._reader = None
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except serial.SerialException:
+                pass
+        self._serial = None
+
+    def _read_loop(self) -> None:
+        assert self._serial is not None
+        buffer = ""
+        while self._running.is_set() and self._serial is not None and self._serial.is_open:
+            try:
+                chunk = self._serial.read(self._serial.in_waiting or 1)
+            except serial.SerialException as exc:
+                self._on_log("error", f"{self._name} 读取失败: {exc}")
+                break
+            if not chunk:
+                continue
+            text = chunk.decode("utf-8", errors="replace")
+            buffer += text
+            normalized = buffer.replace("\r", "\n")
+            parts = normalized.split("\n")
+            if normalized.endswith("\n"):
+                ready, buffer = parts[:-1], ""
+            else:
+                ready, buffer = parts[:-1], parts[-1]
+            for raw in ready:
+                line = raw.strip()
+                if line:
+                    self._on_log(self._name.lower(), line)
+
+
 class SleJobHostApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -210,6 +267,8 @@ class SleJobHostApp(tk.Tk):
 
         self.log_queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
         self.client = SleJobSerialClient(self.enqueue_log)
+        self.tx_log_monitor = SerialLogMonitor("COM24", self.enqueue_log)
+        self.rx_log_monitor = SerialLogMonitor("COM26", self.enqueue_log)
         self.worker_thread: Optional[threading.Thread] = None
         self.log_path: Optional[Path] = None
         self.loaded_file: Optional[Path] = None
@@ -226,6 +285,7 @@ class SleJobHostApp(tk.Tk):
         top = ttk.Frame(self, padding=8)
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(1, weight=1)
+        top.columnconfigure(8, weight=1)
 
         ttk.Label(top, text="TX 串口").grid(row=0, column=0, padx=(0, 6))
         self.port_var = tk.StringVar()
@@ -240,6 +300,20 @@ class SleJobHostApp(tk.Tk):
         self.connect_button = ttk.Button(top, text="连接", command=self.toggle_connection)
         self.connect_button.grid(row=0, column=5, padx=(0, 6))
         ttk.Button(top, text="保存日志", command=self.save_log_as).grid(row=0, column=6)
+
+        ttk.Label(top, text="TX日志").grid(row=1, column=0, padx=(0, 6), pady=(6, 0))
+        self.tx_log_port_var = tk.StringVar()
+        self.tx_log_combo = ttk.Combobox(top, textvariable=self.tx_log_port_var, width=34, state="readonly")
+        self.tx_log_combo.grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=(6, 0))
+        self.tx_log_button = ttk.Button(top, text="监听COM24", command=self.toggle_tx_log_monitor)
+        self.tx_log_button.grid(row=1, column=2, padx=(0, 12), pady=(6, 0))
+
+        ttk.Label(top, text="RX日志").grid(row=1, column=3, padx=(0, 6), pady=(6, 0))
+        self.rx_log_port_var = tk.StringVar()
+        self.rx_log_combo = ttk.Combobox(top, textvariable=self.rx_log_port_var, width=34, state="readonly")
+        self.rx_log_combo.grid(row=1, column=4, sticky="ew", padx=(0, 6), pady=(6, 0))
+        self.rx_log_button = ttk.Button(top, text="监听COM26", command=self.toggle_rx_log_monitor)
+        self.rx_log_button.grid(row=1, column=5, padx=(0, 6), pady=(6, 0))
 
         main = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
@@ -298,6 +372,8 @@ class SleJobHostApp(tk.Tk):
         self.log_text.tag_configure("rx", foreground="#1B4D89")
         self.log_text.tag_configure("error", foreground="#B00020")
         self.log_text.tag_configure("status", foreground="#7A4E00")
+        self.log_text.tag_configure("com24", foreground="#6A1B9A")
+        self.log_text.tag_configure("com26", foreground="#00695C")
 
     def enqueue_log(self, kind: str, message: str) -> None:
         self.log_queue.put((kind, message))
@@ -314,7 +390,7 @@ class SleJobHostApp(tk.Tk):
     def append_log(self, kind: str, message: str) -> None:
         line = f"{now_text()} {kind.upper():>6} {compact_text(message)}\n"
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status"} else "")
+        self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status", "com24", "com26"} else "")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
         if self.log_path is not None:
@@ -325,9 +401,22 @@ class SleJobHostApp(tk.Tk):
     def refresh_ports(self) -> None:
         ports = self.client.available_ports()
         self.port_combo["values"] = ports
+        self.tx_log_combo["values"] = ports
+        self.rx_log_combo["values"] = ports
         if ports and not self.port_var.get():
             self.port_combo.current(0)
+        self._select_port_by_prefix(self.tx_log_combo, self.tx_log_port_var, "COM24")
+        self._select_port_by_prefix(self.rx_log_combo, self.rx_log_port_var, "COM26")
         self.enqueue_log("status", f"检测到 {len(ports)} 个串口")
+
+    @staticmethod
+    def _select_port_by_prefix(combo: ttk.Combobox, var: tk.StringVar, prefix: str) -> None:
+        if var.get():
+            return
+        for value in combo["values"]:
+            if str(value).upper().startswith(prefix.upper()):
+                var.set(value)
+                return
 
     def toggle_connection(self) -> None:
         if self.client.is_open():
@@ -347,6 +436,37 @@ class SleJobHostApp(tk.Tk):
         except Exception as exc:
             self.enqueue_log("error", str(exc))
             messagebox.showerror("连接失败", str(exc))
+
+    def toggle_tx_log_monitor(self) -> None:
+        self._toggle_monitor(self.tx_log_monitor, self.tx_log_port_var, self.tx_log_button, "监听COM24", "停止COM24")
+
+    def toggle_rx_log_monitor(self) -> None:
+        self._toggle_monitor(self.rx_log_monitor, self.rx_log_port_var, self.rx_log_button, "监听COM26", "停止COM26")
+
+    def _toggle_monitor(
+        self,
+        monitor: SerialLogMonitor,
+        var: tk.StringVar,
+        button: ttk.Button,
+        start_text: str,
+        stop_text: str,
+    ) -> None:
+        if monitor.is_open():
+            monitor.close()
+            button.configure(text=start_text)
+            return
+        display = var.get().strip()
+        if not display:
+            messagebox.showwarning("调试串口", "请选择要监听的调试串口")
+            return
+        try:
+            baud = int(self.baud_var.get().strip())
+            monitor.open(SleJobSerialClient.port_device(display), baud)
+            button.configure(text=stop_text)
+            self._start_default_log()
+        except Exception as exc:
+            self.enqueue_log("error", str(exc))
+            messagebox.showerror("监听失败", str(exc))
 
     def _start_default_log(self) -> None:
         if self.log_path is None:
@@ -463,6 +583,8 @@ class SleJobHostApp(tk.Tk):
 
     def on_close(self) -> None:
         self.client.close()
+        self.tx_log_monitor.close()
+        self.rx_log_monitor.close()
         self.destroy()
 
 

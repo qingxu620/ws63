@@ -11,6 +11,7 @@
 #include "motion_executor.h"
 #include "packet.h"
 #include "protocol.h"
+#include "sle_errcode.h"
 #include "sle_job_server.h"
 #include "soc_osal.h"
 #include "systick.h"

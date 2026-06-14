@@ -10,6 +10,7 @@
 #include "packet.h"
 #include "pinctrl.h"
 #include "protocol.h"
+#include "sle_errcode.h"
 #include "sle_job_client.h"
 #include "soc_osal.h"
 #include "uart.h"
@@ -341,10 +342,10 @@ static int uart_rx_task(void *arg)
     return 0;
 }
 
-static void create_task(const char *name, osal_kthread_handler entry, uint32_t prio)
+static void create_task(const char *name, osal_kthread_handler entry, uint32_t stack_size, uint32_t prio)
 {
     osal_kthread_lock();
-    osal_task *task = osal_kthread_create(entry, NULL, name, TASK_STACK_SIZE_DEFAULT);
+    osal_task *task = osal_kthread_create(entry, NULL, name, stack_size);
     if (task == NULL) {
         osal_kthread_unlock();
         osal_printk("[JOB_TX] create task %s failed\r\n", name);
@@ -357,6 +358,22 @@ static void create_task(const char *name, osal_kthread_handler entry, uint32_t p
     osal_kthread_unlock();
 }
 
+static int sle_init_task(void *arg)
+{
+    unused(arg);
+
+    osal_printk("[JOB_TX_BOOT] sle init task start, delay for stack ready\r\n");
+    osal_msleep(500);
+
+    osal_printk("[JOB_TX_BOOT] set response cb\r\n");
+    sle_job_client_set_response_cb(response_cb);
+
+    osal_printk("[JOB_TX_BOOT] sle client init begin\r\n");
+    errcode_t ret = sle_job_client_init();
+    osal_printk("[JOB_TX_BOOT] sle client init end ret=0x%x\r\n", ret);
+    return (ret == ERRCODE_SUCC) ? 0 : -1;
+}
+
 static void laser_sle_job_tx_entry(void)
 {
     osal_printk("========================================\r\n");
@@ -366,13 +383,16 @@ static void laser_sle_job_tx_entry(void)
 
     if (osal_sem_init(&g_ack_sem, 0) == OSAL_SUCCESS) {
         g_ack_sem_ready = true;
+        osal_printk("[JOB_TX_BOOT] ack sem ready\r\n");
+    } else {
+        osal_printk("[JOB_TX_BOOT] ack sem init failed\r\n");
     }
     if (job_uart_init() != ERRCODE_SUCC) {
         return;
     }
-    sle_job_client_set_response_cb(response_cb);
-    (void)sle_job_client_init();
-    create_task("job_uart_rx", uart_rx_task, TASK_PRIO_JOB_UART);
+    create_task("job_uart_rx", uart_rx_task, TASK_STACK_SIZE_DEFAULT, TASK_PRIO_JOB_UART);
+    create_task("job_sle_init", sle_init_task, TASK_STACK_SIZE_SLE, TASK_PRIO_SLE);
+    osal_printk("[JOB_TX_BOOT] tasks created\r\n");
 }
 
 app_run(laser_sle_job_tx_entry);

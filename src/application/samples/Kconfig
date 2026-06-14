@@ -121,5 +121,4 @@ if ENABLE_LASER_SLE_JOB_SAMPLE
 source "ws63_laser_sle_job/Kconfig"
 endif
 
-# 注册你的 User 配置菜单
-source "application/samples/User/Kconfig"
+

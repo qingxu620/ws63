@@ -1,47 +1,49 @@
-menu "WS63 WiFi Laser Marker Configuration"
+menu "WS63 WiFi 实时激光打标配置"
 
 config LASER_WIFI_AP_SSID
-    string "WiFi SoftAP SSID"
+    string "WiFi 热点名称（SSID）"
     default "WS63_LASER_WIFI"
     help
-        SoftAP name exposed by the laser controller.
+        设置激光控制器创建的WiFi热点名称。
+        设备将以此名称广播，供电脑或手机连接。
 
 config LASER_WIFI_AP_PSK
-    string "WiFi SoftAP password"
+    string "WiFi 热点密码"
     default "12345678"
     help
-        WPA/WPA2 PSK password. Keep at least 8 characters.
+        设置WiFi热点的WPA/WPA2密码。
+        密码长度至少8位，建议使用强密码保障安全。
 
 config LASER_WIFI_AP_CHANNEL
-    int "WiFi SoftAP channel"
+    int "WiFi 热点信道"
     range 1 13
     default 13
     help
-        SoftAP channel used by the controller.
+        设置WiFi热点使用的信道。
+        信道1-13可选，建议选择干扰较少的信道。
+        默认使用信道13。
 
 config LASER_WIFI_TCP_PORT
-    int "TCP Grbl port"
+    int "TCP 服务端口"
     default 5000
     help
-        TCP server port. Use LaserGRBL Telnet to connect to this port.
+        设置TCP服务器监听的端口号。
+        LaserGRBL通过Telnet协议连接此端口进行通信。
+        默认端口5000，可根据需要修改。
 
 config LASER_WIFI_WORK_AREA_X_MM
-    int "Work area X in mm"
+    int "X轴工作区域（mm）"
     default 70
-    help
-        Virtual galvo working area along X axis in millimeters.
 
 config LASER_WIFI_WORK_AREA_Y_MM
-    int "Work area Y in mm"
+    int "Y轴工作区域（mm）"
     default 70
-    help
-        Virtual galvo working area along Y axis in millimeters.
 
 config LASER_WIFI_STATUS_PERIODIC
-    bool "Enable periodic status reports"
+    bool "启用周期性状态报告"
     default n
     help
-        When enabled, the controller periodically emits Grbl status reports while connected.
-        LaserGRBL already sends '?' status queries, so this is usually not needed.
+        启用后，控制器在连接状态下会定期发送Grbl状态报告。
+        通常LaserGRBL会主动发送'?'查询状态，此选项一般不需要开启。
 
 endmenu
