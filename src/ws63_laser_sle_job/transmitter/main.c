@@ -33,6 +33,7 @@ static bool g_ack_sem_ready = false;
 static volatile uint16_t g_wait_ack_seq = 0;
 static volatile uint8_t g_wait_status = JOB_STATUS_INTERNAL_ERROR;
 static volatile bool g_wait_got_ack = false;
+static volatile bool g_wait_active = false;
 static uint16_t g_tx_seq = 1;
 
 static uint32_t g_job_id = 0;
@@ -92,28 +93,45 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         return ERRCODE_FAIL;
     }
 
+    while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
+    }
+    g_wait_ack_seq = seq;
+    g_wait_status = JOB_STATUS_INTERNAL_ERROR;
+    g_wait_got_ack = false;
+    g_wait_active = true;
+
     for (uint32_t retry = 0; retry <= JOB_TX_RETRY_MAX; retry++) {
         while (!sle_job_client_is_connected()) {
             sle_job_client_poll_connect();
             osal_msleep(20);
         }
 
-        while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
+        if (g_wait_got_ack && g_wait_status == JOB_STATUS_OK) {
+            osal_printk("[JOB_TX_ACK_LATE] type=0x%02x seq=%u status=%u before_retry=%u\r\n",
+                        type, seq, g_wait_status, (unsigned int)retry);
+            g_wait_active = false;
+            g_wait_ack_seq = 0;
+            return ERRCODE_SUCC;
         }
-        g_wait_ack_seq = seq;
-        g_wait_status = JOB_STATUS_INTERNAL_ERROR;
-        g_wait_got_ack = false;
 
         errcode_t ret = sle_job_client_send_packet(packet, packet_len);
         osal_printk("[JOB_TX_FRAME] type=0x%02x seq=%u len=%u try=%u ret=0x%x\r\n",
                     type, seq, packet_len, (unsigned int)retry, ret);
-        if (ret == ERRCODE_SLE_SUCCESS &&
-            osal_sem_down_timeout(&g_ack_sem, JOB_TX_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
-            g_wait_got_ack && g_wait_status == JOB_STATUS_OK) {
-            return ERRCODE_SUCC;
+        if (ret == ERRCODE_SLE_SUCCESS) {
+            if (osal_sem_down_timeout(&g_ack_sem, JOB_TX_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
+                g_wait_got_ack) {
+                if (g_wait_status == JOB_STATUS_OK) {
+                    g_wait_active = false;
+                    g_wait_ack_seq = 0;
+                    return ERRCODE_SUCC;
+                }
+                break;
+            }
         }
     }
 
+    g_wait_active = false;
+    g_wait_ack_seq = 0;
     host_sendf("@NACK type=%u seq=%u status=%u\r\n", type, seq, g_wait_status);
     return ERRCODE_FAIL;
 }
@@ -132,12 +150,15 @@ static void response_cb(const uint8_t *data, uint16_t length)
         osal_printk("[JOB_TX_ACK] ack_type=0x%02x ack_seq=%u status=%u job=%u off=%u credit=%u\r\n",
                     ack.ack_type, ack.ack_seq, ack.status, (unsigned int)ack.job_id,
                     (unsigned int)ack.offset, (unsigned int)ack.credit);
-        if (ack.ack_seq == g_wait_ack_seq) {
-            g_wait_status = ack.status;
-            g_wait_got_ack = true;
-            if (g_ack_sem_ready) {
-                osal_sem_up(&g_ack_sem);
-            }
+        if (!g_wait_active || ack.ack_seq != g_wait_ack_seq) {
+            osal_printk("[JOB_TX_ACK_OLD] ack_type=0x%02x ack_seq=%u wait=%u status=%u ignored\r\n",
+                        ack.ack_type, ack.ack_seq, g_wait_ack_seq, ack.status);
+            return;
+        }
+        g_wait_status = ack.status;
+        g_wait_got_ack = true;
+        if (g_ack_sem_ready) {
+            osal_sem_up(&g_ack_sem);
         }
         host_sendf("@ACK type=%u seq=%u status=%u offset=%u\r\n",
                    ack.ack_type, ack.ack_seq, ack.status, (unsigned int)ack.offset);

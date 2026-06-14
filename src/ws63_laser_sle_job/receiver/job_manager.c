@@ -25,12 +25,13 @@
 
 static volatile sle_job_state_t g_state = JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
+static volatile bool g_exec_active = false;
 static uint16_t g_expected_seq = 1;
 static uint16_t g_last_seq = 0;
 static uint16_t g_resp_seq = 1;
-static unsigned long g_executed_lines = 0;
-static unsigned long g_packet_count = 0;
-static unsigned long g_nack_count = 0;
+static uint32_t g_executed_lines = 0;
+static uint32_t g_packet_count = 0;
+static uint32_t g_nack_count = 0;
 
 static const char *state_name(sle_job_state_t state)
 {
@@ -142,6 +143,7 @@ void job_manager_safe_stop(const char *reason)
     motion_executor_execute(&cmd);
     laser_force_off();
     g_state = JOB_STATE_ABORTED;
+    g_exec_active = false;
 }
 
 static bool line_contains_mcode(const char *line, int expected_code)
@@ -181,11 +183,15 @@ static bool execute_line(const char *line)
     int cmd_count = 0;
     bool drain_and_off = line_contains_mcode(line, 5);
 
+    osal_printk("[JOB_EXEC] execute_line: \"%s\"\r\n", line);
     if (!gcode_process_line(line, (int)strlen(line), cmds, 4, &cmd_count)) {
-        osal_printk("[JOB_EXEC] parse fail line=%lu text=\"%s\"\r\n", g_executed_lines + 1UL, line);
+        osal_printk("[JOB_EXEC] parse fail line=%u text=\"%s\"\r\n",
+                    (unsigned int)(g_executed_lines + 1U), line);
         return false;
     }
+    osal_printk("[JOB_EXEC] parsed cmd_count=%d\r\n", cmd_count);
     for (int i = 0; i < cmd_count; i++) {
+        osal_printk("[JOB_EXEC] enqueue cmd[%d] type=%d\r\n", i, cmds[i].cmd);
         while (motion_executor_queue_depth() >= MOTION_QUEUE_OK_WATERMARK && !g_abort_requested) {
             osal_msleep(1);
         }
@@ -193,7 +199,8 @@ static bool execute_line(const char *line)
             return false;
         }
         if (!motion_executor_enqueue(&cmds[i])) {
-            osal_printk("[JOB_EXEC] enqueue fail line=%lu cmd=%d\r\n", g_executed_lines + 1UL, cmds[i].cmd);
+            osal_printk("[JOB_EXEC] enqueue fail line=%u cmd=%d\r\n",
+                        (unsigned int)(g_executed_lines + 1U), cmds[i].cmd);
             return false;
         }
     }
@@ -215,6 +222,7 @@ static int job_exec_task(void *arg)
 
     osal_printk("[JOB_EXEC] start job=%u size=%u\r\n",
                 (unsigned int)job_cache_job_id(), (unsigned int)size);
+    g_exec_active = true;
     g_state = JOB_STATE_EXECUTING;
     g_abort_requested = false;
     g_executed_lines = 0;
@@ -230,12 +238,13 @@ static int job_exec_task(void *arg)
             if (line[0] != '\0') {
                 if (!execute_line(line)) {
                     job_manager_safe_stop("execute-line-fail");
+                    g_exec_active = false;
                     return 0;
                 }
                 g_executed_lines++;
                 if ((g_executed_lines % JOB_STATUS_LOG_PERIOD_LINES) == 0) {
-                    osal_printk("[JOB_EXEC] line=%lu pos=%u queue=%u\r\n",
-                                g_executed_lines, (unsigned int)pos,
+                    osal_printk("[JOB_EXEC] line=%u pos=%u queue=%u\r\n",
+                                (unsigned int)g_executed_lines, (unsigned int)pos,
                                 (unsigned int)motion_executor_queue_depth());
                 }
             }
@@ -244,6 +253,7 @@ static int job_exec_task(void *arg)
             line[line_pos++] = ch;
         } else {
             job_manager_safe_stop("line-too-long");
+            g_exec_active = false;
             return 0;
         }
     }
@@ -254,6 +264,7 @@ static int job_exec_task(void *arg)
         if (line[0] != '\0') {
             if (!execute_line(line)) {
                 job_manager_safe_stop("execute-final-line-fail");
+                g_exec_active = false;
                 return 0;
             }
             g_executed_lines++;
@@ -264,20 +275,28 @@ static int job_exec_task(void *arg)
     laser_force_off();
     if (!g_abort_requested) {
         g_state = JOB_STATE_IDLE;
-        osal_printk("[JOB_EXEC] done job=%u lines=%lu x=%.3f y=%.3f\r\n",
-                    (unsigned int)job_cache_job_id(), g_executed_lines,
-                    motion_executor_get_x(), motion_executor_get_y());
+        int32_t x_um = (int32_t)(motion_executor_get_x() * 1000.0);
+        int32_t y_um = (int32_t)(motion_executor_get_y() * 1000.0);
+        osal_printk("[JOB_EXEC] done job=%u lines=%u x_um=%d y_um=%d\r\n",
+                    (unsigned int)job_cache_job_id(), (unsigned int)g_executed_lines,
+                    (int)x_um, (int)y_um);
         job_cache_clear();
     }
+    g_exec_active = false;
     return 0;
 }
 
-static sle_job_status_t start_job_execution(uint32_t job_id)
+static sle_job_status_t validate_job_execution(uint32_t job_id)
 {
-    if (g_state != JOB_STATE_JOB_READY || !job_cache_is_ready() || job_id != job_cache_job_id()) {
+    if (g_exec_active || g_state != JOB_STATE_JOB_READY ||
+        !job_cache_is_ready() || job_id != job_cache_job_id()) {
         return JOB_STATUS_NOT_READY;
     }
+    return JOB_STATUS_OK;
+}
 
+static sle_job_status_t launch_job_execution(void)
+{
     motion_executor_clear_abort();
     osal_kthread_lock();
     osal_task *task = osal_kthread_create(job_exec_task, NULL, "job_exec", JOB_EXEC_TASK_STACK_SIZE);
@@ -299,6 +318,13 @@ static void handle_job_begin(const sle_packet_view_t *pkt)
         send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_JOB);
         return;
     }
+
+    if (g_exec_active || g_state == JOB_STATE_EXECUTING) {
+        osal_printk("[JOB_BEGIN] reject: still executing state=%s\r\n", state_name(g_state));
+        send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_STATE);
+        return;
+    }
+
     job_begin_payload_t begin;
     memcpy(&begin, pkt->payload, sizeof(begin));
     sle_job_status_t st = job_cache_begin(begin.job_id, begin.total_size, begin.job_crc16);
@@ -332,7 +358,7 @@ static void handle_job_data(const sle_packet_view_t *pkt)
     if (st == JOB_STATUS_OK) {
         seq_commit(pkt->seq);
     }
-    if ((g_packet_count <= 8UL) || ((g_packet_count % 32UL) == 0UL) || st != JOB_STATUS_OK) {
+    if ((g_packet_count <= 8U) || ((g_packet_count % 32U) == 0U) || st != JOB_STATUS_OK) {
         osal_printk("[JOB_DATA] seq=%u job=%u off=%u len=%u rx=%u st=%u\r\n",
                     pkt->seq, (unsigned int)hdr.job_id, (unsigned int)hdr.offset, hdr.data_len,
                     (unsigned int)job_cache_received(), st);
@@ -369,13 +395,23 @@ static void handle_exec_start(const sle_packet_view_t *pkt)
     }
     exec_start_payload_t start;
     memcpy(&start, pkt->payload, sizeof(start));
-    sle_job_status_t st = start_job_execution(start.job_id);
+    sle_job_status_t st = validate_job_execution(start.job_id);
     if (st == JOB_STATUS_OK) {
+        g_exec_active = true;
+        g_abort_requested = false;
+        g_state = JOB_STATE_EXECUTING;
         seq_commit(pkt->seq);
     }
-    osal_printk("[EXEC_START] seq=%u job=%u st=%u state=%s\r\n",
+    osal_printk("[EXEC_START] seq=%u job=%u st=%u state=%s ack-before-launch\r\n",
                 pkt->seq, (unsigned int)start.job_id, st, state_name(g_state));
     send_ack(pkt->type, pkt->seq, st);
+    if (st == JOB_STATUS_OK) {
+        sle_job_status_t launch_st = launch_job_execution();
+        if (launch_st != JOB_STATUS_OK) {
+            osal_printk("[EXEC_START] launch failed st=%u\r\n", launch_st);
+            job_manager_safe_stop("exec-launch-fail");
+        }
+    }
 }
 
 void job_manager_on_packet(const uint8_t *data, uint16_t len)
@@ -438,6 +474,7 @@ void job_manager_on_disconnect(void)
     job_manager_safe_stop("sle-disconnect");
     job_cache_clear();
     g_state = JOB_STATE_IDLE;
+    g_exec_active = false;
     g_expected_seq = 1;
     g_last_seq = 0;
 }
@@ -447,6 +484,7 @@ void job_manager_init(void)
     job_cache_init();
     g_state = JOB_STATE_IDLE;
     g_abort_requested = false;
+    g_exec_active = false;
     g_expected_seq = 1;
     g_last_seq = 0;
     g_resp_seq = 1;

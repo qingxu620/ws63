@@ -223,7 +223,7 @@ static const app_task_definition_t g_app_tasks[] = {
 
 static void systick_cali_xclk_bottom_half(void);
 
-#define APP_MAIN_DELAY_TIME 1000 /* 1000 tick，1 tick=10ms，共10s */
+#define APP_MAIN_DELAY_TIME 6000 /* 6000 tick，1 tick=10ms，共60s */
 #define M_NUM_TASKS (sizeof(g_app_tasks) / sizeof(app_task_definition_t))
 #define PATCH_NUM 194
 #define PATCH_REMAP_TAB_WORD_NUM 2

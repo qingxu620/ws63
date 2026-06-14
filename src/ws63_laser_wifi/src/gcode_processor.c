@@ -85,6 +85,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
     int count = 0;
     bool suppress_modal_motion = false;
     bool laser_off_requested = false;
+    bool line_processed = false;
 
     if (out_count == NULL || out_cmds == NULL || max_cmds <= 0) {
         return false;
@@ -103,6 +104,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
         double f = gcode_get_value(&gc, 'F');
         if (f > 0.0) {
             g_feed_rate = f;
+            line_processed = true;
         }
     }
 
@@ -115,6 +117,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
             s = LASER_S_MAX;
         }
         g_laser_power = s;
+        line_processed = true;
         if (s <= 0.0) {
             laser_off_requested = true;
         }
@@ -128,6 +131,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
             g_laser_enabled = false;
             laser_off_requested = true;
         }
+        line_processed = true;
     }
 
     if (laser_off_requested && !append_laser_off(out_cmds, max_cmds, &count)) {
@@ -143,15 +147,19 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
         int g_val = (int)strtod(&gc.line[i + 1], NULL);
         if (g_val == 90) {
             g_absolute_mode = true;
+            line_processed = true;
         } else if (g_val == 91) {
             g_absolute_mode = false;
+            line_processed = true;
         } else if (g_val == 0 || g_val == 1 || g_val == 2 || g_val == 3) {
             g_motion_mode = g_val;
+            line_processed = true;
         } else if ((g_val == 28 || g_val == 92) && count < max_cmds) {
             fill_cmd_header(&out_cmds[count], CMD_SET_ORIGIN);
             count++;
             gcode_processor_set_origin();
             suppress_modal_motion = true;
+            line_processed = true;
         }
     }
 
@@ -182,7 +190,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
     if (count > 0) {
         g_line_counter++;
     }
-    return count > 0;
+    return count > 0 || line_processed;
 }
 
 unsigned long gcode_processor_get_line_count(void)

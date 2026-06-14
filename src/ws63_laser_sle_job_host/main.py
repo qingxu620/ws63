@@ -365,7 +365,11 @@ class SleJobHostApp(tk.Tk):
 
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
-        ttk.Label(right, text="通信日志").grid(row=0, column=0, sticky="w")
+        log_header = ttk.Frame(right)
+        log_header.grid(row=0, column=0, sticky="ew")
+        log_header.columnconfigure(0, weight=1)
+        ttk.Label(log_header, text="通信日志").grid(row=0, column=0, sticky="w")
+        ttk.Button(log_header, text="清空日志", command=self.clear_log).grid(row=0, column=1, sticky="e")
         self.log_text = tk.Text(right, height=20, wrap="word", state="disabled")
         self.log_text.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
         self.log_text.tag_configure("tx", foreground="#0B6E4F")
@@ -397,6 +401,12 @@ class SleJobHostApp(tk.Tk):
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.log_path.open("a", encoding="utf-8") as f:
                 f.write(line)
+
+    def clear_log(self) -> None:
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+        self.enqueue_log("status", "日志已清空")
 
     def refresh_ports(self) -> None:
         ports = self.client.available_ports()
