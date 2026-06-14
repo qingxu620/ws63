@@ -1,0 +1,67 @@
+#===============================================================================
+# @brief WS63 structured SLE laser job Kconfig
+#===============================================================================
+
+menu "WS63 Laser SLE Job Configuration"
+    depends on ENABLE_LASER_SLE_JOB_SAMPLE
+
+choice
+    prompt "SLE job board role"
+    default LASER_SLE_JOB_RECEIVER
+
+config LASER_SLE_JOB_RECEIVER
+    bool "Build RECEIVER firmware (RX: cache, verify, execute)"
+    select SPI_SUPPORT_MASTER
+    help
+        Receiver board. It receives structured SLE job packets, caches the
+        complete G-code task, validates CRC/offset/seq, then executes locally.
+
+config LASER_SLE_JOB_TRANSMITTER
+    bool "Build TRANSMITTER firmware (TX: UART job input to SLE packets)"
+    help
+        Transmitter board. It reads the custom PC host protocol from UART and
+        sends structured packets through SLE. It does not emulate Grbl.
+
+endchoice
+
+comment "CURRENT BUILD TARGET: RECEIVER / 接收板固件"
+    depends on LASER_SLE_JOB_RECEIVER
+
+comment "CURRENT BUILD TARGET: TRANSMITTER / 发射板固件"
+    depends on LASER_SLE_JOB_TRANSMITTER
+
+config LASER_SLE_JOB_CACHE_SIZE
+    int "RX in-RAM G-code job cache size"
+    default 65536
+    range 4096 262144
+
+comment "TX host UART configuration"
+config LASER_SLE_JOB_UART_BAUD
+    int "PC host UART baud rate"
+    range 9600 1000000
+    default 115200
+
+config LASER_SLE_JOB_UART_BUS
+    int "PC host UART bus number"
+    default 1
+
+config LASER_SLE_JOB_UART_TX_PIN
+    int "PC host UART TX pin"
+    default 15
+
+config LASER_SLE_JOB_UART_RX_PIN
+    int "PC host UART RX pin"
+    default 16
+
+comment "Laser work area"
+config LASER_SLE_JOB_WORK_AREA_X_MM
+    int "Work area X size in mm"
+    range 1 300
+    default 70
+
+config LASER_SLE_JOB_WORK_AREA_Y_MM
+    int "Work area Y size in mm"
+    range 1 300
+    default 70
+
+endmenu

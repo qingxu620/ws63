@@ -116,5 +116,19 @@ if ENABLE_LASER_WIFI_SAMPLE
 source "ws63_laser_wifi/Kconfig"
 endif
 
+config ENABLE_LASER_SLE_JOB_SAMPLE
+    bool
+    prompt "Enable the Sample of WS63 SLE Job Laser Marker."
+    default n
+    depends on SAMPLE_ENABLE
+    help
+        This option enables the structured SLE job laser marker sample. It is
+        intended for a custom PC host application, a TX packetizer board, and
+        an RX board that caches and executes complete G-code jobs locally.
+
+if ENABLE_LASER_SLE_JOB_SAMPLE
+source "ws63_laser_sle_job/Kconfig"
+endif
+
 # 注册你的 User 配置菜单
 source "application/samples/User/Kconfig"

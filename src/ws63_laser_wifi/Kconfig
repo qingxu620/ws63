@@ -14,7 +14,8 @@ config LASER_WIFI_AP_PSK
 
 config LASER_WIFI_AP_CHANNEL
     int "WiFi SoftAP channel"
-    default 6
+    range 1 13
+    default 13
     help
         SoftAP channel used by the controller.
 
@@ -22,7 +23,7 @@ config LASER_WIFI_TCP_PORT
     int "TCP Grbl port"
     default 5000
     help
-        TCP server port. Use LaserGRBL TCPSerial/Telnet to connect to this port.
+        TCP server port. Use LaserGRBL Telnet to connect to this port.
 
 config LASER_WIFI_WORK_AREA_X_MM
     int "Work area X in mm"

@@ -16,6 +16,7 @@
 #include "systick.h"
 #include "td_base.h"
 #include "td_type.h"
+#include "wifi_device.h"
 #include "wifi_hotspot.h"
 #include "wifi_hotspot_config.h"
 #include <ctype.h>
@@ -34,17 +35,125 @@ static char g_rx_line[RX_LINE_MAX];
 static int g_rx_pos = 0;
 static int g_listen_sock = -1;
 static volatile int g_client_sock = -1;
+static unsigned long g_tcp_rx_chunks = 0;
+static unsigned long g_tcp_rx_bytes = 0;
+static unsigned long g_tcp_rx_realtime_q = 0;
+static unsigned long g_tcp_tx_messages = 0;
+static unsigned long g_tcp_tx_bytes = 0;
+static unsigned long g_line_id = 0;
+static unsigned long g_ok_count = 0;
+static unsigned long g_error_count = 0;
+static unsigned long g_status_count = 0;
+static bool g_wifi_event_registered = false;
 #if LASER_WIFI_STATUS_PERIODIC
 static unsigned long g_last_status_ms = 0;
 #endif
 
 static void wait_motion_idle(uint32_t timeout_ms);
 
+static void wifi_event_scan_state_changed(int32_t state, int32_t size)
+{
+    unused(state);
+    unused(size);
+}
+
+static void wifi_event_connection_changed(int32_t state, const wifi_linked_info_stru *info, int32_t reason_code)
+{
+    unused(info);
+    osal_printk("[laser wifi] sta event state=%d reason=%d\r\n", state, reason_code);
+}
+
+static void wifi_event_softap_state_changed(int32_t state)
+{
+    osal_printk("[laser wifi] softap state=%d %s\r\n",
+                state, (state == WIFI_STATE_AVALIABLE) ? "available" : "unavailable");
+}
+
+static void wifi_event_softap_sta_join(const wifi_sta_info_stru *info)
+{
+    osal_printk("[laser wifi] softap sta join mac=%02x:**:**:**:%02x:%02x\r\n",
+                (info != NULL) ? info->mac_addr[0] : 0,
+                (info != NULL) ? info->mac_addr[4] : 0,
+                (info != NULL) ? info->mac_addr[5] : 0);
+}
+
+static void wifi_event_softap_sta_leave(const wifi_sta_info_stru *info)
+{
+    osal_printk("[laser wifi] softap sta leave mac=%02x:**:**:**:%02x:%02x\r\n",
+                (info != NULL) ? info->mac_addr[0] : 0,
+                (info != NULL) ? info->mac_addr[4] : 0,
+                (info != NULL) ? info->mac_addr[5] : 0);
+}
+
+static wifi_event_stru g_wifi_event_cb = {
+    .wifi_event_connection_changed = wifi_event_connection_changed,
+    .wifi_event_scan_state_changed = wifi_event_scan_state_changed,
+    .wifi_event_softap_state_changed = wifi_event_softap_state_changed,
+    .wifi_event_softap_sta_join = wifi_event_softap_sta_join,
+    .wifi_event_softap_sta_leave = wifi_event_softap_sta_leave,
+};
+
+static void wifi_register_events_once(void)
+{
+    if (g_wifi_event_registered) {
+        return;
+    }
+
+    errcode_t ret = wifi_register_event_cb(&g_wifi_event_cb);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[laser wifi] wifi_register_event_cb failed: 0x%x\r\n", ret);
+        return;
+    }
+
+    g_wifi_event_registered = true;
+    osal_printk("[laser wifi] wifi event callback ready\r\n");
+}
+
+static void log_tcp_rx_chunk(const uint8_t *buf, int len)
+{
+    g_tcp_rx_chunks++;
+    g_tcp_rx_bytes += (unsigned long)len;
+
+    if (len == 1 && buf[0] == '?') {
+        g_tcp_rx_realtime_q++;
+        if ((g_tcp_rx_realtime_q & 0x0fUL) == 1) {
+            osal_printk("[WIFI_RT] '?' count=%lu chunks=%lu bytes=%lu\r\n",
+                        g_tcp_rx_realtime_q, g_tcp_rx_chunks, g_tcp_rx_bytes);
+        }
+        return;
+    }
+
+    char preview[96];
+    int out = 0;
+    int limit = (len < 40) ? len : 40;
+    for (int i = 0; i < limit && out < (int)sizeof(preview) - 5; i++) {
+        uint8_t ch = buf[i];
+        if (ch == '\r') {
+            preview[out++] = '\\';
+            preview[out++] = 'r';
+        } else if (ch == '\n') {
+            preview[out++] = '\\';
+            preview[out++] = 'n';
+        } else if (ch == GRBL_RESET_CHAR) {
+            preview[out++] = '^';
+            preview[out++] = 'X';
+        } else if (isprint(ch)) {
+            preview[out++] = (char)ch;
+        } else {
+            out += snprintf(&preview[out], sizeof(preview) - (size_t)out, "\\x%02X", ch);
+        }
+    }
+    preview[out] = '\0';
+    osal_printk("[WIFI_TCP_RX] chunk=%lu len=%d total=%lu data=\"%s%s\"\r\n",
+                g_tcp_rx_chunks, len, g_tcp_rx_bytes, preview, (len > limit) ? "..." : "");
+}
+
 static void wifi_send_str(const char *str)
 {
     int sock = g_client_sock;
     const char *ptr = str;
     size_t left = strlen(str);
+    size_t total = left;
 
     while (sock >= 0 && left > 0) {
         int sent = send(sock, ptr, left, 0);
@@ -55,16 +164,26 @@ static void wifi_send_str(const char *str)
         ptr += sent;
         left -= (size_t)sent;
     }
+
+    if (total > 0) {
+        g_tcp_tx_messages++;
+        g_tcp_tx_bytes += (unsigned long)total;
+    }
 }
 
 static void send_ok(void)
 {
+    g_ok_count++;
+    osal_printk("[WIFI_OK] count=%lu tx_msg=%lu tx_bytes=%lu\r\n",
+                g_ok_count, g_tcp_tx_messages, g_tcp_tx_bytes);
     wifi_send_str("ok\r\n");
 }
 
 static void send_error(int code)
 {
     char buf[24];
+    g_error_count++;
+    osal_printk("[WIFI_ERROR] count=%lu code=%d\r\n", g_error_count, code);
     snprintf(buf, sizeof(buf), "error:%d\r\n", code);
     wifi_send_str(buf);
 }
@@ -199,10 +318,16 @@ static void send_status_report(void)
 {
     char buf[128];
     const char *state = machine_is_idle() ? "Idle" : "Run";
+    g_status_count++;
     snprintf(buf, sizeof(buf), "<%s|MPos:%.3f,%.3f,0.000|FS:%d,%d|Ln:%lu>\r\n", state,
              motion_executor_get_x(), motion_executor_get_y(), (int)gcode_processor_get_feed_rate(),
              (int)gcode_processor_get_laser_power(), gcode_processor_get_line_count());
     wifi_send_str(buf);
+    if ((g_status_count & 0x0fUL) == 1) {
+        osal_printk("[WIFI_STATUS] count=%lu state=%s x=%.3f y=%.3f q=%u busy=%d\r\n",
+                    g_status_count, state, motion_executor_get_x(), motion_executor_get_y(),
+                    (unsigned int)motion_executor_queue_depth(), motion_executor_is_busy() ? 1 : 0);
+    }
 }
 
 static void send_periodic_status(void)
@@ -231,7 +356,7 @@ static void send_wait_status(unsigned long *last_status_ms)
 
 static bool handle_dollar_command(const char *line)
 {
-    char buf[512];
+    char buf[768];
 
     if (line[0] != '$') {
         return false;
@@ -334,7 +459,7 @@ static bool handle_dollar_command(const char *line)
         wifi_send_str(buf);
     } else if (strcmp(line, "$D") == 0) {
         snprintf(buf, sizeof(buf),
-                 "[MSG:wifi motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu]\r\nok\r\n",
+                 "[MSG:wifi motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu tcp_rx_chunks=%lu tcp_rx_bytes=%lu qmark=%lu tcp_tx_msg=%lu tcp_tx_bytes=%lu lines=%lu ok=%lu err=%lu status=%lu]\r\nok\r\n",
                  motion_executor_is_busy() ? 1 : 0, (unsigned int)motion_executor_queue_depth(),
                  motion_executor_abort_requested() ? 1 : 0, motion_executor_worker_started() ? 1 : 0,
                  motion_executor_enqueued_count(), motion_executor_executed_count(),
@@ -345,7 +470,9 @@ static bool handle_dollar_command(const char *line)
                  (unsigned int)laser_pwm_last_requested_power(), (unsigned int)laser_pwm_last_effective_power(),
                  motion_executor_max_sample_late_us(), motion_executor_late_sample_count(),
                  motion_executor_missed_sample_count(), motion_executor_motion_segment_count(),
-                 motion_executor_short_segment_count());
+                 motion_executor_short_segment_count(), g_tcp_rx_chunks, g_tcp_rx_bytes,
+                 g_tcp_rx_realtime_q, g_tcp_tx_messages, g_tcp_tx_bytes, g_line_id,
+                 g_ok_count, g_error_count, g_status_count);
         wifi_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
         wait_motion_idle(MOTION_END_DRAIN_TIMEOUT_MS);
@@ -378,6 +505,7 @@ static bool handle_dollar_command(const char *line)
 static void handle_emergency_stop(void)
 {
     motion_cmd_t cmd;
+    osal_printk("[WIFI_SAFE_STOP] emergency stop\r\n");
     gcode_processor_build_emergency_stop(&cmd);
     motion_executor_flush();
     motion_executor_execute(&cmd);
@@ -437,6 +565,8 @@ static void execute_gcode_line(const char *line, int len)
     bool drain_before_ok = line_contains_mcode(line, 5);
 
     if (gcode_process_line(line, len, cmds, 4, &cmd_count)) {
+        osal_printk("[WIFI_PARSE] id=%lu cmds=%d drain=%d line=\"%s\"\r\n",
+                    g_line_id, cmd_count, drain_before_ok ? 1 : 0, line);
         for (int i = 0; i < cmd_count; i++) {
             if (!enqueue_motion_cmd(&cmds[i])) {
                 return;
@@ -459,6 +589,9 @@ static void process_line(const char *line, int len)
     if (len == 0) {
         return;
     }
+
+    g_line_id++;
+    osal_printk("[WIFI_LINE] id=%lu len=%d line=\"%s\"\r\n", g_line_id, len, line);
 
     if (strcmp(line, "?") == 0) {
         send_status_report();
@@ -516,6 +649,8 @@ static int start_softap(void)
     while (wifi_is_wifi_inited() == 0) {
         osal_msleep(10);
     }
+    osal_printk("[laser wifi] wifi init ready\r\n");
+    wifi_register_events_once();
 
     (void)memcpy_s(hapd_conf.ssid, sizeof(hapd_conf.ssid), LASER_WIFI_AP_SSID,
                    strlen(LASER_WIFI_AP_SSID) + 1);
@@ -561,9 +696,9 @@ static int start_softap(void)
         return -1;
     }
 
-    osal_printk("[laser wifi] softap ssid=%s ip=%d.%d.%d.%d port=%d\r\n", LASER_WIFI_AP_SSID,
+    osal_printk("[laser wifi] softap ssid=%s ip=%d.%d.%d.%d port=%d channel=%d hidden_flag=%d\r\n", LASER_WIFI_AP_SSID,
                 LASER_WIFI_AP_IP_A, LASER_WIFI_AP_IP_B, LASER_WIFI_AP_IP_C, LASER_WIFI_AP_IP_D,
-                LASER_WIFI_TCP_PORT);
+                LASER_WIFI_TCP_PORT, LASER_WIFI_AP_CHANNEL, config.hidden_ssid_flag);
     return 0;
 }
 
@@ -611,6 +746,9 @@ static void close_client(void)
     if (sock >= 0) {
         lwip_close(sock);
     }
+    osal_printk("[WIFI_CLIENT_CLOSE] rx_chunks=%lu rx_bytes=%lu tx_msg=%lu tx_bytes=%lu lines=%lu ok=%lu err=%lu status=%lu\r\n",
+                g_tcp_rx_chunks, g_tcp_rx_bytes, g_tcp_tx_messages, g_tcp_tx_bytes,
+                g_line_id, g_ok_count, g_error_count, g_status_count);
     g_rx_pos = 0;
     motion_executor_flush();
     laser_force_off();
@@ -640,7 +778,16 @@ int task_wifi_grbl_entry(void *arg)
 
         g_client_sock = client;
         g_rx_pos = 0;
-        osal_printk("[laser wifi] client connected\r\n");
+        g_tcp_rx_chunks = 0;
+        g_tcp_rx_bytes = 0;
+        g_tcp_rx_realtime_q = 0;
+        g_tcp_tx_messages = 0;
+        g_tcp_tx_bytes = 0;
+        g_line_id = 0;
+        g_ok_count = 0;
+        g_error_count = 0;
+        g_status_count = 0;
+        osal_printk("[laser wifi] client connected sock=%d\r\n", client);
         send_grbl_startup("tcp-connect");
 
         while (g_client_sock >= 0) {
@@ -649,6 +796,7 @@ int task_wifi_grbl_entry(void *arg)
                 osal_printk("[laser wifi] client disconnected ret=%d errno=%d\r\n", ret, errno);
                 break;
             }
+            log_tcp_rx_chunk(buf, ret);
             for (int i = 0; i < ret; i++) {
                 process_byte(buf[i]);
             }
