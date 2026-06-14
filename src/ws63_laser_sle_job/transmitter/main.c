@@ -44,7 +44,8 @@ static uint32_t g_job_total = 0;
 static uint32_t g_job_offset = 0;
 static uint16_t g_job_crc = 0;
 static bool g_data_mode = false;
-static uint8_t g_job_buffer[JOB_CACHE_SIZE];
+static uint8_t g_job_chunk[JOB_TX_DATA_CHUNK_MAX];
+static uint16_t g_job_chunk_len = 0;
 static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
 static char g_line[TX_LINE_MAX];
 static uint16_t g_line_len = 0;
@@ -216,9 +217,9 @@ static errcode_t send_job_end(void)
     return send_packet_wait_ack(PKT_JOB_END, &end, sizeof(end));
 }
 
-static errcode_t send_job_data_chunk(uint32_t offset, uint16_t chunk_len)
+static errcode_t send_job_data_chunk(uint32_t offset, const uint8_t *data, uint16_t chunk_len)
 {
-    if (chunk_len == 0) {
+    if (chunk_len == 0 || data == NULL) {
         return ERRCODE_SUCC;
     }
 
@@ -227,48 +228,30 @@ static errcode_t send_job_data_chunk(uint32_t offset, uint16_t chunk_len)
     p->job_id = g_job_id;
     p->offset = offset;
     p->data_len = chunk_len;
-    memcpy(p->data, &g_job_buffer[offset], chunk_len);
+    memcpy(p->data, data, chunk_len);
 
     errcode_t ret = send_packet_wait_ack(PKT_JOB_DATA, payload,
                                          (uint16_t)(sizeof(job_data_payload_t) + chunk_len));
     if (ret == ERRCODE_SUCC) {
         osal_printk("[JOB_TX_DATA_SENT] job=%u off=%u len=%u next=%u/%u\r\n",
-                    (unsigned int)g_job_id, (unsigned int)p->offset,
+                    (unsigned int)g_job_id, (unsigned int)offset,
                     (unsigned int)chunk_len, (unsigned int)(offset + chunk_len),
                     (unsigned int)g_job_total);
     }
     return ret;
 }
 
-static errcode_t send_buffered_job_to_rx(void)
+static errcode_t flush_job_chunk(void)
 {
-    osal_printk("[JOB_TX_UPLOAD_BEGIN] job=%u size=%u chunk=%u\r\n",
-                (unsigned int)g_job_id, (unsigned int)g_job_total,
-                (unsigned int)JOB_TX_DATA_CHUNK_MAX);
-
-    uint32_t offset = 0;
-    while (offset < g_job_total) {
-        uint32_t remain = g_job_total - offset;
-        uint16_t chunk_len = (remain > JOB_TX_DATA_CHUNK_MAX) ?
-            JOB_TX_DATA_CHUNK_MAX : (uint16_t)remain;
-        if (send_job_data_chunk(offset, chunk_len) != ERRCODE_SUCC) {
-            osal_printk("[JOB_TX_UPLOAD_FAIL] job=%u off=%u len=%u\r\n",
-                        (unsigned int)g_job_id, (unsigned int)offset,
-                        (unsigned int)chunk_len);
-            return ERRCODE_FAIL;
-        }
-        offset += chunk_len;
-        osal_yield();
+    if (g_job_chunk_len == 0) {
+        return ERRCODE_SUCC;
     }
-
-    if (send_job_end() != ERRCODE_SUCC) {
-        osal_printk("[JOB_TX_UPLOAD_FAIL] job=%u end_failed\r\n", (unsigned int)g_job_id);
-        return ERRCODE_FAIL;
+    uint32_t offset = g_job_offset - g_job_chunk_len;
+    errcode_t ret = send_job_data_chunk(offset, g_job_chunk, g_job_chunk_len);
+    if (ret == ERRCODE_SUCC) {
+        g_job_chunk_len = 0;
     }
-
-    osal_printk("[JOB_TX_UPLOAD_DONE] job=%u size=%u crc=0x%04x\r\n",
-                (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
-    return ERRCODE_SUCC;
+    return ret;
 }
 
 static void handle_data_byte(uint8_t ch)
@@ -280,8 +263,9 @@ static void handle_data_byte(uint8_t ch)
         return;
     }
 
-    g_job_buffer[g_job_offset] = ch;
+    g_job_chunk[g_job_chunk_len++] = ch;
     g_job_offset++;
+
     if (g_job_offset >= g_data_log_next || g_job_offset >= g_job_total) {
         osal_printk("[JOB_TX_DATA_RX] job=%u off=%u/%u\r\n",
                     (unsigned int)g_job_id, (unsigned int)g_job_offset,
@@ -291,28 +275,24 @@ static void handle_data_byte(uint8_t ch)
         }
     }
 
-    if ((g_job_offset % JOB_TX_DATA_CHUNK_MAX) == 0U || g_job_offset >= g_job_total) {
-        osal_printk("[JOB_TX_HOST_DATA_ACK] job=%u off=%u/%u\r\n",
-                    (unsigned int)g_job_id, (unsigned int)g_job_offset,
-                    (unsigned int)g_job_total);
+    if (g_job_chunk_len >= JOB_TX_DATA_CHUNK_MAX || g_job_offset >= g_job_total) {
+        if (flush_job_chunk() != ERRCODE_SUCC) {
+            osal_printk("[JOB_TX] chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
+            g_data_mode = false;
+            return;
+        }
         host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
                    PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
     }
 
     if (g_job_offset >= g_job_total) {
         g_data_mode = false;
-        osal_printk("[JOB_TX_DATA_COMPLETE] job=%u size=%u crc=0x%04x, start SLE upload\r\n",
+        osal_printk("[JOB_TX_DATA_COMPLETE] job=%u size=%u crc=0x%04x\r\n",
                     (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
-        errcode_t upload_ret = send_buffered_job_to_rx();
-        osal_printk("[JOB_TX_UPLOAD_RET] ret=0x%x job=%u off=%u/%u status=%s\r\n",
-                    upload_ret, (unsigned int)g_job_id, (unsigned int)g_job_offset,
-                    (unsigned int)g_job_total, sle_job_client_get_status());
-        if (upload_ret == ERRCODE_SUCC) {
+        if (send_job_end() == ERRCODE_SUCC) {
             osal_printk("[JOB_TX] job upload complete job=%u size=%u crc=0x%04x\r\n",
                         (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
             host_sendf("@JOB_READY job=%u size=%u\r\n", (unsigned int)g_job_id, (unsigned int)g_job_total);
-            osal_printk("[JOB_TX_READY_SENT] job=%u uart_rx_waiting=1\r\n",
-                        (unsigned int)g_job_id);
         }
     }
 }
@@ -333,7 +313,7 @@ static void handle_command_line(char *line)
         unsigned long total;
         unsigned long crc;
         if (sscanf(line + 7, "%lu %lu %lx", &job_id, &total, &crc) != 3 ||
-            total == 0 || total > JOB_CACHE_SIZE) {
+            total == 0) {
             host_sendf("@ERR bad_begin\r\n");
             return;
         }
@@ -345,6 +325,7 @@ static void handle_command_line(char *line)
         g_job_total = (uint32_t)total;
         g_job_crc = (uint16_t)crc;
         g_job_offset = 0;
+        g_job_chunk_len = 0;
         g_data_log_next = TX_DATA_RX_LOG_STEP;
         g_data_mode = true;
         osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x\r\n",
@@ -436,9 +417,6 @@ static int uart_rx_task(void *arg)
         }
         data_idle_ticks = 0;
         idle_ticks = 0;
-        osal_printk("[JOB_TX_UART_BYTE] ch=0x%02x data_mode=%u line_len=%u off=%u/%u\r\n",
-                    ch, (unsigned int)g_data_mode, (unsigned int)g_line_len,
-                    (unsigned int)g_job_offset, (unsigned int)g_job_total);
 
         if (g_data_mode) {
             handle_data_byte(ch);
@@ -452,9 +430,6 @@ static int uart_rx_task(void *arg)
                 g_line_len = 0;
             }
         } else if (g_line_len < (TX_LINE_MAX - 1U)) {
-            if (g_line_len == 0) {
-                osal_printk("[JOB_TX_CMD_RX] first=0x%02x\r\n", ch);
-            }
             g_line[g_line_len++] = (char)ch;
         } else {
             osal_printk("[JOB_TX_CMD] line too long, reset parser\r\n");
