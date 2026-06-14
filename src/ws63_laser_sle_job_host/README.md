@@ -1,42 +1,144 @@
-# WS63 Laser Host App
+# WS63 Laser SLE Job Host
 
-用于调试 WS63 激光打标链路的轻量上位机。
+这是 `ws63_laser_sle_job` 的 PC 端调试上位机。
 
-目标不是替代 LaserGRBL 的图像处理和路径规划，而是验证通信链路和固件响应：
+它不是 LaserGRBL，也不是旧的逐行 G-code 串口发送器。它用于验证新的 SLE 结构化任务包链路：
 
-- 串口连接 COM8 / 115200
-- G-code 按行发送
-- 每行等待 `ok` / `error:x`
-- `?` 实时状态查询不等待 `ok`
-- 超时后自动查询 `?` 和 `$D`
-- 记录每行发送时间、响应时间和 RTT
-- 支持 `M5`、Ctrl-X 急停
+```text
+PC 上位机
+  -> USB 串口
+TX 发射板
+  -> SLE 标准任务包
+RX 接收板
+  -> RAM job cache
+  -> 本地 G-code 执行
+```
 
-当前版本是串口调试工具。后续 WiFi 方案跑通后，可以在这个独立目录里继续增加 TCP 客户端模式。
+## 功能
+
+- 连接 TX 发射板串口。
+- 打开或编辑 G-code 文件。
+- 自动计算 G-code 原始字节的 CRC16-CCITT。
+- 发送：
+
+```text
+@BEGIN <job_id> <total_size> <crc16>
+```
+
+- 等待 TX 返回：
+
+```text
+@DATA_READY job=<job_id> size=<total_size>
+```
+
+- 发送精确 `total_size` 字节 G-code 原始内容。
+- 等待：
+
+```text
+@JOB_READY job=<job_id> size=<total_size>
+```
+
+- 支持：
+
+```text
+@EXEC_START <job_id>
+@EXEC_STOP
+@ABORT
+@STATUS
+```
 
 ## 运行
 
-在 Windows 上安装 Python 后：
+在 Windows 上安装 Python 3 后，在本目录执行：
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Linux/WSL 下如果能访问串口，也可以直接运行。
+如果不想污染系统 Python，建议：
 
-## 推荐测试
-
-先不要用 LaserGRBL，使用本工具发送：
-
-```gcode
-$X
-G90
-M3 S50 F1000
-G1 X12 Y5 F1000
-G1 X0 Y0 F1000
-M5
-$D
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
 ```
 
-如果这里逐行稳定，再回头分析 LaserGRBL 的连接/轮询/流式发送策略。
+## 使用顺序
+
+1. 烧录并上电 RX 接收板。
+2. 烧录并上电 TX 发射板。
+3. 确认 COM26 出现 RX 日志：
+
+```text
+[job_rx] advertising as 'sle_job_rx'
+[job_rx] SLE connected conn_id=...
+```
+
+4. 确认 COM24 出现 TX 日志：
+
+```text
+[tx] connected
+[tx] ready!
+```
+
+5. 打开本工具，选择 TX 发射板对应的串口，例如 COM8。
+6. 点击 `连接`。
+7. 先点 `@STATUS`。
+8. 点 `上传任务`。
+9. 等待日志出现 `JOB_READY`。
+10. 点 `执行`，或直接点 `上传并执行`。
+
+## 第一版建议 G-code
+
+先用很短的文件：
+
+```gcode
+G90
+M3 S50
+G1 X10 Y10 F1000
+M5
+```
+
+第一版 RX RAM 缓存默认 64KB。不要先测试大图，先把协议闭环跑通。
+
+## 日志判断
+
+PC 上位机日志只说明 PC 与 TX 串口协议是否正常。
+
+真正定位问题仍然要看：
+
+- COM24：TX 发射板日志。
+- COM26：RX 接收板日志。
+
+正常上传时，COM24 应看到：
+
+```text
+[JOB_TX_FRAME] type=0x01 ...
+[JOB_TX_ACK] ack_type=0x01 ... status=0
+[JOB_TX_FRAME] type=0x02 ...
+[JOB_TX_ACK] ack_type=0x02 ... status=0
+[JOB_TX_FRAME] type=0x03 ...
+[JOB_TX_ACK] ack_type=0x03 ... status=0
+```
+
+COM26 应看到：
+
+```text
+[JOB_BEGIN] ... st=0
+[JOB_DATA] ... st=0
+[JOB_END] ... st=0 state=JOB_READY
+[EXEC_START] ... st=0
+[JOB_EXEC] start ...
+[JOB_EXEC] done ...
+```
+
+如果出现 `@NACK` 或 `@ERR`，保存 PC 日志、COM24、COM26 三份日志再分析。
+
+## 注意
+
+- 本工具连接的是 TX 发射板串口，不是 RX 接收板调试串口。
+- 本工具不兼容 LaserGRBL 的实时串口协议。
+- 本工具不会逐行等待 Grbl `ok`。
+- G-code 会作为一个完整任务上传，RX 校验完成后再本地执行。
