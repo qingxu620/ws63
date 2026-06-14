@@ -202,8 +202,8 @@ class SleJobSerialClient:
     def upload_job(self, job_id: int, gcode: bytes, timeout: float) -> None:
         if not gcode:
             raise RuntimeError("G-code 内容为空")
-        if len(gcode) > 64 * 1024:
-            raise RuntimeError("第一版 RX RAM 缓存默认 64KB，请先缩小 G-code 文件")
+        if len(gcode) > 128 * 1024:
+            raise RuntimeError("第一版 RX RAM 缓存默认 128KB，请先缩小 G-code 文件")
 
         crc = crc16_ccitt(gcode)
         with self._command_lock:
