@@ -246,7 +246,7 @@ static int job_exec_task(void *arg)
                     return 0;
                 }
                 g_executed_lines++;
-                osal_msleep(1);
+                osal_yield();
                 if ((g_executed_lines % JOB_STATUS_LOG_PERIOD_LINES) == 0) {
                     osal_printk("[JOB_EXEC] line=%u pos=%u queue=%u\r\n",
                                 (unsigned int)g_executed_lines, (unsigned int)pos,
