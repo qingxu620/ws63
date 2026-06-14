@@ -37,6 +37,8 @@ static osal_mutex g_stream_mutex;
 static osal_semaphore g_stream_sem;
 
 static void wait_motion_idle(uint32_t timeout_ms);
+static bool g_session_active = false;
+static unsigned long g_rx_line_seq = 0;
 
 static const char *motion_cmd_name(uint8_t cmd)
 {
@@ -58,24 +60,79 @@ static const char *motion_cmd_name(uint8_t cmd)
     }
 }
 
+static bool is_supported_gcode_word(char letter)
+{
+    switch ((char)toupper((unsigned char)letter)) {
+        case 'G':
+        case 'M':
+        case 'X':
+        case 'Y':
+        case 'Z':
+        case 'F':
+        case 'S':
+        case 'I':
+        case 'J':
+        case 'R':
+        case 'P':
+        case 'L':
+        case 'N':
+        case 'T':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool is_number_start(char ch, char next)
+{
+    return isdigit((unsigned char)ch) || ch == '+' || ch == '-' ||
+           (ch == '.' && isdigit((unsigned char)next));
+}
+
+static bool gcode_line_is_well_formed(const char *line, int len)
+{
+    if (line == NULL || len <= 0) {
+        return true;
+    }
+
+    for (int i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)line[i];
+        if (ch == ';') {
+            break;
+        }
+        if (ch == '(') {
+            while (i < len && line[i] != ')') {
+                i++;
+            }
+            continue;
+        }
+        if (!isalpha(ch)) {
+            continue;
+        }
+        if (i > 0 && isalpha((unsigned char)line[i - 1])) {
+            continue;
+        }
+        if (!is_supported_gcode_word((char)ch)) {
+            return false;
+        }
+        if (i + 1 >= len || !is_number_start(line[i + 1], (i + 2 < len) ? line[i + 2] : '\0')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void stream_write(const void *data, uint16_t len)
 {
     if (data == NULL || len == 0 || g_write_cb == NULL) {
         return;
     }
-    unsigned long start_ms = (unsigned long)uapi_systick_get_ms();
     errcode_t ret = g_write_cb(data, len);
-#if SLE_BRIDGE_TIMING_VERBOSE
-    osal_printk("[BRIDGE_TIMING_RX_RESP] resp_len=%u write_ms=%lu ret=0x%x\r\n",
-                (unsigned int)len, (unsigned long)uapi_systick_get_ms() - start_ms,
-                (unsigned int)ret);
-#else
-    unused(start_ms);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[bridge rx] response send failed ret=0x%x len=%u\r\n",
                     (unsigned int)ret, (unsigned int)len);
     }
-#endif
 }
 
 static void stream_send_str(const char *str)
@@ -102,8 +159,8 @@ static void send_grbl_startup(const char *source)
 {
     char buf[128];
     stream_send_str("\r\nGrbl 1.1f ['$' for help]\r\n");
-    snprintf(buf, sizeof(buf), "[MSG:WS63 SLE Bridge RX ready source=%s uptime=%lums reset=0x%04x count=%u]\r\n",
-             source, (unsigned long)uapi_systick_get_ms(), (unsigned int)get_cpu_utils_reset_cause(),
+    snprintf(buf, sizeof(buf), "[MSG:WS63 SLE Bridge RX ready source=%s uptime=%ums reset=0x%04x count=%u]\r\n",
+             source, (unsigned int)uapi_systick_get_ms(), (unsigned int)get_cpu_utils_reset_cause(),
              get_cpu_utils_reset_count());
     stream_send_str(buf);
 }
@@ -143,45 +200,47 @@ static bool machine_is_idle(void)
 
 static void send_settings_report(void)
 {
-    char buf[64];
-
-    stream_send_str("$0=10\r\n");
-    stream_send_str("$1=25\r\n");
-    stream_send_str("$2=0\r\n");
-    stream_send_str("$3=0\r\n");
-    stream_send_str("$4=0\r\n");
-    stream_send_str("$5=0\r\n");
-    stream_send_str("$6=0\r\n");
-    stream_send_str("$10=1\r\n");
-    stream_send_str("$11=0.010\r\n");
-    stream_send_str("$12=0.002\r\n");
-    stream_send_str("$13=0\r\n");
-    stream_send_str("$20=0\r\n");
-    stream_send_str("$21=0\r\n");
-    stream_send_str("$22=0\r\n");
-    stream_send_str("$23=0\r\n");
-    stream_send_str("$24=25.000\r\n");
-    stream_send_str("$25=500.000\r\n");
-    stream_send_str("$26=250\r\n");
-    stream_send_str("$27=1.000\r\n");
-    stream_send_str("$30=1000\r\n");
-    stream_send_str("$31=0\r\n");
-    stream_send_str("$32=1\r\n");
-    stream_send_str("$100=80.000\r\n");
-    stream_send_str("$101=80.000\r\n");
-    stream_send_str("$102=250.000\r\n");
-    stream_send_str("$110=8000.000\r\n");
-    stream_send_str("$111=8000.000\r\n");
-    stream_send_str("$112=500.000\r\n");
-    stream_send_str("$120=1000.000\r\n");
-    stream_send_str("$121=1000.000\r\n");
-    stream_send_str("$122=10.000\r\n");
-    snprintf(buf, sizeof(buf), "$130=%.3f\r\n", GALVO_WORK_AREA_X_MM);
-    stream_send_str(buf);
-    snprintf(buf, sizeof(buf), "$131=%.3f\r\n", GALVO_WORK_AREA_Y_MM);
-    stream_send_str(buf);
-    stream_send_str("$132=0.000\r\n");
-    send_ok();
+    char buf[768];
+    int n = snprintf(buf, sizeof(buf),
+        "$0=10\r\n"
+        "$1=25\r\n"
+        "$2=0\r\n"
+        "$3=0\r\n"
+        "$4=0\r\n"
+        "$5=0\r\n"
+        "$6=0\r\n"
+        "$10=1\r\n"
+        "$11=0.010\r\n"
+        "$12=0.002\r\n"
+        "$13=0\r\n"
+        "$20=0\r\n"
+        "$21=0\r\n"
+        "$22=0\r\n"
+        "$23=0\r\n"
+        "$24=25.000\r\n"
+        "$25=500.000\r\n"
+        "$26=250\r\n"
+        "$27=1.000\r\n"
+        "$30=1000\r\n"
+        "$31=0\r\n"
+        "$32=1\r\n"
+        "$100=80.000\r\n"
+        "$101=80.000\r\n"
+        "$102=250.000\r\n"
+        "$110=8000.000\r\n"
+        "$111=8000.000\r\n"
+        "$112=500.000\r\n"
+        "$120=1000.000\r\n"
+        "$121=1000.000\r\n"
+        "$122=10.000\r\n"
+        "$130=%.3f\r\n"
+        "$131=%.3f\r\n"
+        "$132=0.000\r\n"
+        "ok\r\n",
+        GALVO_WORK_AREA_X_MM, GALVO_WORK_AREA_Y_MM);
+    if (n > 0) {
+        stream_write(buf, (uint16_t)n);
+    }
 }
 
 static void send_coordinate_report(void)
@@ -327,9 +386,7 @@ static bool handle_dollar_command(const char *line)
     } else if (strcmp(line, "$N") == 0) {
         send_startup_blocks();
     } else if (strcmp(line, "$I") == 0) {
-        stream_send_str("[VER:1.1f.20260612:WS63_SLE_BRIDGE]\r\n");
-        stream_send_str("[OPT:V,15,128]\r\n");
-        send_ok();
+        stream_send_str("[VER:1.1f.20260612:WS63_SLE_BRIDGE]\r\n[OPT:V,15,128]\r\nok\r\n");
     } else if (strcmp(line, "$G") == 0) {
         snprintf(buf, sizeof(buf), "[GC:G0 G54 G17 G21 G%d G94 M%d M9 T0 F%d S%d]\r\nok\r\n",
                  gcode_processor_is_absolute_mode() ? 90 : 91, gcode_processor_laser_is_enabled() ? 3 : 5,
@@ -339,14 +396,18 @@ static bool handle_dollar_command(const char *line)
         bridge_rx_stats_t rx_stats = {0};
         bridge_rx_stats_get(&rx_stats);
         snprintf(buf, sizeof(buf),
-                 "[MSG:bridge_rx motion busy=%d queue=%u qmax=%u qwait=%lu qtimeout=%lu abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu resp=%lu notify_retry=%lu notify_fail=%lu max_resp_ms=%lu]\r\nok\r\n",
+                 "[MSG:bridge_rx motion busy=%d queue=%u qmax=%u qwait=%lu qtimeout=%lu abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f output_laser=%d output_power=%u modal_laser=%d modal_s=%.0f modal_f=%.0f late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu resp=%lu notify_retry=%lu notify_fail=%lu max_resp_ms=%lu]\r\nok\r\n",
                  motion_executor_is_busy() ? 1 : 0, (unsigned int)motion_executor_queue_depth(),
                  (unsigned int)motion_executor_max_queue_depth(), motion_executor_queue_wait_count(),
                  motion_executor_enqueue_timeout_count(), motion_executor_abort_requested() ? 1 : 0,
                  motion_executor_worker_started() ? 1 : 0,
                  motion_executor_enqueued_count(), motion_executor_executed_count(),
                  motion_executor_get_x(), motion_executor_get_y(), laser_is_enabled() ? 1 : 0,
-                 (unsigned int)laser_get_power(), motion_executor_max_sample_late_us(),
+                 (unsigned int)laser_get_power(),
+                 gcode_processor_laser_is_enabled() ? 1 : 0,
+                 gcode_processor_get_laser_power(),
+                 gcode_processor_get_feed_rate(),
+                 motion_executor_max_sample_late_us(),
                  motion_executor_late_sample_count(), motion_executor_missed_sample_count(),
                  motion_executor_motion_segment_count(), motion_executor_short_segment_count(),
                  rx_stats.resp_generated, rx_stats.notify_retry, rx_stats.notify_fail,
@@ -432,88 +493,140 @@ static bool handle_realtime_char(uint8_t ch)
     }
 }
 
-static const char *execute_gcode_line(const char *line, int len)
+static const char *execute_gcode_line(const char *line, int len, unsigned long line_id)
 {
     motion_cmd_t cmds[4];
     int cmd_count = 0;
     const char *first_cmd = "NONE";
 
-    if (gcode_process_line(line, len, cmds, 4, &cmd_count)) {
+    bool parsed = gcode_process_line(line, len, cmds, 4, &cmd_count);
+#if SLE_BRIDGE_TIMING_VERBOSE
+    osal_printk("[RX_PARSE] %s m=%d s=%.0f f=%.0f motion=%d modal_update=%d\r\n",
+                line,
+                gcode_processor_laser_is_enabled() ? 3 : 5,
+                gcode_processor_get_laser_power(),
+                gcode_processor_get_feed_rate(),
+                cmd_count,
+                parsed && cmd_count == 0 ? 1 : 0);
+#endif
+
+    if (parsed) {
         if (cmd_count > 0) {
             first_cmd = motion_cmd_name(cmds[0].cmd);
         }
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_PARSE] id=%u line=\"%s\" parsed=1 cmds=%d first=%s s=%u f=%u laser=%u\r\n",
+                    (unsigned int)line_id, line, cmd_count, first_cmd,
+                    (unsigned int)gcode_processor_get_laser_power(),
+                    (unsigned int)gcode_processor_get_feed_rate(),
+                    (unsigned int)(gcode_processor_laser_is_enabled() ? 1U : 0U));
+#endif
+        bool has_m5 = false;
         for (int i = 0; i < cmd_count; i++) {
             if (cmds[i].cmd == CMD_LASER_OFF) {
+                motion_executor_flush();
                 laser_force_off();
-            }
-            if (!enqueue_motion_cmd(&cmds[i])) {
-                return "ENQ_FAIL";
+                has_m5 = true;
+#if SLE_BRIDGE_DEBUG_TRACE
+                osal_printk("[RX_M5_FLUSH] id=%u line=\"%s\"\r\n",
+                            (unsigned int)line_id, line);
+#endif
+                break;
             }
         }
+        if (!has_m5) {
+            for (int i = 0; i < cmd_count; i++) {
+                if (!enqueue_motion_cmd(&cmds[i])) {
+#if SLE_BRIDGE_DEBUG_TRACE
+                    osal_printk("[RX_ENQ_FAIL] id=%u line=\"%s\" cmd=%s index=%d\r\n",
+                                (unsigned int)line_id, line, first_cmd, i);
+#endif
+                    return "ENQ_FAIL";
+                }
+            }
+        }
+    } else {
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_PARSE] id=%u line=\"%s\" parsed=0 cmds=0\r\n",
+                    (unsigned int)line_id, line);
+#endif
     }
 
     send_ok();
+#if SLE_BRIDGE_TIMING_VERBOSE
+    osal_printk("[RX_RESP] ok\r\n");
+#endif
+#if SLE_BRIDGE_DEBUG_TRACE
+    osal_printk("[RX_OK] id=%u cmd=%s line=\"%s\"\r\n",
+                (unsigned int)line_id, first_cmd, line);
+#endif
     return first_cmd;
 }
 
 static void process_line(const char *line, int len)
 {
-    unsigned long start_ms = (unsigned long)uapi_systick_get_ms();
-
     if (len == 0) {
         return;
     }
 
+    unsigned long line_id = ++g_rx_line_seq;
+
     if (strcmp(line, "?") == 0) {
         send_status_report();
-#if SLE_BRIDGE_TIMING_VERBOSE
-        osal_printk("[BRIDGE_TIMING_RX] line=\"?\" rx_process_ms=%lu queue=%u abort=%d\r\n",
-                    (unsigned long)uapi_systick_get_ms() - start_ms,
-                    (unsigned int)motion_executor_queue_depth(),
-                    motion_executor_abort_requested() ? 1 : 0);
-#endif
         return;
     }
+
+#if SLE_BRIDGE_DEBUG_TRACE
+    osal_printk("[RX_LINE_IN] id=%u len=%d line=\"%s\"\r\n",
+                (unsigned int)line_id, len, line);
+#endif
 
     if (strcmp(line, "!") == 0 || strcmp(line, "$STOP") == 0 || strcmp(line, "M112") == 0) {
         handle_emergency_stop();
         send_ok();
 #if SLE_BRIDGE_TIMING_VERBOSE
-        osal_printk("[BRIDGE_TIMING_RX] line=\"%s\" rx_process_ms=%lu queue=%u abort=%d\r\n",
-                    line, (unsigned long)uapi_systick_get_ms() - start_ms,
-                    (unsigned int)motion_executor_queue_depth(),
-                    motion_executor_abort_requested() ? 1 : 0);
+        osal_printk("[RX_LINE] %s -> e-stop ok\r\n", line);
+#endif
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_OK] id=%u cmd=ESTOP line=\"%s\"\r\n",
+                    (unsigned int)line_id, line);
 #endif
         return;
     }
 
     if (handle_dollar_command(line)) {
 #if SLE_BRIDGE_TIMING_VERBOSE
-        osal_printk("[BRIDGE_TIMING_RX] line=\"%s\" rx_process_ms=%lu queue=%u abort=%d\r\n",
-                    line, (unsigned long)uapi_systick_get_ms() - start_ms,
-                    (unsigned int)motion_executor_queue_depth(),
-                    motion_executor_abort_requested() ? 1 : 0);
+        osal_printk("[RX_LINE] %s -> dollar\r\n", line);
+#endif
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_DOLLAR] id=%u line=\"%s\"\r\n",
+                    (unsigned int)line_id, line);
 #endif
         return;
     }
 
     if (len >= RX_LINE_MAX - 1) {
         send_error(1);
-#if SLE_BRIDGE_TIMING_VERBOSE
-        osal_printk("[BRIDGE_TIMING_RX] line=\"%s\" rx_process_ms=%lu error=1\r\n",
-                    line, (unsigned long)uapi_systick_get_ms() - start_ms);
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_LINE_ERR] id=%u len=%d error=1\r\n",
+                    (unsigned int)line_id, len);
 #endif
         return;
     }
 
-    const char *cmd_name = execute_gcode_line(line, len);
+    if (!gcode_line_is_well_formed(line, len)) {
+        send_error(2);
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_LINE_ERR] id=%u line=\"%s\" error=2 malformed=1\r\n",
+                    (unsigned int)line_id, line);
+#endif
+        return;
+    }
+
+    const char *cmd_name = execute_gcode_line(line, len, line_id);
 #if SLE_BRIDGE_TIMING_VERBOSE
-    osal_printk("[BRIDGE_TIMING_RX] line=\"%s\" cmd=%s rx_process_ms=%lu queue=%u qwait=%lu qtimeout=%lu abort=%d\r\n",
-                line, cmd_name, (unsigned long)uapi_systick_get_ms() - start_ms,
-                (unsigned int)motion_executor_queue_depth(), motion_executor_queue_wait_count(),
-                motion_executor_enqueue_timeout_count(), motion_executor_abort_requested() ? 1 : 0);
+    osal_printk("[RX_LINE] %s cmd=%s ok\r\n", line, cmd_name);
 #else
-    unused(start_ms);
     unused(cmd_name);
 #endif
 }
@@ -579,18 +692,42 @@ void stream_io_receive(const uint8_t *data, uint16_t len)
     }
 }
 
+uint16_t stream_io_available(void)
+{
+    if (!g_stream_ready) {
+        return 0;
+    }
+
+    uint16_t used;
+    osal_mutex_lock(&g_stream_mutex);
+    if (g_stream_head >= g_stream_tail) {
+        used = (uint16_t)(g_stream_head - g_stream_tail);
+    } else {
+        used = (uint16_t)(SLE_BRIDGE_STREAM_BUF_SIZE - g_stream_tail + g_stream_head);
+    }
+    osal_mutex_unlock(&g_stream_mutex);
+
+    if (used >= (SLE_BRIDGE_STREAM_BUF_SIZE - 1U)) {
+        return 0;
+    }
+    return (uint16_t)(SLE_BRIDGE_STREAM_BUF_SIZE - 1U - used);
+}
+
 void stream_io_notify_connected(void)
 {
     motion_executor_clear_abort();
     laser_force_off();
     g_startup_pending = false;
-    g_host_startup_pending = true;
+    if (!g_session_active) {
+        g_host_startup_pending = true;
+    }
 }
 
 void stream_io_notify_disconnected(void)
 {
     g_startup_pending = false;
     g_host_startup_pending = false;
+    g_session_active = false;
     g_rx_pos = 0;
     motion_executor_request_abort();
     motion_executor_flush();
@@ -601,12 +738,16 @@ static void process_stream_char(uint8_t ch)
 {
     if (g_host_startup_pending && ch != '\r' && ch != '\n' && ch != GRBL_RESET_CHAR) {
         g_host_startup_pending = false;
-        send_grbl_startup("host-sync");
+        if (!g_session_active) {
+            send_grbl_startup("host-sync");
+            g_session_active = true;
+        }
     }
 
     if (handle_realtime_char(ch)) {
         if (ch == GRBL_RESET_CHAR) {
             g_host_startup_pending = false;
+            g_session_active = false;
         }
         return;
     }
@@ -616,6 +757,7 @@ static void process_stream_char(uint8_t ch)
             g_rx_line[g_rx_pos] = '\0';
             process_line(g_rx_line, g_rx_pos);
             g_rx_pos = 0;
+            osal_yield();
         }
         return;
     }

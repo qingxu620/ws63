@@ -442,6 +442,20 @@ errcode_t sle_passthrough_send_line(const char *line, uint16_t len)
     return g_last_write_cfm_status;
 }
 
+errcode_t sle_passthrough_send_cmd(const void *data, uint16_t len)
+{
+    if (data == NULL || len == 0 || !g_handles_ready || g_data_handle == 0) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    ssapc_write_param_t param = {0};
+    param.handle = g_data_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.data_len = len;
+    param.data = (uint8_t *)data;
+    return ssapc_write_cmd(SLE_CLIENT_ID, g_conn_id, &param);
+}
+
 bool sle_passthrough_is_connected(void)
 {
     return g_conn_id != SLE_CONN_INVALID && g_handles_ready;

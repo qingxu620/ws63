@@ -21,6 +21,12 @@ extern "C" {
 #define FLAG_LASER_ON 0x01
 #define FLAG_ABS_MODE 0x02
 
+#define SLE_BRIDGE_FRAME_MAGIC0 0xA5
+#define SLE_BRIDGE_FRAME_MAGIC1 0x5A
+#define SLE_BRIDGE_FRAME_TYPE_DATA 0x01
+#define SLE_BRIDGE_FRAME_TYPE_ACK  0x81
+#define SLE_BRIDGE_FRAME_HEADER_LEN 8
+
 typedef struct {
     uint8_t cmd;
     uint8_t flags;
@@ -36,4 +42,3 @@ typedef struct {
 #endif
 
 #endif /* LASER_SINGLE_PROTOCOL_H */
-

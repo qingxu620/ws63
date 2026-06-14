@@ -1,0 +1,9 @@
+#===============================================================================
+# @brief WS63 single-board laser marker sample
+#===============================================================================
+
+add_subdirectory_if_exist(src)
+
+set(SOURCES "${SOURCES}" PARENT_SCOPE)
+set(PUBLIC_HEADER "${PUBLIC_HEADER}" PARENT_SCOPE)
+

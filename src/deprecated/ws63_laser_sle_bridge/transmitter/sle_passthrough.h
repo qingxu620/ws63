@@ -40,6 +40,14 @@ errcode_t sle_passthrough_init(void);
 errcode_t sle_passthrough_send_line(const char *line, uint16_t len);
 
 /**
+ * @brief Send raw bytes with SLE write command, without stack-level write confirmation.
+ * @param data Byte buffer
+ * @param len Byte count
+ * @return ERRCODE_SUCC on submit success
+ */
+errcode_t sle_passthrough_send_cmd(const void *data, uint16_t len);
+
+/**
  * @brief Check if SLE is connected to receiver
  * @return true if connected
  */

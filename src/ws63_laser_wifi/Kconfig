@@ -1,0 +1,46 @@
+menu "WS63 WiFi Laser Marker Configuration"
+
+config LASER_WIFI_AP_SSID
+    string "WiFi SoftAP SSID"
+    default "WS63_LASER_WIFI"
+    help
+        SoftAP name exposed by the laser controller.
+
+config LASER_WIFI_AP_PSK
+    string "WiFi SoftAP password"
+    default "12345678"
+    help
+        WPA/WPA2 PSK password. Keep at least 8 characters.
+
+config LASER_WIFI_AP_CHANNEL
+    int "WiFi SoftAP channel"
+    default 6
+    help
+        SoftAP channel used by the controller.
+
+config LASER_WIFI_TCP_PORT
+    int "TCP Grbl port"
+    default 5000
+    help
+        TCP server port. Use LaserGRBL TCPSerial/Telnet to connect to this port.
+
+config LASER_WIFI_WORK_AREA_X_MM
+    int "Work area X in mm"
+    default 70
+    help
+        Virtual galvo working area along X axis in millimeters.
+
+config LASER_WIFI_WORK_AREA_Y_MM
+    int "Work area Y in mm"
+    default 70
+    help
+        Virtual galvo working area along Y axis in millimeters.
+
+config LASER_WIFI_STATUS_PERIODIC
+    bool "Enable periodic status reports"
+    default n
+    help
+        When enabled, the controller periodically emits Grbl status reports while connected.
+        LaserGRBL already sends '?' status queries, so this is usually not needed.
+
+endmenu

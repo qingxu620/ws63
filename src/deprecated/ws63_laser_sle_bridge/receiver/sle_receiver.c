@@ -6,7 +6,9 @@
  */
 #include "sle_receiver.h"
 #include "common_def.h"
+#include "config.h"
 #include "errcode.h"
+#include "protocol.h"
 #include "securec.h"
 #include "soc_osal.h"
 #include "stream_io.h"
@@ -46,6 +48,7 @@
 #define UUID_LEN_2 2
 #define SLE_CONN_INVALID 0xFFFF
 #define SLE_STREAM_CHUNK_MAX 512
+#define SLE_RECEIVER_ADV_NAME "sle_laser_rx"
 
 /* MAC address with birthday Easter egg: 20060927 */
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
@@ -56,6 +59,20 @@ static uint8_t g_server_id = 0;
 static uint16_t g_service_handle = 0;
 static uint16_t g_data_property_handle = 0;  /* For receiving G-code */
 static uint16_t g_resp_property_handle = 0;  /* For sending response */
+static uint16_t g_expected_frame_seq = 1;
+static uint16_t g_last_accepted_frame_seq = 0;
+static unsigned long g_rx_frame_delivered = 0;
+static unsigned long g_rx_frame_dup = 0;
+static unsigned long g_rx_frame_future = 0;
+static unsigned long g_rx_ack_sent = 0;
+static unsigned long g_rx_ack_fail = 0;
+
+#if SLE_BRIDGE_DEBUG_TRACE
+static bool rx_trace_should_log(unsigned long count)
+{
+    return count <= 16UL || (count % SLE_BRIDGE_TRACE_FRAME_PERIOD) == 0UL;
+}
+#endif
 
 /* UUID base - same as ws63_laser_wireless */
 static uint8_t sle_uuid_base[] = {
@@ -76,6 +93,117 @@ static void sle_uuid_setu2(uint16_t u2, sle_uuid_t *out)
     out->uuid[15] = (uint8_t)((u2 >> 8) & 0xFF);
 }
 
+static uint16_t get_le16(const uint8_t *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static void put_le16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void send_bridge_ack(uint16_t seq)
+{
+    if (g_conn_id == SLE_CONN_INVALID || g_resp_property_handle == 0) {
+        return;
+    }
+
+    uint8_t frame[SLE_BRIDGE_FRAME_HEADER_LEN] = {0};
+    frame[0] = SLE_BRIDGE_FRAME_MAGIC0;
+    frame[1] = SLE_BRIDGE_FRAME_MAGIC1;
+    frame[2] = SLE_BRIDGE_FRAME_TYPE_ACK;
+    put_le16(&frame[3], seq);
+    put_le16(&frame[5], stream_io_available());
+    frame[7] = 0;
+
+    ssaps_ntf_ind_t param = {0};
+    param.handle = g_resp_property_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.value_len = sizeof(frame);
+    param.value = frame;
+    errcode_t ret = ssaps_notify_indicate(g_server_id, g_conn_id, &param);
+    if (ret == ERRCODE_SLE_SUCCESS) {
+        g_rx_ack_sent++;
+#if SLE_BRIDGE_DEBUG_TRACE
+        if (rx_trace_should_log(g_rx_ack_sent)) {
+            osal_printk("[RX_ACK] seq=%u credit=%u ack=%u fail=%u\r\n",
+                        (unsigned int)seq, (unsigned int)get_le16(&frame[5]),
+                        (unsigned int)g_rx_ack_sent, (unsigned int)g_rx_ack_fail);
+        }
+#endif
+    } else {
+        g_rx_ack_fail++;
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_ACK_FAIL] seq=%u ret=0x%x fail=%u\r\n",
+                    (unsigned int)seq, ret, (unsigned int)g_rx_ack_fail);
+#endif
+    }
+}
+
+static bool handle_bridge_frame(const uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len < SLE_BRIDGE_FRAME_HEADER_LEN ||
+        data[0] != SLE_BRIDGE_FRAME_MAGIC0 || data[1] != SLE_BRIDGE_FRAME_MAGIC1 ||
+        data[2] != SLE_BRIDGE_FRAME_TYPE_DATA) {
+        return false;
+    }
+
+    uint16_t seq = get_le16(&data[3]);
+    uint16_t payload_len = get_le16(&data[5]);
+    if ((uint16_t)(payload_len + SLE_BRIDGE_FRAME_HEADER_LEN) > len) {
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_FRAME_BAD] seq=%u payload=%u packet=%u expect=%u\r\n",
+                    (unsigned int)seq, (unsigned int)payload_len, (unsigned int)len,
+                    (unsigned int)g_expected_frame_seq);
+#endif
+        return true;
+    }
+
+    if (seq == g_expected_frame_seq) {
+        g_rx_frame_delivered++;
+#if SLE_BRIDGE_DEBUG_TRACE
+        if (rx_trace_should_log(g_rx_frame_delivered)) {
+            osal_printk("[RX_FRAME] seq=%u len=%u next=%u credit=%u delivered=%u dup=%u future=%u\r\n",
+                        (unsigned int)seq, (unsigned int)payload_len,
+                        (unsigned int)(uint16_t)(g_expected_frame_seq + 1U),
+                        (unsigned int)stream_io_available(), (unsigned int)g_rx_frame_delivered,
+                        (unsigned int)g_rx_frame_dup, (unsigned int)g_rx_frame_future);
+        }
+#endif
+        g_last_accepted_frame_seq = seq;
+        g_expected_frame_seq++;
+        if (g_expected_frame_seq == 0) {
+            g_expected_frame_seq = 1;
+        }
+        send_bridge_ack(g_last_accepted_frame_seq);
+        if (payload_len > 0) {
+            stream_io_receive(&data[SLE_BRIDGE_FRAME_HEADER_LEN], payload_len);
+        }
+        return true;
+    }
+
+    if ((uint16_t)(g_expected_frame_seq - seq) < 0x8000U) {
+        g_rx_frame_dup++;
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_DUP] seq=%u expect=%u ack=%u dup=%u\r\n",
+                    (unsigned int)seq, (unsigned int)g_expected_frame_seq,
+                    (unsigned int)seq, (unsigned int)g_rx_frame_dup);
+#endif
+        send_bridge_ack(seq);
+    } else {
+        g_rx_frame_future++;
+#if SLE_BRIDGE_DEBUG_TRACE
+        osal_printk("[RX_FUTURE] seq=%u expect=%u ack=%u future=%u\r\n",
+                    (unsigned int)seq, (unsigned int)g_expected_frame_seq,
+                    (unsigned int)g_last_accepted_frame_seq, (unsigned int)g_rx_frame_future);
+#endif
+        send_bridge_ack(g_last_accepted_frame_seq);
+    }
+    return true;
+}
+
 /* SSAP Server callbacks */
 static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     ssaps_req_write_cb_t *write_cb_para, errcode_t status)
@@ -85,6 +213,10 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
 
     if (status != ERRCODE_SLE_SUCCESS || write_cb_para == NULL ||
         write_cb_para->value == NULL || write_cb_para->length == 0) {
+        return;
+    }
+
+    if (handle_bridge_frame(write_cb_para->value, write_cb_para->length)) {
         return;
     }
 
@@ -230,10 +362,14 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         g_conn_id = conn_id;
+        g_expected_frame_seq = 1;
+        g_last_accepted_frame_seq = 0;
         stream_io_notify_connected();
         osal_printk("[rx] SLE connected conn_id=%u\r\n", conn_id);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         g_conn_id = SLE_CONN_INVALID;
+        g_expected_frame_seq = 1;
+        g_last_accepted_frame_seq = 0;
         stream_io_notify_disconnected();
         osal_printk("[rx] SLE disconnected\r\n");
         sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
@@ -281,7 +417,7 @@ static uint8_t g_scan_rsp_data[] = {
     1,
     20,
     SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME,
-    11,
+    sizeof(SLE_RECEIVER_ADV_NAME) - 1,
     's', 'l', 'e', '_', 'l', 'a', 's', 'e', 'r', '_', 'r', 'x'
 };
 

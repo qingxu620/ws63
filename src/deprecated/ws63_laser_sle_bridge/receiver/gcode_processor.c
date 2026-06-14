@@ -45,6 +45,18 @@ static bool append_laser_off(motion_cmd_t *out_cmds, int max_cmds, int *count)
     return true;
 }
 
+static bool append_laser_on(motion_cmd_t *out_cmds, int max_cmds, int *count)
+{
+    if (out_cmds == NULL || count == NULL || *count >= max_cmds) {
+        return false;
+    }
+
+    fill_cmd_header(&out_cmds[*count], CMD_LASER_ON);
+    out_cmds[*count].laser_pwr = (uint16_t)g_laser_power;
+    (*count)++;
+    return true;
+}
+
 void gcode_processor_init(void)
 {
     g_feed_rate = DEFAULT_FEED_RATE;
@@ -85,6 +97,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
     int count = 0;
     bool suppress_modal_motion = false;
     bool laser_off_requested = false;
+    bool laser_on_requested = false;
 
     if (out_count == NULL || out_cmds == NULL || max_cmds <= 0) {
         return false;
@@ -121,6 +134,7 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
         int m_val = (int)gcode_get_value(&gc, 'M');
         if (m_val == 3 || m_val == 4) {
             g_laser_enabled = true;
+            laser_on_requested = true;
         } else if (m_val == 5) {
             g_laser_enabled = false;
             laser_off_requested = true;
@@ -128,6 +142,13 @@ bool gcode_process_line(const char *line, int len, motion_cmd_t *out_cmds, int m
     }
 
     if (laser_off_requested && !append_laser_off(out_cmds, max_cmds, &count)) {
+        *out_count = count;
+        return count > 0;
+    }
+
+    if (laser_on_requested && g_laser_power > 0.0 &&
+        !gcode_has_word(&gc, 'X') && !gcode_has_word(&gc, 'Y') &&
+        !append_laser_on(out_cmds, max_cmds, &count)) {
         *out_count = count;
         return count > 0;
     }

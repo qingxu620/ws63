@@ -29,9 +29,6 @@ static volatile bool g_worker_started = false;
 static bool g_output_armed = false;
 static volatile unsigned long g_enqueued_count = 0;
 static volatile unsigned long g_executed_count = 0;
-static volatile unsigned long g_queue_wait_count = 0;
-static volatile unsigned long g_enqueue_timeout_count = 0;
-static volatile uint16_t g_max_queue_depth = 0;
 static volatile unsigned long g_late_sample_count = 0;
 static volatile unsigned long g_missed_sample_count = 0;
 static volatile unsigned long g_motion_segment_count = 0;
@@ -301,7 +298,6 @@ bool motion_executor_enqueue(const motion_cmd_t *cmd)
         return false;
     }
 
-    uint32_t waited_ms = 0;
     while (!g_abort_requested) {
         osal_mutex_lock(&g_queue_mutex);
         uint16_t next = (uint16_t)((g_queue_head + 1U) % MOTION_QUEUE_SIZE);
@@ -309,26 +305,11 @@ bool motion_executor_enqueue(const motion_cmd_t *cmd)
             memcpy(&g_motion_queue[g_queue_head], cmd, sizeof(motion_cmd_t));
             g_queue_head = next;
             g_enqueued_count++;
-            uint16_t used = motion_queue_used_locked();
-            if (used > g_max_queue_depth) {
-                g_max_queue_depth = used;
-            }
             osal_mutex_unlock(&g_queue_mutex);
             osal_sem_up(&g_queue_sem);
             return true;
         }
         osal_mutex_unlock(&g_queue_mutex);
-
-        if (g_queue_wait_count < 0xFFFFFFFFUL) {
-            g_queue_wait_count++;
-        }
-        if (waited_ms >= MOTION_ENQUEUE_TIMEOUT_MS) {
-            if (g_enqueue_timeout_count < 0xFFFFFFFFUL) {
-                g_enqueue_timeout_count++;
-            }
-            return false;
-        }
-        waited_ms++;
         osal_msleep(1);
     }
 
@@ -467,13 +448,6 @@ void motion_executor_request_abort(void)
     g_abort_requested = true;
 }
 
-void motion_executor_clear_abort(void)
-{
-    g_abort_requested = false;
-    laser_force_off();
-    update_activity();
-}
-
 double motion_executor_get_x(void)
 {
     return g_current_x;
@@ -532,21 +506,6 @@ unsigned long motion_executor_enqueued_count(void)
 unsigned long motion_executor_executed_count(void)
 {
     return g_executed_count;
-}
-
-unsigned long motion_executor_queue_wait_count(void)
-{
-    return g_queue_wait_count;
-}
-
-unsigned long motion_executor_enqueue_timeout_count(void)
-{
-    return g_enqueue_timeout_count;
-}
-
-uint16_t motion_executor_max_queue_depth(void)
-{
-    return g_max_queue_depth;
 }
 
 unsigned long motion_executor_last_activity_ms(void)
