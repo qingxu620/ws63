@@ -1,6 +1,6 @@
 /**
  * @file job_manager.c
- * @brief Structured job protocol state machine on the RX board.
+ * @brief Structured job protocol state machine with sliding-window support.
  */
 #include "job_manager.h"
 #include "common_def.h"
@@ -32,6 +32,7 @@ static uint16_t g_resp_seq = 1;
 static uint32_t g_executed_lines = 0;
 static uint32_t g_packet_count = 0;
 static uint32_t g_nack_count = 0;
+static uint32_t g_diag_rx_data_count = 0;
 
 static uint8_t  g_last_ack_type = 0;
 static uint16_t g_last_ack_ack_seq = 0;
@@ -60,19 +61,20 @@ static uint16_t next_resp_seq(void)
     return seq;
 }
 
-static void send_packet(uint8_t type, const void *payload, uint16_t payload_len)
+static errcode_t send_packet(uint8_t type, const void *payload, uint16_t payload_len)
 {
     uint8_t buf[SLE_JOB_PACKET_MAX_SIZE];
     uint16_t out_len = 0;
     if (!sle_packet_encode(type, 0, next_resp_seq(), payload, payload_len,
                            buf, sizeof(buf), &out_len)) {
         osal_printk("[JOB_RX] encode response fail type=0x%02x\r\n", type);
-        return;
+        return ERRCODE_SLE_FAIL;
     }
     errcode_t ret = sle_job_server_send_packet(buf, out_len);
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[JOB_RX] send response fail type=0x%02x ret=0x%x\r\n", type, ret);
     }
+    return ret;
 }
 
 static void send_ack(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status)
@@ -87,7 +89,12 @@ static void send_ack(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status
     g_last_ack_type = ack_type;
     g_last_ack_ack_seq = ack_seq;
     g_last_ack_status = status;
-    send_packet((status == JOB_STATUS_OK) ? PKT_ACK : PKT_NACK, &ack, sizeof(ack));
+    errcode_t send_ret = send_packet((status == JOB_STATUS_OK) ? PKT_ACK : PKT_NACK, &ack, sizeof(ack));
+    if (JOB_DIAG_LOG && (g_diag_rx_data_count <= 8U || status != JOB_STATUS_OK || send_ret != ERRCODE_SLE_SUCCESS)) {
+        osal_printk("[RX_ACK] t=%u seq=%u st=%u off=%u ret=0x%x\r\n",
+                    (unsigned int)uapi_systick_get_ms(), (unsigned int)ack_seq,
+                    (unsigned int)status, (unsigned int)ack.offset, (unsigned int)send_ret);
+    }
     if (status != JOB_STATUS_OK) {
         g_nack_count++;
     }
@@ -104,7 +111,7 @@ static void send_status(sle_job_status_t status)
     resp.total_size = job_cache_total_size();
     resp.cache_free = job_cache_free();
     resp.executed_lines = (uint32_t)g_executed_lines;
-    send_packet(PKT_STATUS_RESP, &resp, sizeof(resp));
+    (void)send_packet(PKT_STATUS_RESP, &resp, sizeof(resp));
 }
 
 static bool seq_accepts(const sle_packet_view_t *pkt)
@@ -218,21 +225,29 @@ static bool execute_line(const char *line)
 static int job_exec_task(void *arg)
 {
     unused(arg);
-    const uint8_t *data = job_cache_data();
-    uint32_t size = job_cache_received();
-    uint32_t pos = 0;
     char line[JOB_LINE_MAX];
     uint16_t line_pos = 0;
 
+    if (g_abort_requested) {
+        osal_printk("[JOB_EXEC] abort already requested, exiting\r\n");
+        g_exec_active = false;
+        return 0;
+    }
+
     osal_printk("[JOB_EXEC] start job=%u size=%u\r\n",
-                (unsigned int)job_cache_job_id(), (unsigned int)size);
-    g_exec_active = true;
-    g_state = JOB_STATE_EXECUTING;
-    g_abort_requested = false;
+                (unsigned int)job_cache_job_id(), (unsigned int)job_cache_total_size());
     g_executed_lines = 0;
 
-    while (pos < size && !g_abort_requested) {
-        char ch = (char)data[pos++];
+    while (!g_abort_requested) {
+        int ch = job_cache_read_byte();
+        if (ch < 0) {
+            if (job_cache_is_all_received()) {
+                break;
+            }
+            osal_yield();
+            continue;
+        }
+
         if (ch == '\r' || ch == '\n') {
             if (line_pos == 0) {
                 continue;
@@ -246,16 +261,16 @@ static int job_exec_task(void *arg)
                     return 0;
                 }
                 g_executed_lines++;
-                osal_yield();
                 if ((g_executed_lines % JOB_STATUS_LOG_PERIOD_LINES) == 0) {
-                    osal_printk("[JOB_EXEC] line=%u pos=%u queue=%u\r\n",
-                                (unsigned int)g_executed_lines, (unsigned int)pos,
+                    osal_printk("[JOB_EXEC] line=%u avail=%u queue=%u\r\n",
+                                (unsigned int)g_executed_lines,
+                                (unsigned int)job_cache_available(),
                                 (unsigned int)motion_executor_queue_depth());
                 }
             }
             line_pos = 0;
         } else if (line_pos < (JOB_LINE_MAX - 1U)) {
-            line[line_pos++] = ch;
+            line[line_pos++] = (char)ch;
         } else {
             job_manager_safe_stop("line-too-long");
             g_exec_active = false;
@@ -293,11 +308,16 @@ static int job_exec_task(void *arg)
 
 static sle_job_status_t validate_job_execution(uint32_t job_id)
 {
-    if (g_exec_active || g_state != JOB_STATE_JOB_READY ||
-        !job_cache_is_ready() || job_id != job_cache_job_id()) {
-        return JOB_STATUS_NOT_READY;
+    if (g_exec_active) {
+        return JOB_STATUS_BAD_STATE;
     }
-    return JOB_STATUS_OK;
+    if (g_state == JOB_STATE_JOB_READY || g_state == JOB_STATE_RECEIVING_JOB) {
+        if (job_cache_job_id() == job_id && job_cache_received() > 0) {
+            return JOB_STATUS_OK;
+        }
+        return JOB_STATUS_BAD_JOB;
+    }
+    return JOB_STATUS_NOT_READY;
 }
 
 static sle_job_status_t launch_job_execution(void)
@@ -337,6 +357,7 @@ static void handle_job_begin(const sle_packet_view_t *pkt)
         motion_executor_clear_abort();
         g_state = JOB_STATE_RECEIVING_JOB;
         g_abort_requested = false;
+        g_diag_rx_data_count = 0;
         seq_commit(pkt->seq);
     }
     osal_printk("[JOB_BEGIN] seq=%u job=%u size=%u crc=0x%04x st=%u\r\n",
@@ -347,7 +368,8 @@ static void handle_job_begin(const sle_packet_view_t *pkt)
 
 static void handle_job_data(const sle_packet_view_t *pkt)
 {
-    if (g_state != JOB_STATE_RECEIVING_JOB || pkt->len < sizeof(job_data_payload_t)) {
+    if ((g_state != JOB_STATE_RECEIVING_JOB && g_state != JOB_STATE_EXECUTING) ||
+        pkt->len < sizeof(job_data_payload_t)) {
         send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_STATE);
         return;
     }
@@ -363,9 +385,11 @@ static void handle_job_data(const sle_packet_view_t *pkt)
     if (st == JOB_STATUS_OK) {
         seq_commit(pkt->seq);
     }
-    if ((g_packet_count <= 8U) || ((g_packet_count % 32U) == 0U) || st != JOB_STATUS_OK) {
-        osal_printk("[JOB_DATA] seq=%u job=%u off=%u len=%u rx=%u st=%u\r\n",
-                    pkt->seq, (unsigned int)hdr.job_id, (unsigned int)hdr.offset, hdr.data_len,
+    g_diag_rx_data_count++;
+    if (JOB_DIAG_LOG && (g_diag_rx_data_count <= 8U || st != JOB_STATUS_OK)) {
+        osal_printk("[RX_DATA] t=%u seq=%u off=%u len=%u rx=%u st=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), pkt->seq,
+                    (unsigned int)hdr.offset, hdr.data_len,
                     (unsigned int)job_cache_received(), st);
     }
     send_ack(pkt->type, pkt->seq, st);
@@ -373,7 +397,8 @@ static void handle_job_data(const sle_packet_view_t *pkt)
 
 static void handle_job_end(const sle_packet_view_t *pkt)
 {
-    if (g_state != JOB_STATE_RECEIVING_JOB || pkt->len != sizeof(job_end_payload_t)) {
+    if ((g_state != JOB_STATE_RECEIVING_JOB && g_state != JOB_STATE_EXECUTING) ||
+        pkt->len != sizeof(job_end_payload_t)) {
         send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_STATE);
         return;
     }
@@ -381,10 +406,17 @@ static void handle_job_end(const sle_packet_view_t *pkt)
     memcpy(&end, pkt->payload, sizeof(end));
     sle_job_status_t st = job_cache_finish(end.job_id, end.total_size, end.job_crc16);
     if (st == JOB_STATUS_OK) {
-        g_state = JOB_STATE_JOB_READY;
+        if (g_state == JOB_STATE_RECEIVING_JOB) {
+            g_state = JOB_STATE_JOB_READY;
+        }
+        job_cache_set_all_received();
         seq_commit(pkt->seq);
     } else {
-        g_state = JOB_STATE_ERROR;
+        if (g_state == JOB_STATE_RECEIVING_JOB) {
+            g_state = JOB_STATE_ERROR;
+        }
+        job_cache_set_all_received();
+        g_abort_requested = true;
     }
     osal_printk("[JOB_END] seq=%u job=%u size=%u crc=0x%04x st=%u state=%s\r\n",
                 pkt->seq, (unsigned int)end.job_id, (unsigned int)end.total_size,
@@ -424,13 +456,13 @@ void job_manager_on_packet(const uint8_t *data, uint16_t len)
     sle_packet_view_t pkt;
     if (!sle_packet_decode(data, len, &pkt)) {
         osal_printk("[JOB_RX] bad packet len=%u\r\n", len);
-        send_ack(0, 0, JOB_STATUS_BAD_CRC);
+        send_ack(0, g_expected_seq, JOB_STATUS_BAD_CRC);
         return;
     }
 
     g_packet_count++;
     if (!seq_accepts(&pkt)) {
-        if (pkt.seq == g_last_seq) {
+        if (g_last_seq != 0 && pkt.seq == g_last_seq) {
             send_ack(g_last_ack_type, g_last_ack_ack_seq, g_last_ack_status);
         } else if (pkt.seq < g_last_seq) {
             static uint32_t s_drop_count = 0;
@@ -510,5 +542,5 @@ void job_manager_init(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
-    osal_printk("[JOB_RX] manager init cache=%u\r\n", (unsigned int)job_cache_size());
+    osal_printk("[JOB_RX] manager init cache=%u sliding-window\r\n", (unsigned int)job_cache_size());
 }

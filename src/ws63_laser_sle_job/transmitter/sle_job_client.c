@@ -433,10 +433,14 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
     }
 
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
-    osal_printk("[JOB_SLE_WRITE_CALL] conn=%u handle=0x%x len=%u\r\n",
-                (unsigned int)g_conn_id, (unsigned int)g_data_handle, (unsigned int)len);
+    if (JOB_DIAG_LOG) {
+        osal_printk("[JOB_SLE_WRITE_CALL] conn=%u handle=0x%x len=%u\r\n",
+                    (unsigned int)g_conn_id, (unsigned int)g_data_handle, (unsigned int)len);
+    }
     errcode_t ret = ssapc_write_req(SLE_CLIENT_ID, g_conn_id, &param);
-    osal_printk("[JOB_SLE_WRITE_RET] ret=0x%x len=%u\r\n", ret, (unsigned int)len);
+    if (JOB_DIAG_LOG || ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[JOB_SLE_WRITE_RET] ret=0x%x len=%u\r\n", ret, (unsigned int)len);
+    }
     if (ret != ERRCODE_SLE_SUCCESS) {
         return ret;
     }
@@ -446,8 +450,10 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
         return ERRCODE_SLE_TIMEOUT;
     }
 
-    osal_printk("[JOB_SLE_WRITE_CFM] status=0x%x len=%u\r\n",
-                g_last_write_cfm_status, (unsigned int)len);
+    if (JOB_DIAG_LOG) {
+        osal_printk("[JOB_SLE_WRITE_CFM] status=0x%x len=%u\r\n",
+                    g_last_write_cfm_status, (unsigned int)len);
+    }
     return g_last_write_cfm_status;
 }
 

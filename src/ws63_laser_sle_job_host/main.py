@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, TextIO
 
 try:
     import serial
@@ -24,9 +24,14 @@ CMD_TIMEOUT_DEFAULT = 8.0
 UPLOAD_TIMEOUT_DEFAULT = 20.0
 DEFAULT_JOB_ID = 1
 EXEC_START_DELAY_AFTER_UPLOAD_S = 0.2
-JOB_DATA_CHUNK_SIZE = 64
-SERIAL_WRITE_BURST_SIZE = 32
-SERIAL_WRITE_BURST_GAP_S = 0.003
+JOB_DATA_CHUNK_SIZE = 214
+SERIAL_WRITE_BURST_SIZE = 64
+SERIAL_WRITE_BURST_GAP_S = 0.001
+LOG_PUMP_MAX_LINES = 120
+PROGRESS_PUMP_MAX_ITEMS = 20
+LOG_TEXT_MAX_LINES = 4000
+LOG_TEXT_TRIM_LINES = 500
+LOG_FILE_FLUSH_LINES = 40
 
 
 def now_text() -> str:
@@ -110,6 +115,12 @@ class SleJobSerialClient:
                 pass
         self._serial = None
 
+    @property
+    def port(self) -> Optional[str]:
+        if self._serial is None:
+            return None
+        return self._serial.port
+
     def _read_loop(self) -> None:
         assert self._serial is not None
         buffer = ""
@@ -143,7 +154,7 @@ class SleJobSerialClient:
             except queue.Empty:
                 return
 
-    def write_bytes(self, payload: bytes, label: str) -> None:
+    def write_bytes(self, payload: bytes, label: str, verbose: bool = False) -> None:
         if not self.is_open() or self._serial is None:
             raise RuntimeError("串口未连接")
         written_total = 0
@@ -160,7 +171,8 @@ class SleJobSerialClient:
             self._serial.flush()
         if written_total != len(payload):
             raise RuntimeError(f"串口写入不完整: {written_total}/{len(payload)} bytes")
-        self._on_log("tx", f"{label} uart={written_total}/{len(payload)}")
+        if verbose:
+            self._on_log("tx", f"{label} uart={written_total}/{len(payload)}")
 
     def send_line(self, line: str) -> None:
         clean = line.strip()
@@ -199,35 +211,64 @@ class SleJobSerialClient:
             self.send_line(command)
             return self.wait_for(expect_pattern, timeout)
 
-    def upload_job(self, job_id: int, gcode: bytes, timeout: float) -> None:
+    def upload_job(self, job_id: int, gcode: bytes, timeout: float, wait_ready: bool = True,
+                   progress_cb: Optional[Callable[[str], None]] = None,
+                   status_cb: Optional[Callable[[str, float], None]] = None,
+                   total: int = 0) -> None:
         if not gcode:
             raise RuntimeError("G-code 内容为空")
-        if len(gcode) > 128 * 1024:
-            raise RuntimeError("第一版 RX RAM 缓存默认 128KB，请先缩小 G-code 文件")
 
         crc = crc16_ccitt(gcode)
+        total_size = len(gcode)
+        t_begin = time.perf_counter()
         with self._command_lock:
             self._drain_lines()
-            self.send_line(f"@BEGIN {job_id} {len(gcode)} {crc:04x}")
+            if status_cb:
+                status_cb("正在建立任务", 0)
+            self.send_line(f"@BEGIN {job_id} {total_size} {crc:04x}")
             ready = self.wait_for(f"@DATA_READY job={job_id}", timeout)
-            self._on_log("status", f"DATA_READY {ready.elapsed_ms} ms")
+            t_ready = time.perf_counter()
+            self._on_log("status", f"DATA_READY total={(t_ready - t_begin) * 1000:.0f} ms")
+            if status_cb:
+                status_cb(f"上传中 0/{total_size} bytes", 0)
             offset = 0
-            while offset < len(gcode):
-                end = min(offset + JOB_DATA_CHUNK_SIZE, len(gcode))
+            chunk_count = 0
+            t_data_start = time.perf_counter()
+            while offset < total_size:
+                end = min(offset + JOB_DATA_CHUNK_SIZE, total_size)
                 chunk = gcode[offset:end]
                 self.write_bytes(
                     chunk,
-                    f"<raw gcode chunk> off={offset} len={len(chunk)} next={end}/{len(gcode)} crc=0x{crc:04x}",
+                    f"<raw gcode chunk> off={offset} len={len(chunk)} next={end}/{total_size} crc=0x{crc:04x}",
                 )
                 ack = self.wait_for(
-                    rf"@ACK type=2\b.*\bstatus=0\b.*\boffset={end}\b",
+                    rf"@ACK type=2 .*status=0 .*offset={end}\b",
                     timeout,
                     regex=True,
                 )
-                self._on_log("status", f"DATA_ACK offset={end} {ack.elapsed_ms} ms")
                 offset = end
-            done = self.wait_for(f"@JOB_READY job={job_id}", timeout)
-            self._on_log("status", f"JOB_READY {done.elapsed_ms} ms")
+                chunk_count += 1
+                pct = offset * 100 // total_size
+                if status_cb:
+                    status_cb(f"上传中 {offset}/{total_size} bytes", pct)
+                if progress_cb and (chunk_count % 100 == 0 or offset >= total_size):
+                    progress_cb(f"上传中 {offset}/{total_size} ({pct}%)")
+            t_data_done = time.perf_counter()
+            data_elapsed = t_data_done - t_data_start
+            data_rate = total_size / data_elapsed if data_elapsed > 0 else 0
+            self._on_log("status", f"DATA_DONE data={data_elapsed * 1000:.0f} ms "
+                          f"rate={data_rate:.0f} B/s chunks={chunk_count} size={total_size}")
+            if status_cb:
+                status_cb("数据已发送，等待 RX 存储确认", 99)
+            if wait_ready:
+                done = self.wait_for(f"@JOB_READY job={job_id}", timeout)
+                t_end = time.perf_counter()
+                total_elapsed = t_end - t_begin
+                total_rate = total_size / total_elapsed if total_elapsed > 0 else 0
+                self._on_log("status", f"JOB_READY total={total_elapsed * 1000:.0f} ms "
+                              f"rate={total_rate:.0f} B/s size={total_size} chunks={chunk_count}")
+            else:
+                self._on_log("status", f"上传完成，跳过 JOB_READY 等待")
 
 
 class SerialLogMonitor:
@@ -237,12 +278,14 @@ class SerialLogMonitor:
         self._serial: Optional[serial.Serial] = None
         self._reader: Optional[threading.Thread] = None
         self._running = threading.Event()
+        self.port: Optional[str] = None
 
     def is_open(self) -> bool:
         return self._serial is not None and self._serial.is_open
 
     def open(self, port: str, baud: int) -> None:
         self.close()
+        self.port = port
         self._serial = serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=0.2)
         self._serial.reset_input_buffer()
         self._running.set()
@@ -261,6 +304,7 @@ class SerialLogMonitor:
             except serial.SerialException:
                 pass
         self._serial = None
+        self.port = None
 
     def _read_loop(self) -> None:
         assert self._serial is not None
@@ -295,11 +339,16 @@ class SleJobHostApp(tk.Tk):
         self.minsize(1000, 640)
 
         self.log_queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        self.progress_queue: "queue.Queue[str]" = queue.Queue()
+        self.task_status_queue: "queue.Queue[tuple[str, int]]" = queue.Queue()  # (status_text, progress_value)
         self.client = SleJobSerialClient(self.enqueue_log)
         self.tx_log_monitor = SerialLogMonitor("COM24", self.enqueue_log)
         self.rx_log_monitor = SerialLogMonitor("COM26", self.enqueue_log)
         self.worker_thread: Optional[threading.Thread] = None
         self.log_path: Optional[Path] = None
+        self.log_file: Optional[TextIO] = None
+        self.log_file_pending = 0
+        self.log_line_count = 0
         self.loaded_file: Optional[Path] = None
 
         self._build_ui()
@@ -390,8 +439,22 @@ class SleJobHostApp(tk.Tk):
         self.progress_var = tk.StringVar(value="待上传")
         ttk.Label(controls, textvariable=self.progress_var).grid(row=0, column=10, sticky="e")
 
+        status_frame = ttk.Frame(left)
+        status_frame.grid(row=3, column=0, sticky="ew", pady=(4, 8))
+        status_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(status_frame, text="任务状态:").grid(row=0, column=0, padx=(0, 6))
+        self.task_status_var = tk.StringVar(value="空闲")
+        self.task_status_label = ttk.Label(status_frame, textvariable=self.task_status_var,
+                                           font=("", 10, "bold"))
+        self.task_status_label.grid(row=0, column=1, sticky="w")
+
+        self.task_progress = ttk.Progressbar(status_frame, mode="determinate", length=200)
+        self.task_progress.grid(row=0, column=2, padx=(12, 0), sticky="e")
+        self.task_progress["value"] = 0
+
         quick = ttk.Frame(left)
-        quick.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        quick.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(quick, text="@STATUS", command=self.query_status).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_START", command=self.exec_start).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_STOP", command=self.exec_stop).grid(row=0, column=2, padx=(0, 6))
@@ -416,29 +479,72 @@ class SleJobHostApp(tk.Tk):
     def enqueue_log(self, kind: str, message: str) -> None:
         self.log_queue.put((kind, message))
 
+    def enqueue_progress(self, text: str) -> None:
+        self.progress_queue.put(text)
+
+    def enqueue_task_status(self, status: str, progress: float = -1) -> None:
+        self.task_status_queue.put((status, int(progress)))
+
     def _pump_logs(self) -> None:
-        while True:
-            try:
-                kind, message = self.log_queue.get_nowait()
-            except queue.Empty:
-                break
-            self.append_log(kind, message)
-        self.after(50, self._pump_logs)
+        try:
+            processed = 0
+            while processed < LOG_PUMP_MAX_LINES:
+                try:
+                    kind, message = self.log_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self.append_log(kind, message)
+                processed += 1
+
+            progress_processed = 0
+            while progress_processed < PROGRESS_PUMP_MAX_ITEMS:
+                try:
+                    text = self.progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self.progress_var.set(text)
+                progress_processed += 1
+
+            task_status_processed = 0
+            while task_status_processed < PROGRESS_PUMP_MAX_ITEMS:
+                try:
+                    status_text, progress_val = self.task_status_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self.task_status_var.set(status_text)
+                if progress_val >= 0:
+                    self.task_progress["value"] = progress_val
+                task_status_processed += 1
+        except Exception:
+            pass
+        try:
+            delay_ms = 10 if (not self.log_queue.empty() or not self.progress_queue.empty() or
+                              not self.task_status_queue.empty()) else 100
+            self.after(delay_ms, self._pump_logs)
+        except Exception:
+            pass
 
     def append_log(self, kind: str, message: str) -> None:
         line = f"{now_text()} {kind.upper():>6} {compact_text(message)}\n"
         self.log_text.configure(state="normal")
         self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status", "com24", "com26"} else "")
+        self.log_line_count += 1
+        if self.log_line_count > LOG_TEXT_MAX_LINES:
+            self.log_text.delete("1.0", f"{LOG_TEXT_TRIM_LINES + 1}.0")
+            self.log_line_count -= LOG_TEXT_TRIM_LINES
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
-        if self.log_path is not None:
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_path.open("a", encoding="utf-8") as f:
-                f.write(line)
+        if self.log_file is not None:
+            self.log_file.write(line)
+            self.log_file_pending += 1
+            if self.log_file_pending >= LOG_FILE_FLUSH_LINES:
+                self.log_file.flush()
+                self.log_file_pending = 0
 
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
+        self.log_line_count = 0
         self.log_text.configure(state="disabled")
         self.enqueue_log("status", "日志已清空")
 
@@ -474,7 +580,9 @@ class SleJobHostApp(tk.Tk):
             return
         try:
             baud = int(self.baud_var.get().strip())
-            self.client.open(self.client.port_device(display), baud)
+            port = self.client.port_device(display)
+            self._check_port_conflict(port, "TX 命令串口")
+            self.client.open(port, baud)
             self.connect_button.configure(text="断开")
             self._start_default_log()
         except Exception as exc:
@@ -505,17 +613,48 @@ class SleJobHostApp(tk.Tk):
             return
         try:
             baud = int(self.baud_var.get().strip())
-            monitor.open(SleJobSerialClient.port_device(display), baud)
+            port = SleJobSerialClient.port_device(display)
+            self._check_port_conflict(port, "调试日志串口")
+            monitor.open(port, baud)
             button.configure(text=stop_text)
             self._start_default_log()
         except Exception as exc:
             self.enqueue_log("error", str(exc))
             messagebox.showerror("监听失败", str(exc))
 
+    def _check_port_conflict(self, port: str, role: str) -> None:
+        opened = []
+        if self.client.is_open() and self.client._serial is not None:
+            opened.append(("TX 命令串口", self.client._serial.port))
+        if self.tx_log_monitor.is_open():
+            opened.append(("TX 日志串口", self.tx_log_monitor.port))
+        if self.rx_log_monitor.is_open():
+            opened.append(("RX 日志串口", self.rx_log_monitor.port))
+        for opened_role, opened_port in opened:
+            if opened_port and opened_port.upper() == port.upper():
+                raise RuntimeError(f"{role} 不能重复打开 {port}，已被 {opened_role} 使用")
+
+    def _set_log_path(self, path: Path) -> None:
+        self._close_log_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path = path
+        self.log_file = path.open("a", encoding="utf-8")
+        self.log_file_pending = 0
+
+    def _close_log_file(self) -> None:
+        if self.log_file is not None:
+            try:
+                self.log_file.flush()
+                self.log_file.close()
+            except OSError:
+                pass
+        self.log_file = None
+        self.log_file_pending = 0
+
     def _start_default_log(self) -> None:
         if self.log_path is None:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.log_path = Path(__file__).resolve().parent / "logs" / f"session_{stamp}.log"
+            self._set_log_path(Path(__file__).resolve().parent / "logs" / f"session_{stamp}.log")
             self.enqueue_log("status", f"日志文件: {self.log_path}")
 
     def save_log_as(self) -> None:
@@ -525,7 +664,7 @@ class SleJobHostApp(tk.Tk):
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
         )
         if path:
-            self.log_path = Path(path)
+            self._set_log_path(Path(path))
             self.enqueue_log("status", f"日志文件: {self.log_path}")
 
     def load_file(self) -> None:
@@ -558,7 +697,7 @@ class SleJobHostApp(tk.Tk):
 
     def _run_worker(self, target: Callable[[], None]) -> None:
         if self.worker_thread is not None and self.worker_thread.is_alive():
-            messagebox.showwarning("任务进行中", "当前已有上位机任务在执行")
+            self.enqueue_log("error", "任务进行中，请等待完成")
             return
         self.worker_thread = threading.Thread(target=target, daemon=True)
         self.worker_thread.start()
@@ -575,16 +714,33 @@ class SleJobHostApp(tk.Tk):
             timeout = self._timeout()
             gcode = self._gcode_bytes()
             crc = crc16_ccitt(gcode)
-            self.after(0, self.progress_var.set, f"上传中 {len(gcode)} bytes crc=0x{crc:04x}")
-            self.enqueue_log("status", f"开始上传 job={job_id} size={len(gcode)} crc=0x{crc:04x}")
-            self.client.upload_job(job_id, gcode, timeout)
-            self.after(0, self.progress_var.set, f"JOB_READY job={job_id}")
+            total = len(gcode)
+            self.enqueue_task_status("正在建立任务", 0)
+            self.enqueue_log("status", f"上传配置: chunk={JOB_DATA_CHUNK_SIZE}B "
+                             f"serial_burst={SERIAL_WRITE_BURST_SIZE}B "
+                             f"gap={int(SERIAL_WRITE_BURST_GAP_S * 1000)}ms "
+                             f"baud={BAUD_DEFAULT}")
+            self.enqueue_progress(f"上传中 {total} bytes crc=0x{crc:04x}")
+            self.enqueue_log("status", f"开始上传 job={job_id} size={total} crc=0x{crc:04x}")
+            self.client.upload_job(
+                job_id, gcode, timeout,
+                wait_ready=True,
+                progress_cb=self.enqueue_progress,
+                status_cb=self.enqueue_task_status,
+                total=total,
+            )
+            self.enqueue_task_status("下发完成，可执行", 100)
+            self.enqueue_progress(f"上传完成 job={job_id}")
             if start_after:
-                self.enqueue_log("status", f"JOB_READY 后等待 {int(EXEC_START_DELAY_AFTER_UPLOAD_S * 1000)} ms 再执行")
-                time.sleep(EXEC_START_DELAY_AFTER_UPLOAD_S)
-                self._exec_start_worker()
+                self.enqueue_log("status", "RX 已确认 JOB_READY，发送 EXEC_START")
+                try:
+                    self._exec_start_worker()
+                except Exception as exec_exc:
+                    self.enqueue_log("error", f"EXEC_START 失败: {exec_exc}")
+                    self.enqueue_task_status(f"执行失败: {exec_exc}")
         except Exception as exc:
-            self.after(0, self.progress_var.set, "失败")
+            self.enqueue_progress("失败")
+            self.enqueue_task_status(f"上传失败: {exc}")
             self.enqueue_log("error", str(exc))
 
     def exec_start(self) -> None:
@@ -592,16 +748,19 @@ class SleJobHostApp(tk.Tk):
 
     def _exec_start_worker(self) -> None:
         try:
+            self.enqueue_task_status("执行中", -1)
             job_id = self._job_id()
             result = self.client.send_control(
                 f"@EXEC_START {job_id}",
                 "@ACK type=16",
                 self._timeout(),
             )
-            self.after(0, self.progress_var.set, f"执行启动 job={job_id}")
+            self.enqueue_progress(f"执行启动 job={job_id}")
             self.enqueue_log("status", f"EXEC_START ACK {result.elapsed_ms} ms")
+            self.enqueue_task_status("执行完成", 100)
         except Exception as exc:
             self.enqueue_log("error", str(exc))
+            self.enqueue_task_status(f"执行失败: {exc}")
 
     def exec_stop(self) -> None:
         self._run_worker(lambda: self._control_worker("@EXEC_STOP", "@ACK type=19", "已停止"))
@@ -622,7 +781,7 @@ class SleJobHostApp(tk.Tk):
     def _control_worker(self, command: str, expect: str, done_text: str) -> None:
         try:
             result = self.client.send_control(command, expect, CMD_TIMEOUT_DEFAULT)
-            self.after(0, self.progress_var.set, done_text)
+            self.enqueue_progress(done_text)
             self.enqueue_log("status", f"{command} ACK {result.elapsed_ms} ms: {result.line}")
         except Exception as exc:
             self.enqueue_log("error", str(exc))
@@ -631,6 +790,7 @@ class SleJobHostApp(tk.Tk):
         self.client.close()
         self.tx_log_monitor.close()
         self.rx_log_monitor.close()
+        self._close_log_file()
         self.destroy()
 
 

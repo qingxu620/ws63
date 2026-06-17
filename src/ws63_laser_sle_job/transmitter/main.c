@@ -13,6 +13,7 @@
 #include "sle_errcode.h"
 #include "sle_job_client.h"
 #include "soc_osal.h"
+#include "systick.h"
 #include "uart.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -24,6 +25,10 @@
 #define TX_DATA_RX_LOG_STEP 32U
 #define TX_UART_IDLE_LOG_TICKS 50U
 #define TX_UART_IDLE0_LOG_TICKS 1000U
+#define TX_DATA_MODE_TIMEOUT_TICKS 5000U
+
+_Static_assert(sizeof(job_data_payload_t) + JOB_TX_DATA_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
+               "JOB_TX_DATA_CHUNK_MAX too large for SLE payload");
 
 static uint8_t g_uart_rx_buf[JOB_TX_UART_RX_BUF_SIZE];
 static uart_buffer_config_t g_uart_cfg = {
@@ -38,6 +43,8 @@ static volatile uint8_t g_wait_status = JOB_STATUS_INTERNAL_ERROR;
 static volatile bool g_wait_got_ack = false;
 static volatile bool g_wait_active = false;
 static uint16_t g_tx_seq = 1;
+static uint32_t g_diag_data_count = 0;
+static uint32_t g_wait_start_ms = 0;
 
 static uint32_t g_job_id = 0;
 static uint32_t g_job_total = 0;
@@ -104,9 +111,28 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     g_wait_got_ack = false;
     g_wait_active = true;
 
-    osal_printk("[JOB_TX_SEND_ENTER] type=0x%02x seq=%u payload=%u packet=%u conn=%u status=%s\r\n",
-                type, seq, actual_payload_len, packet_len,
-                (unsigned int)sle_job_client_is_connected(), sle_job_client_get_status());
+    {
+        uint32_t dbg_off = 0;
+        uint16_t dbg_dlen = 0;
+        if (type == PKT_JOB_DATA && payload != NULL && payload_len >= sizeof(job_data_payload_t)) {
+            const job_data_payload_t *dp = (const job_data_payload_t *)payload;
+            dbg_off = dp->offset;
+            dbg_dlen = dp->data_len;
+            g_diag_data_count++;
+        }
+        if (JOB_DIAG_LOG && g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA) {
+            osal_printk("[TX_SEND] t=%u seq=%u type=0x%02x off=%u dlen=%u plen=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq, type,
+                        (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                        (unsigned int)actual_payload_len);
+        }
+    }
+
+    if (JOB_DIAG_LOG) {
+        osal_printk("[JOB_TX_SEND_ENTER] type=0x%02x seq=%u payload=%u packet=%u conn=%u status=%s\r\n",
+                    type, seq, actual_payload_len, packet_len,
+                    (unsigned int)sle_job_client_is_connected(), sle_job_client_get_status());
+    }
 
     for (uint32_t retry = 0; retry <= JOB_TX_RETRY_MAX; retry++) {
         uint32_t reconnect_wait = 0;
@@ -129,12 +155,25 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
             return ERRCODE_SUCC;
         }
 
-        osal_printk("[JOB_TX_SEND_CALL] type=0x%02x seq=%u try=%u packet=%u status=%s\r\n",
-                    type, seq, (unsigned int)retry, packet_len, sle_job_client_get_status());
+        if (JOB_DIAG_LOG) {
+            osal_printk("[JOB_TX_SEND_CALL] type=0x%02x seq=%u try=%u packet=%u status=%s\r\n",
+                        type, seq, (unsigned int)retry, packet_len, sle_job_client_get_status());
+        }
+        uint32_t t_send = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = sle_job_client_send_packet(packet, packet_len);
-        osal_printk("[JOB_TX_FRAME] type=0x%02x seq=%u len=%u try=%u ret=0x%x\r\n",
-                    type, seq, packet_len, (unsigned int)retry, ret);
+        if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ret != ERRCODE_SLE_SUCCESS)) {
+            osal_printk("[TX_CFM] t=%u seq=%u ret=0x%x cost=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)ret,
+                        (unsigned int)((uint32_t)uapi_systick_get_ms() - t_send));
+        }
+        if (JOB_DIAG_LOG) {
+            osal_printk("[JOB_TX_FRAME] type=0x%02x seq=%u len=%u try=%u ret=0x%x\r\n",
+                        type, seq, packet_len, (unsigned int)retry, ret);
+        }
         if (ret == ERRCODE_SLE_SUCCESS) {
+            uint32_t t_ack = (uint32_t)uapi_systick_get_ms();
+            g_wait_start_ms = t_ack;
             if (osal_sem_down_timeout(&g_ack_sem, JOB_TX_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
                 g_wait_got_ack) {
                 if (g_wait_status == JOB_STATUS_OK) {
@@ -144,9 +183,10 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
                 }
                 break;
             }
-            osal_printk("[JOB_TX_ACK_TIMEOUT] type=0x%02x seq=%u try=%u got=%u status=%u\r\n",
-                        type, seq, (unsigned int)retry, (unsigned int)g_wait_got_ack,
-                        (unsigned int)g_wait_status);
+            osal_printk("[TX_TO] t=%u seq=%u retry=%u waited=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)retry,
+                        (unsigned int)((uint32_t)uapi_systick_get_ms() - t_ack));
         }
     }
 
@@ -167,21 +207,24 @@ static void response_cb(const uint8_t *data, uint16_t length)
     if ((pkt.type == PKT_ACK || pkt.type == PKT_NACK) && pkt.len == sizeof(ack_payload_t)) {
         ack_payload_t ack;
         memcpy(&ack, pkt.payload, sizeof(ack));
-        osal_printk("[JOB_TX_ACK] ack_type=0x%02x ack_seq=%u status=%u job=%u off=%u credit=%u\r\n",
-                    ack.ack_type, ack.ack_seq, ack.status, (unsigned int)ack.job_id,
-                    (unsigned int)ack.offset, (unsigned int)ack.credit);
         if (!g_wait_active || ack.ack_seq != g_wait_ack_seq) {
-            osal_printk("[JOB_TX_ACK_OLD] ack_type=0x%02x ack_seq=%u wait=%u status=%u ignored\r\n",
-                        ack.ack_type, ack.ack_seq, g_wait_ack_seq, ack.status);
+            osal_printk("[TX_OLD] t=%u ack_seq=%u wait=%u active=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), ack.ack_seq,
+                        (unsigned int)g_wait_ack_seq, (unsigned int)g_wait_active);
             return;
+        }
+        if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ack.status != 0)) {
+            osal_printk("[TX_ACK] t=%u ack_seq=%u wait=%u st=%u off=%u active=%u cost=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), ack.ack_seq,
+                        (unsigned int)g_wait_ack_seq, ack.status, (unsigned int)ack.offset,
+                        (unsigned int)g_wait_active,
+                        (unsigned int)(uapi_systick_get_ms() - g_wait_start_ms));
         }
         g_wait_status = ack.status;
         g_wait_got_ack = true;
         if (g_ack_sem_ready) {
             osal_sem_up(&g_ack_sem);
         }
-        host_sendf("@ACK type=%u seq=%u status=%u offset=%u\r\n",
-                   ack.ack_type, ack.ack_seq, ack.status, (unsigned int)ack.offset);
         return;
     }
 
@@ -232,7 +275,7 @@ static errcode_t send_job_data_chunk(uint32_t offset, const uint8_t *data, uint1
 
     errcode_t ret = send_packet_wait_ack(PKT_JOB_DATA, payload,
                                          (uint16_t)(sizeof(job_data_payload_t) + chunk_len));
-    if (ret == ERRCODE_SUCC) {
+    if (JOB_DIAG_LOG && ret == ERRCODE_SUCC) {
         osal_printk("[JOB_TX_DATA_SENT] job=%u off=%u len=%u next=%u/%u\r\n",
                     (unsigned int)g_job_id, (unsigned int)offset,
                     (unsigned int)chunk_len, (unsigned int)(offset + chunk_len),
@@ -247,9 +290,15 @@ static errcode_t flush_job_chunk(void)
         return ERRCODE_SUCC;
     }
     uint32_t offset = g_job_offset - g_job_chunk_len;
+    uint16_t len = g_job_chunk_len;
     errcode_t ret = send_job_data_chunk(offset, g_job_chunk, g_job_chunk_len);
     if (ret == ERRCODE_SUCC) {
         g_job_chunk_len = 0;
+    }
+    if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ret != ERRCODE_SUCC)) {
+        osal_printk("[TX_CHUNK_DONE] t=%u off=%u len=%u ret=0x%x\r\n",
+                    (unsigned int)uapi_systick_get_ms(), (unsigned int)offset,
+                    (unsigned int)len, (unsigned int)ret);
     }
     return ret;
 }
@@ -267,9 +316,11 @@ static void handle_data_byte(uint8_t ch)
     g_job_offset++;
 
     if (g_job_offset >= g_data_log_next || g_job_offset >= g_job_total) {
-        osal_printk("[JOB_TX_DATA_RX] job=%u off=%u/%u\r\n",
-                    (unsigned int)g_job_id, (unsigned int)g_job_offset,
-                    (unsigned int)g_job_total);
+        if (JOB_DIAG_LOG) {
+            osal_printk("[JOB_TX_DATA_RX] job=%u off=%u/%u\r\n",
+                        (unsigned int)g_job_id, (unsigned int)g_job_offset,
+                        (unsigned int)g_job_total);
+        }
         while (g_data_log_next <= g_job_offset) {
             g_data_log_next += TX_DATA_RX_LOG_STEP;
         }
@@ -299,7 +350,9 @@ static void handle_data_byte(uint8_t ch)
 
 static void send_simple_control(uint8_t type)
 {
-    (void)send_packet_wait_ack(type, NULL, 0);
+    if (send_packet_wait_ack(type, NULL, 0) == ERRCODE_SUCC) {
+        host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)type);
+    }
 }
 
 static void handle_command_line(char *line)
@@ -313,7 +366,7 @@ static void handle_command_line(char *line)
         unsigned long total;
         unsigned long crc;
         if (sscanf(line + 7, "%lu %lu %lx", &job_id, &total, &crc) != 3 ||
-            total == 0) {
+            total == 0 || total > JOB_CACHE_SIZE) {
             host_sendf("@ERR bad_begin\r\n");
             return;
         }
@@ -328,6 +381,7 @@ static void handle_command_line(char *line)
         g_job_chunk_len = 0;
         g_data_log_next = TX_DATA_RX_LOG_STEP;
         g_data_mode = true;
+        g_diag_data_count = 0;
         osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x\r\n",
                     (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
         host_sendf("@DATA_READY job=%u size=%u\r\n", (unsigned int)g_job_id, (unsigned int)g_job_total);
@@ -337,7 +391,9 @@ static void handle_command_line(char *line)
     if (strncmp(line, "@EXEC_START ", 12) == 0) {
         exec_start_payload_t start = {0};
         start.job_id = (uint32_t)strtoul(line + 12, NULL, 0);
-        (void)send_packet_wait_ack(PKT_EXEC_START, &start, sizeof(start));
+        if (send_packet_wait_ack(PKT_EXEC_START, &start, sizeof(start)) == ERRCODE_SUCC) {
+            host_sendf("@ACK type=16 seq=0 status=0\r\n");
+        }
         return;
     }
     if (strcmp(line, "@EXEC_STOP") == 0) {
@@ -346,6 +402,20 @@ static void handle_command_line(char *line)
     }
     if (strcmp(line, "@ABORT") == 0) {
         send_simple_control(PKT_JOB_ABORT);
+        return;
+    }
+    if (strcmp(line, "@RESET") == 0) {
+        g_data_mode = false;
+        g_job_offset = 0;
+        g_line_len = 0;
+        g_wait_active = false;
+        g_wait_got_ack = false;
+        g_wait_ack_seq = 0;
+        g_wait_status = JOB_STATUS_INTERNAL_ERROR;
+        while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
+        }
+        host_sendf("@OK reset\r\n");
+        osal_printk("[JOB_TX] reset by command\r\n");
         return;
     }
     if (strcmp(line, "@STATUS") == 0) {
@@ -398,7 +468,14 @@ static int uart_rx_task(void *arg)
         if (ret <= 0) {
             if (g_data_mode) {
                 data_idle_ticks++;
-                if ((data_idle_ticks % TX_UART_IDLE_LOG_TICKS) == 0U) {
+                if (data_idle_ticks >= TX_DATA_MODE_TIMEOUT_TICKS) {
+                    osal_printk("[JOB_TX] data mode timeout, resetting\r\n");
+                    g_data_mode = false;
+                    g_job_offset = 0;
+                    g_line_len = 0;
+                    data_idle_ticks = 0;
+                    host_sendf("@ERR data_mode_timeout\r\n");
+                } else if ((data_idle_ticks % TX_UART_IDLE_LOG_TICKS) == 0U) {
                     osal_printk("[JOB_TX_UART_IDLE] data_mode=1 off=%u/%u status=%s\r\n",
                                 (unsigned int)g_job_offset, (unsigned int)g_job_total,
                                 sle_job_client_get_status());

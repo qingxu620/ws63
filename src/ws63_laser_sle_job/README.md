@@ -23,6 +23,18 @@ RX board
 - `LASER_SLE_JOB_TRANSMITTER`: reads PC UART commands, packages data, sends SLE packets.
 - `LASER_SLE_JOB_RECEIVER`: receives packets, validates seq/offset/CRC, caches job, executes locally.
 
+Current TX flow is intentionally two-stage:
+
+```text
+PC UART -> TX RAM cache -> SLE JOB_DATA packets -> RX RAM cache -> EXEC_START
+```
+
+TX does not send SLE packets while it is still receiving raw G-code bytes from the PC. This avoids blocking
+the UART receive task with SLE ACK waits.
+
+The task cache size is controlled by `CONFIG_LASER_SLE_JOB_CACHE_SIZE` in menuconfig. If that option is not
+defined, the code falls back to 64KB.
+
 Default config is RX. Switch role in:
 
 ```bash
@@ -74,7 +86,7 @@ Packet format is defined in `common/protocol.h`.
 - `ACK`
 - `NACK`
 
-First version uses sequential `JOB_DATA` offsets. Out-of-order data returns NACK.
+Current version uses sequential `JOB_DATA` offsets. Out-of-order data returns NACK.
 
 ## Debug Logs
 
