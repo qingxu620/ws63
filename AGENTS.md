@@ -6,7 +6,9 @@ This WSL environment is dedicated to the fbb_ws63 project only.
 
 The project root is:
 
+```text
 /root/fbb_ws63
+```
 
 Do not treat Windows paths under /mnt/c as the active development workspace unless explicitly instructed.
 
@@ -69,7 +71,7 @@ For laser-related code:
 
 WS63 runs Huawei LiteOS-M. **Priority numbering is inverted compared to FreeRTOS:**
 
-```
+```text
 Lower number = Higher priority
 0 = HIGHEST (LOS_TASK_PRIORITY_HIGHEST)
 31 = LOWEST (LOS_TASK_PRIORITY_LOWEST)
@@ -77,7 +79,7 @@ Lower number = Higher priority
 
 OSAL priority constants (from `osal_task.h`):
 
-```
+```text
 OSAL_TASK_PRIORITY_ABOVE_HIGH   2
 OSAL_TASK_PRIORITY_HIGH         3
 OSAL_TASK_PRIORITY_BELOW_HIGH   4
@@ -88,12 +90,12 @@ OSAL_TASK_PRIORITY_MIDDLE       6
 
 Current task priorities (from `config.h`):
 
-| Task | Macro | Value | Priority |
-|------|-------|-------|----------|
-| SLE stack | `TASK_PRIO_SLE` | 3 | HIGH |
-| UART RX | `TASK_PRIO_JOB_UART` | 3 | HIGH |
-| Job executor | `TASK_PRIO_JOB_EXECUTOR` | 4 | BELOW_HIGH |
-| Motion | `TASK_PRIO_MOTION` | 4 | BELOW_HIGH |
+| Task           | Macro                    | Value | Priority   |
+| -------------- | ------------------------ | ----- | ---------- |
+| SLE stack      | `TASK_PRIO_SLE`          | 3     | HIGH       |
+| UART RX        | `TASK_PRIO_JOB_UART`     | 3     | HIGH       |
+| Job executor   | `TASK_PRIO_JOB_EXECUTOR` | 4     | BELOW_HIGH |
+| Motion         | `TASK_PRIO_MOTION`       | 4     | BELOW_HIGH |
 
 **Consequences:**
 
@@ -125,27 +127,42 @@ For src/ws63_laser_sle_job_host/:
 1. Firmware code editing and compilation happen in **WSL2**.
 2. Project root: `/root/fbb_ws63`.
 3. Firmware build commands:
+
    ```bash
    python3 build.py -c ws63-liteos-app menuconfig
    python3 build.py -c ws63-liteos-app -ninja -j24
    ```
+
 4. Do NOT move the firmware project to `/mnt/c/...` or Windows Desktop for compilation.
 5. Host tool source (`src/ws63_laser_sle_job_host/`) can be edited in WSL2, but **running and serial debugging happen on Win11**.
 6. The user manually copies/downloads the host tool to Win11 Desktop to run.
-7. TX/RX serial debug logs are viewed in Win11 serial tools, typically **COM24** (TX) and **COM26** (RX).
-8. Do NOT assume WSL2 can directly access COM24/COM26.
-9. All test instructions must distinguish:
-   - **WSL2**: compile firmware;
-   - **Win11**: run Host tool, capture serial logs, upload G-code.
+7. **Win11 COM 口不固定**，可能因 USB 口、拓展坞、线缆、驱动、插入顺序变化。不要假设 COM8/COM24/COM26 或 COM27/COM6/COM24 仍然有效，这些只能作为历史示例。
+8. 每次新的运行/调试会话开始时，必须询问用户当前串口角色映射：
+   - **TX 命令串口**：UART1，Host 发送 @BEGIN/@DATA/@EXEC_START/@STATUS
+   - **TX 日志串口**：UART0 debug/log，TX 固件 osal_printk
+   - **RX 日志串口**：UART0 debug/log，RX 固件 osal_printk
+9. 当前安全波特率基线：
+   - TX 命令串口：**115200**，除非用户明确说 UART1 已经重新编译并烧录为其他波特率；
+   - TX 日志串口：**115200**；
+   - RX 日志串口：**115200**。
+10. Do NOT assume WSL2 can directly access COM ports.
+11. All test instructions must distinguish:
+    - **WSL2**: edit source, compile firmware, run scripts, check Git;
+    - **Win11**: run Host, select COM ports, capture serial logs, upload G-code, verify execution.
+12. 在给 Win11 运行/调试步骤前，先问：
+    - 当前 TX 命令串口是哪个 COM？
+    - 当前 TX 日志串口是哪个 COM？
+    - 当前 RX 日志串口是哪个 COM？
+    - 当前 TX 命令串口波特率是否仍为 115200？
 
 ## Automation Scripts / Common Workflow
 
 ### WSL2 / Win11 分工
 
-| 环境 | 职责 |
-|------|------|
-| **WSL2** | 源码修改、固件编译、Host 上位机同步 |
-| **Win11** | Host 运行、COM8/COM24/COM26 串口调试、BurnTool 烧录 |
+| 环境      | 职责                                             |
+| --------- | ----------------------------------------------- |
+| **WSL2**  | 源码修改、固件编译、Host 上位机同步             |
+| **Win11** | Host 运行、串口调试、BurnTool 烧录 |
 
 - 不要把固件工程移动到 `/mnt/c/...` 下编译。
 - 不要自动调用 BurnTool。
@@ -162,18 +179,21 @@ For src/ws63_laser_sle_job_host/:
 **Win11 运行目录：** `/mnt/c/Users/ZKX/OneDrive/Desktop/ws63_laser_sle_job_host/`
 
 **使用命令：**
+
 ```bash
 cd /root/fbb_ws63
 ./scripts/sync_host_to_win.sh
 ```
 
 **Win11 启动命令：**
+
 ```cmd
 cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_sle_job_host
 python main.py
 ```
 
 **说明：**
+
 - 同步前会做 `main.py` 语法检查；
 - `logs/` 目录不同步、不覆盖、不删除；
 - Host 源码在 WSL2 中修改，实际运行在 Win11。
@@ -185,6 +205,7 @@ python main.py
 **用途：** 自动切换 TX/RX 配置，分别编译，归档到 `fwstage`，避免同名产物互相覆盖。
 
 **使用命令：**
+
 ```bash
 cd /root/fbb_ws63
 
@@ -199,12 +220,14 @@ cd /root/fbb_ws63
 ```
 
 **归档目录：**
-```
+
+```text
 /root/fbb_ws63/src/output/ws63/fwstage/latest/
 ```
 
 **TX/RX 固件路径：**
-```
+
+```text
 /root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_tx_all.fwpkg
 /root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_all.fwpkg
 ```

@@ -32,7 +32,49 @@ PROGRESS_PUMP_MAX_ITEMS = 20
 LOG_TEXT_MAX_LINES = 4000
 LOG_TEXT_TRIM_LINES = 500
 LOG_FILE_FLUSH_LINES = 40
-JOB_PREROLL_BYTES = 2048
+JOB_PREROLL_BYTES = 4096
+RX_EXEC_DONE_RE = re.compile(
+    r"\[JOB_EXEC\]\s+done\s+job=(\d+)\s+lines=(\d+)\s+x_um=(-?\d+)\s+y_um=(-?\d+)"
+)
+SHOW_ALWAYS_TOKENS = (
+    "ERROR",
+    "NACK",
+    "@NACK",
+    "@ERR",
+    "TIMEOUT",
+    "ABORT",
+    "REJECT",
+    "SAFE_STOP",
+    "EXEC_DONE",
+    "[JOB_EXEC] start",
+    "[JOB_EXEC] done",
+    "JOB_READY",
+    "DATA_DONE",
+    "EXEC_START ACK",
+    "上传完成",
+    "开始上传",
+    "开始执行",
+    "执行完成",
+    "JOB_SLE_WRITE_CFM_TIMEOUT",
+    "JOB_EXEC_WAIT_TIMEOUT",
+    "JOB_RX_NACK_SEND",
+    "JOB_DATA_REJECT",
+    "JOB_CACHE_WRITE_REJECT",
+)
+HIDE_UI_TOKENS = (
+    "ACK_PARSE",
+    "[JOB_DATA_IN]",
+    "[JOB_DATA_HDR]",
+    "[JOB_DATA_RESULT]",
+    "[JOB_TX_DATA_ACK_PRE]",
+    "[JOB_TX_HOST_ACK]",
+    "[TX_ACK]",
+    "[RX_ACK]",
+    "[JOB_EXEC_STREAM_THROTTLE]",
+    "[JOB_EXEC] line=",
+    "@ACK type=2",
+    "update ssap send report handle",
+)
 
 
 def now_text() -> str:
@@ -525,7 +567,10 @@ class SleJobHostApp(tk.Tk):
         log_header.grid(row=0, column=0, sticky="ew")
         log_header.columnconfigure(0, weight=1)
         ttk.Label(log_header, text="通信日志").grid(row=0, column=0, sticky="w")
-        ttk.Button(log_header, text="清空日志", command=self.clear_log).grid(row=0, column=1, sticky="e")
+        self.show_diag_logs_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(log_header, text="诊断日志",
+                        variable=self.show_diag_logs_var).grid(row=0, column=1, padx=(0, 8), sticky="e")
+        ttk.Button(log_header, text="清空日志", command=self.clear_log).grid(row=0, column=2, sticky="e")
         self.log_text = tk.Text(right, height=20, wrap="word", state="disabled")
         self.log_text.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
         self.log_text.tag_configure("tx", foreground="#0B6E4F")
@@ -583,8 +628,51 @@ class SleJobHostApp(tk.Tk):
         except Exception:
             pass
 
+    def _log_kind_display(self, kind: str) -> str:
+        mapping = {
+            "tx_log": "TX日志",
+            "rx_log": "RX日志",
+            "tx": "TX",
+            "rx": "RX",
+            "status": "STATUS",
+            "error": "ERROR",
+            "com24": "TX日志",
+            "com26": "RX日志",
+        }
+        return mapping.get(kind, kind.upper())
+
+    def _should_show_log(self, kind: str, message: str) -> bool:
+        if getattr(self, "show_diag_logs_var", None) is not None and self.show_diag_logs_var.get():
+            return True
+        if kind == "error":
+            return True
+        text = str(message)
+        for token in SHOW_ALWAYS_TOKENS:
+            if token in text:
+                return True
+        for token in HIDE_UI_TOKENS:
+            if token in text:
+                return False
+        return True
+
     def append_log(self, kind: str, message: str) -> None:
-        line = f"{now_text()} {kind.upper():>6} {compact_text(message)}\n"
+        stamp = now_text()
+        display_kind = self._log_kind_display(kind)
+
+        if kind in ("com26", "rx_log"):
+            self._handle_rx_log_line(message)
+
+        if self.log_file is not None:
+            self.log_file.write(f"{stamp} {display_kind} {message}\n")
+            self.log_file_pending += 1
+            if self.log_file_pending >= LOG_FILE_FLUSH_LINES:
+                self.log_file.flush()
+                self.log_file_pending = 0
+
+        if not self._should_show_log(kind, message):
+            return
+
+        line = f"{stamp} {display_kind} {compact_text(message)}\n"
         self.log_text.configure(state="normal")
         self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status", "com24", "com26"} else "")
         self.log_line_count += 1
@@ -593,12 +681,22 @@ class SleJobHostApp(tk.Tk):
             self.log_line_count -= LOG_TEXT_TRIM_LINES
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
-        if self.log_file is not None:
-            self.log_file.write(line)
-            self.log_file_pending += 1
-            if self.log_file_pending >= LOG_FILE_FLUSH_LINES:
-                self.log_file.flush()
-                self.log_file_pending = 0
+
+    def _handle_rx_log_line(self, message: str) -> None:
+        match = RX_EXEC_DONE_RE.search(message)
+        if not match:
+            return
+
+        job_id = int(match.group(1))
+        lines = int(match.group(2))
+        x_um = int(match.group(3))
+        y_um = int(match.group(4))
+
+        self.task_status_var.set(f"执行完成：lines={lines}")
+        self.enqueue_log(
+            "status",
+            f"EXEC_DONE job={job_id} lines={lines} x_um={x_um} y_um={y_um}",
+        )
 
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
