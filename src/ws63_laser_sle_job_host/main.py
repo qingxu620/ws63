@@ -429,8 +429,8 @@ class SleJobHostApp(tk.Tk):
         self.progress_queue: "queue.Queue[str]" = queue.Queue()
         self.task_status_queue: "queue.Queue[tuple[str, int]]" = queue.Queue()  # (status_text, progress_value)
         self.client = SleJobSerialClient(self.enqueue_log)
-        self.tx_log_monitor = SerialLogMonitor("COM24", self.enqueue_log)
-        self.rx_log_monitor = SerialLogMonitor("COM26", self.enqueue_log)
+        self.tx_log_monitor = SerialLogMonitor("tx_log", self.enqueue_log)
+        self.rx_log_monitor = SerialLogMonitor("rx_log", self.enqueue_log)
         self.worker_thread: Optional[threading.Thread] = None
         self.log_path: Optional[Path] = None
         self.log_file: Optional[TextIO] = None
@@ -475,14 +475,14 @@ class SleJobHostApp(tk.Tk):
         self.tx_log_port_var = tk.StringVar()
         self.tx_log_combo = ttk.Combobox(top, textvariable=self.tx_log_port_var, width=34, state="readonly")
         self.tx_log_combo.grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=(6, 0))
-        self.tx_log_button = ttk.Button(top, text="监听COM24", command=self.toggle_tx_log_monitor)
+        self.tx_log_button = ttk.Button(top, text="监听TX日志", command=self.toggle_tx_log_monitor)
         self.tx_log_button.grid(row=1, column=2, padx=(0, 12), pady=(6, 0))
 
         ttk.Label(top, text="RX日志").grid(row=1, column=3, padx=(0, 6), pady=(6, 0))
         self.rx_log_port_var = tk.StringVar()
         self.rx_log_combo = ttk.Combobox(top, textvariable=self.rx_log_port_var, width=34, state="readonly")
         self.rx_log_combo.grid(row=1, column=4, sticky="ew", padx=(0, 6), pady=(6, 0))
-        self.rx_log_button = ttk.Button(top, text="监听COM26", command=self.toggle_rx_log_monitor)
+        self.rx_log_button = ttk.Button(top, text="监听RX日志", command=self.toggle_rx_log_monitor)
         self.rx_log_button.grid(row=1, column=5, padx=(0, 6), pady=(6, 0))
 
         main = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -577,8 +577,8 @@ class SleJobHostApp(tk.Tk):
         self.log_text.tag_configure("rx", foreground="#1B4D89")
         self.log_text.tag_configure("error", foreground="#B00020")
         self.log_text.tag_configure("status", foreground="#7A4E00")
-        self.log_text.tag_configure("com24", foreground="#6A1B9A")
-        self.log_text.tag_configure("com26", foreground="#00695C")
+        self.log_text.tag_configure("tx_log", foreground="#6A1B9A")
+        self.log_text.tag_configure("rx_log", foreground="#00695C")
 
     def enqueue_log(self, kind: str, message: str) -> None:
         self.log_queue.put((kind, message))
@@ -636,8 +636,6 @@ class SleJobHostApp(tk.Tk):
             "rx": "RX",
             "status": "STATUS",
             "error": "ERROR",
-            "com24": "TX日志",
-            "com26": "RX日志",
         }
         return mapping.get(kind, kind.upper())
 
@@ -674,7 +672,7 @@ class SleJobHostApp(tk.Tk):
 
         line = f"{stamp} {display_kind} {compact_text(message)}\n"
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status", "com24", "com26"} else "")
+        self.log_text.insert("end", line, kind if kind in {"tx", "rx", "error", "status", "tx_log", "rx_log"} else "")
         self.log_line_count += 1
         if self.log_line_count > LOG_TEXT_MAX_LINES:
             self.log_text.delete("1.0", f"{LOG_TEXT_TRIM_LINES + 1}.0")
@@ -697,6 +695,13 @@ class SleJobHostApp(tk.Tk):
             "status",
             f"EXEC_DONE job={job_id} lines={lines} x_um={x_um} y_um={y_um}",
         )
+        self.after(1500, self._reset_progress_after_done)
+
+    def _reset_progress_after_done(self) -> None:
+        try:
+            self.task_progress["value"] = 0
+        except Exception:
+            pass
 
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
@@ -747,10 +752,10 @@ class SleJobHostApp(tk.Tk):
             messagebox.showerror("连接失败", str(exc))
 
     def toggle_tx_log_monitor(self) -> None:
-        self._toggle_monitor(self.tx_log_monitor, self.tx_log_port_var, self.tx_log_button, "监听COM24", "停止COM24")
+        self._toggle_monitor(self.tx_log_monitor, self.tx_log_port_var, self.tx_log_button, "监听TX日志", "停止TX日志")
 
     def toggle_rx_log_monitor(self) -> None:
-        self._toggle_monitor(self.rx_log_monitor, self.rx_log_port_var, self.rx_log_button, "监听COM26", "停止COM26")
+        self._toggle_monitor(self.rx_log_monitor, self.rx_log_port_var, self.rx_log_button, "监听RX日志", "停止RX日志")
 
     def _toggle_monitor(
         self,
