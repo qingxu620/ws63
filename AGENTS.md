@@ -101,7 +101,7 @@ Current task priorities (from `config.h`):
 
 - SLE (3) has **higher** priority than job executor (4). SLE can always preempt exec when data arrives.
 - `osal_yield()` on a lower-priority task (e.g. exec at 4) will NOT starve higher-priority tasks (e.g. SLE at 3). When SLE becomes Ready, it preempts exec immediately.
-- If you need a task to wait for an event from a higher-priority task, use `ulTaskNotifyTake` / `xTaskNotifyGive`, not busy-wait with `osal_yield(); continue;`. The higher-priority task will unblock the lower one via notification.
+- If you need a task to wait for an event from a higher-priority task, use the project's existing LiteOS/OSAL synchronization primitives, such as event/semaphore/queue/task notification wrapper, not busy-wait with `osal_yield(); continue;`. Do not introduce FreeRTOS-specific APIs unless the SDK explicitly provides a compatibility layer.
 - Never increase a task's priority number thinking it makes it "higher priority" — it does the opposite.
 
 ## SLE / Transport Rules
@@ -133,14 +133,17 @@ For src/ws63_laser_sle_job_host/:
    python3 build.py -c ws63-liteos-app -ninja -j24
    ```
 
+   For normal TX/RX firmware builds, prefer `./scripts/build_sle_job_firmwares.sh --both` because it builds and archives TX/RX outputs separately. Use raw `build.py` only for menuconfig or low-level SDK debugging.
+
 4. Do NOT move the firmware project to `/mnt/c/...` or Windows Desktop for compilation.
 5. Host tool source (`src/ws63_laser_sle_job_host/`) can be edited in WSL2, but **running and serial debugging happen on Win11**.
-6. The user manually copies/downloads the host tool to Win11 Desktop to run.
+6. Host tool is synchronized to the Win11 Desktop run directory using `scripts/sync_host_to_win.sh`. Manual copy is only a fallback when explicitly requested.
 7. **Win11 COM 口不固定**，可能因 USB 口、拓展坞、线缆、驱动、插入顺序变化。不要假设 COM8/COM24/COM26 或 COM27/COM6/COM24 仍然有效，这些只能作为历史示例。
 8. 每次新的运行/调试会话开始时，必须询问用户当前串口角色映射：
    - **TX 命令串口**：UART1，Host 发送 @BEGIN/@DATA/@EXEC_START/@STATUS
    - **TX 日志串口**：UART0 debug/log，TX 固件 osal_printk
    - **RX 日志串口**：UART0 debug/log，RX 固件 osal_printk
+   Remember the mapping only for the current conversation/debug session. Do not implement persistent `host_config.json` unless the user explicitly asks for it again.
 9. 当前安全波特率基线：
    - TX 命令串口：**115200**，除非用户明确说 UART1 已经重新编译并烧录为其他波特率；
    - TX 日志串口：**115200**；
@@ -277,13 +280,29 @@ python main.py
 **功率换算：**
 - Host S: 0-100
 - RX internal: S × 10 = 0-1000
-- 占空比: S%
+- Effective target power ratio is approximately S%; exact PWM mapping follows `laser_ctrl.c`.
 
 **关键文件：**
 - `common/protocol.h`: PKT_FOCUS_CTRL=0x14, focus_ctrl_payload_t
 - `transmitter/main.c`: @FOCUS_ON/@FOCUS_OFF 解析
 - `receiver/job_manager.c`: handle_focus_ctrl(), focus_force_off(), 安全互锁
 - `main.py`: toggle_focus(), _focus_on(), _focus_off(), _focus_off_before_job()
+
+Changing `PKT_FOCUS_CTRL` or `focus_ctrl_payload_t` requires rebuilding and flashing both TX and RX firmware.
+
+### 6. Demo Stable Checklist
+
+Before a demo run:
+
+1. Confirm the current Win11 three-port serial role mapping.
+2. Keep all serial ports at **115200**.
+3. Verify `@STATUS` responds.
+4. Verify manual focus on/off with `S10` and `S70`.
+5. Run a short G-code job.
+6. Run a large file with `preroll=4096`.
+7. Confirm `EXEC_DONE` is reported.
+8. After job done, confirm the laser is physically off.
+9. Do not test the 921600 demo path unless the user explicitly requests it.
 
 ## Response Style
 
