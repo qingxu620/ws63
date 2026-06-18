@@ -25,13 +25,14 @@ UPLOAD_TIMEOUT_DEFAULT = 20.0
 DEFAULT_JOB_ID = 1
 EXEC_START_DELAY_AFTER_UPLOAD_S = 0.2
 JOB_DATA_CHUNK_SIZE = 214
-SERIAL_WRITE_BURST_SIZE = 64
+SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
 LOG_PUMP_MAX_LINES = 120
 PROGRESS_PUMP_MAX_ITEMS = 20
 LOG_TEXT_MAX_LINES = 4000
 LOG_TEXT_TRIM_LINES = 500
 LOG_FILE_FLUSH_LINES = 40
+JOB_PREROLL_BYTES = 2048
 
 
 def now_text() -> str:
@@ -180,24 +181,31 @@ class SleJobSerialClient:
             raise RuntimeError("空命令")
         self.write_bytes((clean + "\n").encode("ascii"), clean)
 
-    def wait_for(self, pattern: str, timeout: float, *, regex: bool = False) -> WaitResult:
+    def wait_for(self, pattern: str, timeout: float, *, regex: bool = False,
+                 collect_lines: bool = False) -> WaitResult:
         started = time.monotonic()
         deadline = started + timeout
         compiled = re.compile(pattern) if regex else None
         last_line = ""
+        recent_lines: list[str] = []
         while time.monotonic() < deadline:
             try:
                 line = self._lines.get(timeout=0.05)
             except queue.Empty:
                 continue
             last_line = line
+            if collect_lines:
+                recent_lines.append(line)
+                if len(recent_lines) > 10:
+                    recent_lines.pop(0)
             matched = bool(compiled.search(line)) if compiled is not None else pattern in line
             if matched:
                 return WaitResult(line=line, elapsed_ms=int((time.monotonic() - started) * 1000))
             if line.startswith("@ERR") or line.startswith("@NACK"):
                 raise RuntimeError(f"收到错误响应: {line}")
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        raise TimeoutError(f"等待 {pattern} 超时，耗时 {elapsed_ms} ms，最后响应: {last_line or '无'}")
+        tail = recent_lines[-10:] if recent_lines else [last_line or "无"]
+        raise TimeoutError(f"等待 {pattern} 超时，耗时 {elapsed_ms} ms，最近响应: {tail}")
 
     def transact_status(self, timeout: float) -> WaitResult:
         with self._command_lock:
@@ -214,7 +222,7 @@ class SleJobSerialClient:
     def upload_job(self, job_id: int, gcode: bytes, timeout: float, wait_ready: bool = True,
                    progress_cb: Optional[Callable[[str], None]] = None,
                    status_cb: Optional[Callable[[str, float], None]] = None,
-                   total: int = 0) -> None:
+                   total: int = 0, preroll_bytes: int = 0) -> None:
         if not gcode:
             raise RuntimeError("G-code 内容为空")
 
@@ -225,7 +233,10 @@ class SleJobSerialClient:
             self._drain_lines()
             if status_cb:
                 status_cb("正在建立任务", 0)
-            self.send_line(f"@BEGIN {job_id} {total_size} {crc:04x}")
+            if preroll_bytes > 0:
+                self.send_line(f"@BEGIN {job_id} {total_size} {crc:04x} preroll={preroll_bytes}")
+            else:
+                self.send_line(f"@BEGIN {job_id} {total_size} {crc:04x}")
             ready = self.wait_for(f"@DATA_READY job={job_id}", timeout)
             t_ready = time.perf_counter()
             self._on_log("status", f"DATA_READY total={(t_ready - t_begin) * 1000:.0f} ms")
@@ -234,25 +245,59 @@ class SleJobSerialClient:
             offset = 0
             chunk_count = 0
             t_data_start = time.perf_counter()
-            while offset < total_size:
-                end = min(offset + JOB_DATA_CHUNK_SIZE, total_size)
-                chunk = gcode[offset:end]
-                self.write_bytes(
-                    chunk,
-                    f"<raw gcode chunk> off={offset} len={len(chunk)} next={end}/{total_size} crc=0x{crc:04x}",
-                )
-                ack = self.wait_for(
-                    rf"@ACK type=2 .*status=0 .*offset={end}\b",
-                    timeout,
-                    regex=True,
-                )
-                offset = end
-                chunk_count += 1
-                pct = offset * 100 // total_size
-                if status_cb:
-                    status_cb(f"上传中 {offset}/{total_size} bytes", pct)
-                if progress_cb and (chunk_count % 100 == 0 or offset >= total_size):
-                    progress_cb(f"上传中 {offset}/{total_size} ({pct}%)")
+            preroll_done = False
+            try:
+                while offset < total_size:
+                    end = min(offset + JOB_DATA_CHUNK_SIZE, total_size)
+                    chunk = gcode[offset:end]
+                    self.write_bytes(
+                        chunk,
+                        f"<raw gcode chunk> off={offset} len={len(chunk)} next={end}/{total_size} crc=0x{crc:04x}",
+                    )
+                    ack = self.wait_for(
+                        rf"@ACK type=2 .*status=0 .*offset={end}\b",
+                        timeout,
+                        regex=True,
+                    )
+                    offset = end
+                    chunk_count += 1
+                    has_preroll = "preroll=1" in ack.line
+                    is_last = (offset >= total_size)
+                    should_log = (chunk_count <= 12) or has_preroll or is_last
+                    if should_log:
+                        self._on_log("status", f"ACK_PARSE raw=\"{ack.line}\" offset={offset} preroll={1 if has_preroll else 0}")
+                    pct = offset * 100 // total_size
+                    if status_cb:
+                        status_cb(f"上传中 {offset}/{total_size} bytes", pct)
+                    if progress_cb and (chunk_count % 100 == 0 or offset >= total_size):
+                        progress_cb(f"上传中 {offset}/{total_size} ({pct}%)")
+                    if preroll_bytes > 0 and not preroll_done and has_preroll:
+                        preroll_done = True
+                        t_preroll = time.perf_counter()
+                        self._on_log("status", f"PREROLL_TRIGGER source=ack_preroll offset={offset} elapsed={(t_preroll - t_begin) * 1000:.0f} ms")
+                        if status_cb:
+                            status_cb("预缓冲完成，启动执行", offset * 100 // total_size)
+                        self._on_log("status", f"SEND_EXEC_START reason=preroll_ack job={job_id} offset={offset}")
+                        self.send_line(f"@EXEC_START {job_id}")
+                        self._on_log("status", f"WAIT_EXEC_ACK begin timeout={timeout} ms")
+                        exec_ack = self.wait_for("@ACK type=16", timeout, collect_lines=True)
+                        t_exec_ack = time.perf_counter()
+                        self._on_log("status", f"STREAM_EXEC_START ACK {(t_exec_ack - t_preroll) * 1000:.0f} ms")
+                        self.send_line("@DATA_RESUME")
+                        resume_ok = self.wait_for("@OK data_resume", timeout)
+                        self._on_log("status", "DATA_RESUME OK")
+                        if status_cb:
+                            status_cb(f"继续上传 {offset}/{total_size} bytes", pct)
+            except Exception as exc:
+                if preroll_done:
+                    self._on_log("error", f"预缓冲上传失败，发送 ABORT: {exc}")
+                    try:
+                        self.send_line("@ABORT")
+                    except Exception:
+                        pass
+                    if status_cb:
+                        status_cb("上传失败，已中止 RX 执行", 0)
+                raise
             t_data_done = time.perf_counter()
             data_elapsed = t_data_done - t_data_start
             data_rate = total_size / data_elapsed if data_elapsed > 0 else 0
@@ -439,8 +484,22 @@ class SleJobHostApp(tk.Tk):
         self.progress_var = tk.StringVar(value="待上传")
         ttk.Label(controls, textvariable=self.progress_var).grid(row=0, column=10, sticky="e")
 
+        mode_frame = ttk.LabelFrame(left, text="执行模式", padding=6)
+        mode_frame.grid(row=3, column=0, sticky="ew", pady=(4, 4))
+        self.exec_mode_var = tk.StringVar(value="normal")
+        ttk.Radiobutton(mode_frame, text="普通模式：完整下发后执行",
+                        variable=self.exec_mode_var, value="normal",
+                        command=self._on_mode_change).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Radiobutton(mode_frame, text="预缓冲模式：边收边执行",
+                        variable=self.exec_mode_var, value="preroll",
+                        command=self._on_mode_change).grid(row=1, column=0, sticky="w")
+        ttk.Label(mode_frame, text="预缓冲大小(bytes):").grid(row=1, column=1, padx=(12, 4), sticky="w")
+        self.preroll_bytes_var = tk.StringVar(value=str(JOB_PREROLL_BYTES))
+        self.preroll_entry = ttk.Entry(mode_frame, textvariable=self.preroll_bytes_var, width=8, state="disabled")
+        self.preroll_entry.grid(row=1, column=2, padx=(0, 6), sticky="w")
+
         status_frame = ttk.Frame(left)
-        status_frame.grid(row=3, column=0, sticky="ew", pady=(4, 8))
+        status_frame.grid(row=4, column=0, sticky="ew", pady=(4, 8))
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="任务状态:").grid(row=0, column=0, padx=(0, 6))
@@ -454,7 +513,7 @@ class SleJobHostApp(tk.Tk):
         self.task_progress["value"] = 0
 
         quick = ttk.Frame(left)
-        quick.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        quick.grid(row=5, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(quick, text="@STATUS", command=self.query_status).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_START", command=self.exec_start).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_STOP", command=self.exec_stop).grid(row=0, column=2, padx=(0, 6))
@@ -702,6 +761,23 @@ class SleJobHostApp(tk.Tk):
         self.worker_thread = threading.Thread(target=target, daemon=True)
         self.worker_thread.start()
 
+    def _on_mode_change(self) -> None:
+        if self.exec_mode_var.get() == "preroll":
+            self.preroll_entry.configure(state="normal")
+        else:
+            self.preroll_entry.configure(state="disabled")
+
+    def _get_preroll_bytes(self) -> int:
+        if self.exec_mode_var.get() == "normal":
+            return 0
+        text = self.preroll_bytes_var.get().strip()
+        if not text:
+            raise ValueError("预缓冲大小不能为空")
+        value = int(text)
+        if value <= 0:
+            raise ValueError("预缓冲大小必须大于 0")
+        return value
+
     def upload_job(self) -> None:
         self._run_worker(lambda: self._upload_worker(start_after=False))
 
@@ -715,11 +791,15 @@ class SleJobHostApp(tk.Tk):
             gcode = self._gcode_bytes()
             crc = crc16_ccitt(gcode)
             total = len(gcode)
+            preroll = self._get_preroll_bytes()
+            mode_text = "preroll" if preroll > 0 else "normal"
             self.enqueue_task_status("正在建立任务", 0)
-            self.enqueue_log("status", f"上传配置: chunk={JOB_DATA_CHUNK_SIZE}B "
+            self.enqueue_log("status", f"上传配置: mode={mode_text} "
+                             f"chunk={JOB_DATA_CHUNK_SIZE}B "
                              f"serial_burst={SERIAL_WRITE_BURST_SIZE}B "
                              f"gap={int(SERIAL_WRITE_BURST_GAP_S * 1000)}ms "
-                             f"baud={BAUD_DEFAULT}")
+                             f"baud={BAUD_DEFAULT}"
+                             + (f" preroll={preroll}B" if preroll > 0 else ""))
             self.enqueue_progress(f"上传中 {total} bytes crc=0x{crc:04x}")
             self.enqueue_log("status", f"开始上传 job={job_id} size={total} crc=0x{crc:04x}")
             self.client.upload_job(
@@ -728,10 +808,11 @@ class SleJobHostApp(tk.Tk):
                 progress_cb=self.enqueue_progress,
                 status_cb=self.enqueue_task_status,
                 total=total,
+                preroll_bytes=preroll,
             )
             self.enqueue_task_status("下发完成，可执行", 100)
             self.enqueue_progress(f"上传完成 job={job_id}")
-            if start_after:
+            if start_after and preroll == 0:
                 self.enqueue_log("status", "RX 已确认 JOB_READY，发送 EXEC_START")
                 try:
                     self._exec_start_worker()

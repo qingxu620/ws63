@@ -82,20 +82,34 @@ sle_job_status_t job_cache_begin(uint32_t job_id, uint32_t total_size, uint16_t 
 
 sle_job_status_t job_cache_write(uint32_t job_id, uint32_t offset, const uint8_t *data, uint16_t len)
 {
+    if (!g_receiving || job_id != g_job_id || data == NULL || len == 0 ||
+        offset != g_received || (uint32_t)len > job_cache_free()) {
+        osal_printk("[JOB_CACHE_WRITE_IN] job=%u expected_job=%u off=%u expected_off=%u len=%u data=%p received=%u avail=%u free=%u receiving=%d all_received=%d\r\n",
+                    (unsigned int)job_id, (unsigned int)g_job_id,
+                    (unsigned int)offset, (unsigned int)g_received,
+                    (unsigned int)len, (const void *)data,
+                    (unsigned int)g_received, (unsigned int)g_data_len,
+                    (unsigned int)job_cache_free(), (int)g_receiving,
+                    (int)g_all_received);
+    }
     if (!g_receiving || job_id != g_job_id) {
+        osal_printk("[JOB_CACHE_WRITE_REJECT] reason=not_receiving receiving=%d job=%u expected=%u\r\n",
+                    (int)g_receiving, (unsigned int)job_id, (unsigned int)g_job_id);
         return JOB_STATUS_BAD_JOB;
     }
     if (data == NULL || len == 0) {
+        osal_printk("[JOB_CACHE_WRITE_REJECT] reason=null_or_zero data=%p len=%u\r\n",
+                    (const void *)data, (unsigned int)len);
         return JOB_STATUS_INTERNAL_ERROR;
     }
     if (offset != g_received) {
-        osal_printk("[JOB_CACHE] bad offset job=%u got=%u expect=%u len=%u\r\n",
-                    (unsigned int)job_id, (unsigned int)offset, (unsigned int)g_received, len);
+        osal_printk("[JOB_CACHE_WRITE_REJECT] reason=bad_offset got=%u expect=%u len=%u\r\n",
+                    (unsigned int)offset, (unsigned int)g_received, (unsigned int)len);
         return JOB_STATUS_BAD_OFFSET;
     }
     if ((uint32_t)len > job_cache_free()) {
-        osal_printk("[JOB_CACHE] no space job=%u len=%u free=%u\r\n",
-                    (unsigned int)job_id, (unsigned int)len, (unsigned int)job_cache_free());
+        osal_printk("[JOB_CACHE_WRITE_REJECT] reason=no_space len=%u free=%u\r\n",
+                    (unsigned int)len, (unsigned int)job_cache_free());
         return JOB_STATUS_NO_SPACE;
     }
 

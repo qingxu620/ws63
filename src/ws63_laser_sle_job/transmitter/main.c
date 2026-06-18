@@ -51,6 +51,8 @@ static uint32_t g_job_total = 0;
 static uint32_t g_job_offset = 0;
 static uint16_t g_job_crc = 0;
 static bool g_data_mode = false;
+static uint32_t g_preroll_bytes = 0;
+static bool g_preroll_signaled = false;
 static uint8_t g_job_chunk[JOB_TX_DATA_CHUNK_MAX];
 static uint16_t g_job_chunk_len = 0;
 static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
@@ -312,6 +314,12 @@ static void handle_data_byte(uint8_t ch)
         return;
     }
 
+    if (ch == '@' && g_preroll_bytes > 0 && !g_preroll_signaled) {
+        osal_printk("[JOB_TX_DATA_SUSPICIOUS_AT] off=%u/%u chunk_len=%u preroll_signaled=%d\r\n",
+                    (unsigned int)g_job_offset, (unsigned int)g_job_total,
+                    (unsigned int)g_job_chunk_len, (int)g_preroll_signaled);
+    }
+
     g_job_chunk[g_job_chunk_len++] = ch;
     g_job_offset++;
 
@@ -330,10 +338,43 @@ static void handle_data_byte(uint8_t ch)
         if (flush_job_chunk() != ERRCODE_SUCC) {
             osal_printk("[JOB_TX] chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
             g_data_mode = false;
+            g_job_chunk_len = 0;
+            send_packet_wait_ack(PKT_JOB_ABORT, NULL, 0);
+            host_sendf("@ERR chunk_send_fail_abort\r\n");
             return;
         }
-        host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
-                   PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
+        {
+            bool will_preroll = (g_preroll_bytes > 0 && !g_preroll_signaled &&
+                                 g_job_offset >= g_preroll_bytes && g_job_offset < g_job_total);
+            bool is_last = (g_job_offset >= g_job_total);
+            bool should_log = (g_diag_data_count <= 12) || will_preroll || is_last;
+            if (should_log) {
+                osal_printk("[JOB_TX_DATA_ACK_PRE] job=%u off=%u total=%u preroll_bytes=%u preroll_signaled=%d will_preroll=%d data_mode=%d\r\n",
+                            (unsigned int)g_job_id, (unsigned int)g_job_offset, (unsigned int)g_job_total,
+                            (unsigned int)g_preroll_bytes, (int)g_preroll_signaled,
+                            (int)will_preroll, (int)g_data_mode);
+            }
+            if (will_preroll) {
+                g_preroll_signaled = true;
+                g_data_mode = false;
+                osal_printk("[JOB_TX_PREROLL] job=%u offset=%u threshold=%u data_mode=%d\r\n",
+                            (unsigned int)g_job_id, (unsigned int)g_job_offset,
+                            (unsigned int)g_preroll_bytes, (int)g_data_mode);
+                if (should_log) {
+                    osal_printk("[JOB_TX_HOST_ACK] type=2 offset=%u preroll=1 data_mode=%d\r\n",
+                                (unsigned int)g_job_offset, (int)g_data_mode);
+                }
+                host_sendf("@ACK type=%u seq=0 status=%u offset=%u preroll=1\r\n",
+                           PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
+                return;
+            }
+            if (should_log) {
+                osal_printk("[JOB_TX_HOST_ACK] type=2 offset=%u preroll=0 data_mode=%d\r\n",
+                            (unsigned int)g_job_offset, (int)g_data_mode);
+            }
+            host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
+                       PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
+        }
     }
 
     if (g_job_offset >= g_job_total) {
@@ -357,16 +398,26 @@ static void send_simple_control(uint8_t type)
 
 static void handle_command_line(char *line)
 {
-    osal_printk("[JOB_TX_CMD] line=\"%s\" data_mode=%u off=%u/%u\r\n",
-                line, (unsigned int)g_data_mode, (unsigned int)g_job_offset,
-                (unsigned int)g_job_total);
+    osal_printk("[JOB_TX_CMD] line=\"%s\" data_mode=%d off=%u/%u preroll_bytes=%u preroll_signaled=%d\r\n",
+                line, (int)g_data_mode, (unsigned int)g_job_offset,
+                (unsigned int)g_job_total, (unsigned int)g_preroll_bytes,
+                (int)g_preroll_signaled);
 
     if (strncmp(line, "@BEGIN ", 7) == 0) {
         unsigned long job_id;
         unsigned long total;
         unsigned long crc;
-        if (sscanf(line + 7, "%lu %lu %lx", &job_id, &total, &crc) != 3 ||
-            total == 0 || total > JOB_CACHE_SIZE) {
+        unsigned long preroll = 0;
+        const char *tag = " preroll=";
+        const char *preroll_ptr = strstr(line, tag);
+        int parsed = sscanf(line + 7, "%lu %lu %lx", &job_id, &total, &crc);
+        if (parsed == 3 && preroll_ptr != NULL) {
+            preroll = strtoul(preroll_ptr + strlen(tag), NULL, 10);
+        }
+        osal_printk("[JOB_TX_BEGIN_PARSE] raw=\"%s\" job=%u total=%u crc=0x%04x preroll=%u found_preroll=%d\r\n",
+                    line, (unsigned int)job_id, (unsigned int)total, (unsigned int)crc,
+                    (unsigned int)preroll, (int)(preroll_ptr != NULL));
+        if (parsed != 3 || total == 0 || total > JOB_CACHE_SIZE) {
             host_sendf("@ERR bad_begin\r\n");
             return;
         }
@@ -382,8 +433,14 @@ static void handle_command_line(char *line)
         g_data_log_next = TX_DATA_RX_LOG_STEP;
         g_data_mode = true;
         g_diag_data_count = 0;
-        osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x\r\n",
-                    (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
+        g_preroll_bytes = (uint32_t)preroll;
+        g_preroll_signaled = false;
+        osal_printk("[JOB_TX_BEGIN] job=%u total=%u crc=0x%04x preroll=%u data_mode=%d\r\n",
+                    (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc,
+                    (unsigned int)g_preroll_bytes, (int)g_data_mode);
+        osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x preroll=%u\r\n",
+                    (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc,
+                    (unsigned int)g_preroll_bytes);
         host_sendf("@DATA_READY job=%u size=%u\r\n", (unsigned int)g_job_id, (unsigned int)g_job_total);
         return;
     }
@@ -393,6 +450,20 @@ static void handle_command_line(char *line)
         start.job_id = (uint32_t)strtoul(line + 12, NULL, 0);
         if (send_packet_wait_ack(PKT_EXEC_START, &start, sizeof(start)) == ERRCODE_SUCC) {
             host_sendf("@ACK type=16 seq=0 status=0\r\n");
+        }
+        return;
+    }
+    if (strcmp(line, "@DATA_RESUME") == 0) {
+        if (g_preroll_signaled && g_job_offset < g_job_total && !g_data_mode) {
+            g_data_mode = true;
+            osal_printk("[JOB_TX_DATA_RESUME] ok data_mode=%d off=%u/%u\r\n",
+                        (int)g_data_mode, (unsigned int)g_job_offset, (unsigned int)g_job_total);
+            host_sendf("@OK data_resume\r\n");
+        } else {
+            osal_printk("[JOB_TX_DATA_RESUME] fail preroll_signaled=%d off=%u/%u data_mode=%d\r\n",
+                        (int)g_preroll_signaled, (unsigned int)g_job_offset,
+                        (unsigned int)g_job_total, (int)g_data_mode);
+            host_sendf("@ERR cannot_resume\r\n");
         }
         return;
     }
@@ -412,6 +483,8 @@ static void handle_command_line(char *line)
         g_wait_got_ack = false;
         g_wait_ack_seq = 0;
         g_wait_status = JOB_STATUS_INTERNAL_ERROR;
+        g_preroll_bytes = 0;
+        g_preroll_signaled = false;
         while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
         }
         host_sendf("@OK reset\r\n");
