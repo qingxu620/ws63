@@ -30,9 +30,10 @@ typedef enum {
     PKT_EXEC_START = 0x10,
     PKT_EXEC_PAUSE = 0x11,
     PKT_EXEC_RESUME = 0x12,
-    PKT_EXEC_STOP = 0x13,
+    PKT_EXEC_STOP     = 0x13,
+    PKT_FOCUS_CTRL    = 0x14,
 
-    PKT_STATUS_REQ = 0x20,
+    PKT_STATUS_REQ    = 0x20,
     PKT_STATUS_RESP = 0x21,
 
     PKT_ACK = 0x80,
@@ -97,6 +98,11 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint32_t job_id;
 } exec_start_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t on;
+    uint8_t power;
+} focus_ctrl_payload_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t ack_type;

@@ -501,6 +501,35 @@ static void handle_command_line(char *line)
         return;
     }
 
+    if (strncmp(line, "@FOCUS_ON S", 11) == 0) {
+        unsigned long s = strtoul(line + 11, NULL, 10);
+        if (s > 100) {
+            host_sendf("@ERR focus_bad_power\r\n");
+            return;
+        }
+        focus_ctrl_payload_t fp = {0};
+        fp.on = 1;
+        fp.power = (uint8_t)s;
+        osal_printk("[FOCUS_TX] on s=%u sizeof=%u\r\n", (unsigned int)s, (unsigned int)sizeof(fp));
+        if (send_packet_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp)) == ERRCODE_SUCC) {
+            host_sendf("@OK focus_on s=%u\r\n", (unsigned int)s);
+        } else {
+            host_sendf("@NACK focus_reject\r\n");
+        }
+        return;
+    }
+    if (strcmp(line, "@FOCUS_OFF") == 0) {
+        focus_ctrl_payload_t fp = {0};
+        fp.on = 0;
+        fp.power = 0;
+        if (send_packet_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp)) == ERRCODE_SUCC) {
+            host_sendf("@OK focus_off\r\n");
+        } else {
+            host_sendf("@NACK focus_reject\r\n");
+        }
+        return;
+    }
+
     host_sendf("@ERR unknown_command\r\n");
 }
 

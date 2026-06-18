@@ -259,6 +259,32 @@ cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_sle_job_host
 python main.py
 ```
 
+### 5. 手动调焦功能
+
+**功能：** Host 手动控制激光调焦光开关。
+
+**协议：**
+- `@FOCUS_ON S{0-100}` → TX 转发 `PKT_FOCUS_CTRL(0x14)` → RX 开激光
+- `@FOCUS_OFF` → TX 转发 `PKT_FOCUS_CTRL(0x14)` → RX 关激光
+- TX 不直接控制激光，只转发命令
+- RX 只在 IDLE 状态允许 FOCUS_ON
+- FOCUS_OFF 无条件允许
+
+**RX 安全互锁：**
+- EXEC_START / EXEC_STOP / ABORT / disconnect / safe_stop / JOB_EXEC done 均强制 focus_off
+- focus_force_off() 幂等
+
+**功率换算：**
+- Host S: 0-100
+- RX internal: S × 10 = 0-1000
+- 占空比: S%
+
+**关键文件：**
+- `common/protocol.h`: PKT_FOCUS_CTRL=0x14, focus_ctrl_payload_t
+- `transmitter/main.c`: @FOCUS_ON/@FOCUS_OFF 解析
+- `receiver/job_manager.c`: handle_focus_ctrl(), focus_force_off(), 安全互锁
+- `main.py`: toggle_focus(), _focus_on(), _focus_off(), _focus_off_before_job()
+
 ## Response Style
 
 When working in this repository, prefer this structure:

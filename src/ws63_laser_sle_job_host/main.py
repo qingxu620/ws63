@@ -540,8 +540,17 @@ class SleJobHostApp(tk.Tk):
         self.preroll_entry = ttk.Entry(mode_frame, textvariable=self.preroll_bytes_var, width=8, state="disabled")
         self.preroll_entry.grid(row=1, column=2, padx=(0, 6), sticky="w")
 
+        focus_frame = ttk.LabelFrame(left, text="手动调焦", padding=6)
+        focus_frame.grid(row=4, column=0, sticky="ew", pady=(4, 4))
+        ttk.Label(focus_frame, text="S功率(0-100):").grid(row=0, column=0, padx=(0, 4))
+        self.focus_power_var = tk.StringVar(value="70")
+        ttk.Entry(focus_frame, textvariable=self.focus_power_var, width=6).grid(row=0, column=1, padx=(0, 12))
+        self.focus_active_ui = False
+        self.focus_button = ttk.Button(focus_frame, text="开启调焦", command=self.toggle_focus)
+        self.focus_button.grid(row=0, column=2, padx=(0, 6))
+
         status_frame = ttk.Frame(left)
-        status_frame.grid(row=4, column=0, sticky="ew", pady=(4, 8))
+        status_frame.grid(row=5, column=0, sticky="ew", pady=(4, 8))
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="任务状态:").grid(row=0, column=0, padx=(0, 6))
@@ -555,7 +564,7 @@ class SleJobHostApp(tk.Tk):
         self.task_progress["value"] = 0
 
         quick = ttk.Frame(left)
-        quick.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        quick.grid(row=6, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(quick, text="@STATUS", command=self.query_status).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_START", command=self.exec_start).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_STOP", command=self.exec_stop).grid(row=0, column=2, padx=(0, 6))
@@ -881,6 +890,55 @@ class SleJobHostApp(tk.Tk):
             raise ValueError("预缓冲大小必须大于 0")
         return value
 
+    def toggle_focus(self) -> None:
+        if self.focus_active_ui:
+            self._focus_off()
+        else:
+            self._focus_on()
+
+    def _focus_on(self) -> None:
+        text = self.focus_power_var.get().strip()
+        if not text:
+            self.enqueue_log("error", "调焦功率不能为空")
+            return
+        try:
+            s = int(text)
+        except ValueError:
+            self.enqueue_log("error", "调焦功率必须是整数")
+            return
+        if s < 0 or s > 100:
+            self.enqueue_log("error", f"调焦功率越界: {s}，必须 0..100")
+            return
+        try:
+            result = self.client.send_control(
+                f"@FOCUS_ON S{s}",
+                "@OK focus_on",
+                5.0,
+            )
+            self.focus_active_ui = True
+            self.focus_button.configure(text="关闭调焦")
+            self.enqueue_log("status", f"FOCUS_ON S={s} {result.elapsed_ms}ms")
+        except Exception as exc:
+            self.enqueue_log("error", f"FOCUS_ON 失败: {exc}")
+
+    def _focus_off(self) -> None:
+        try:
+            result = self.client.send_control(
+                "@FOCUS_OFF",
+                "@OK focus_off",
+                5.0,
+            )
+            self.focus_active_ui = False
+            self.focus_button.configure(text="开启调焦")
+            self.enqueue_log("status", f"FOCUS_OFF {result.elapsed_ms}ms")
+        except Exception as exc:
+            self.enqueue_log("error", f"FOCUS_OFF 失败: {exc}")
+
+    def _focus_off_before_job(self) -> None:
+        if self.focus_active_ui:
+            self.enqueue_log("status", "上传前自动关闭调焦光")
+            self._focus_off()
+
     def upload_job(self) -> None:
         self._run_worker(lambda: self._upload_worker(start_after=False))
 
@@ -889,6 +947,7 @@ class SleJobHostApp(tk.Tk):
 
     def _upload_worker(self, *, start_after: bool) -> None:
         try:
+            self._focus_off_before_job()
             job_id = self._job_id()
             timeout = self._timeout()
             gcode = self._gcode_bytes()

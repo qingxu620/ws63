@@ -30,6 +30,7 @@
 static volatile sle_job_state_t g_state = JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
 static volatile bool g_exec_active = false;
+static volatile bool g_focus_active = false;
 static uint16_t g_expected_seq = 1;
 static uint16_t g_last_seq = 0;
 static uint16_t g_resp_seq = 1;
@@ -54,6 +55,15 @@ static const char *state_name(sle_job_state_t state)
         case JOB_STATE_ERROR: return "ERROR";
         default: return "UNKNOWN";
     }
+}
+
+static void focus_force_off(void)
+{
+    if (g_focus_active) {
+        osal_printk("[FOCUS] force_off\r\n");
+    }
+    g_focus_active = false;
+    laser_force_off();
 }
 
 static uint16_t next_resp_seq(void)
@@ -161,6 +171,7 @@ void job_manager_safe_stop(const char *reason)
 {
     osal_printk("[JOB_SAFE_STOP] reason=%s state=%s\r\n",
                 (reason != NULL) ? reason : "unknown", state_name(g_state));
+    focus_force_off();
     g_abort_requested = true;
     motion_executor_request_abort();
     motion_executor_flush();
@@ -344,6 +355,7 @@ static int job_exec_task(void *arg)
 
     wait_motion_idle(MOTION_END_DRAIN_TIMEOUT_MS);
     laser_force_off();
+    focus_force_off();
     if (!g_abort_requested) {
         g_state = JOB_STATE_IDLE;
         int32_t x_um = (int32_t)(motion_executor_get_x() * 1000.0);
@@ -517,6 +529,7 @@ static void handle_job_end(const sle_packet_view_t *pkt)
 
 static void handle_exec_start(const sle_packet_view_t *pkt)
 {
+    focus_force_off();
     if (pkt->len != sizeof(exec_start_payload_t)) {
         send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_JOB);
         return;
@@ -539,6 +552,42 @@ static void handle_exec_start(const sle_packet_view_t *pkt)
             osal_printk("[EXEC_START] launch failed st=%u\r\n", launch_st);
             job_manager_safe_stop("exec-launch-fail");
         }
+    }
+}
+
+static void handle_focus_ctrl(const sle_packet_view_t *pkt)
+{
+    if (pkt->len != sizeof(focus_ctrl_payload_t)) {
+        send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_JOB);
+        return;
+    }
+    focus_ctrl_payload_t fp;
+    memcpy(&fp, pkt->payload, sizeof(fp));
+
+    if (fp.on) {
+        if (g_state != JOB_STATE_IDLE) {
+            osal_printk("[FOCUS] reject on state=%s\r\n", state_name(g_state));
+            send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_STATE);
+            return;
+        }
+        if (fp.power > 100) {
+            osal_printk("[FOCUS] reject bad_power=%u\r\n", (unsigned int)fp.power);
+            send_ack(pkt->type, pkt->seq, JOB_STATUS_BAD_JOB);
+            return;
+        }
+        uint16_t internal_power = (uint16_t)(fp.power * 10U);
+        laser_force_off();
+        laser_set_power(internal_power);
+        laser_enable(true);
+        g_focus_active = true;
+        seq_commit(pkt->seq);
+        send_ack(pkt->type, pkt->seq, JOB_STATUS_OK);
+        osal_printk("[FOCUS] on s=%u power=%u\r\n", (unsigned int)fp.power, (unsigned int)internal_power);
+    } else {
+        focus_force_off();
+        seq_commit(pkt->seq);
+        send_ack(pkt->type, pkt->seq, JOB_STATUS_OK);
+        osal_printk("[FOCUS] off\r\n");
     }
 }
 
@@ -603,6 +652,9 @@ void job_manager_on_packet(const uint8_t *data, uint16_t len)
             }
             send_status(JOB_STATUS_OK);
             break;
+        case PKT_FOCUS_CTRL:
+            handle_focus_ctrl(&pkt);
+            break;
         default:
             osal_printk("[JOB_RX] unsupported type=0x%02x seq=%u\r\n", pkt.type, pkt.seq);
             send_ack(pkt.type, pkt.seq, JOB_STATUS_BAD_JOB);
@@ -616,6 +668,7 @@ void job_manager_on_disconnect(void)
     job_cache_clear();
     g_state = JOB_STATE_IDLE;
     g_exec_active = false;
+    g_focus_active = false;
     g_expected_seq = 1;
     g_last_seq = 0;
     g_last_ack_type = 0;
@@ -629,6 +682,7 @@ void job_manager_init(void)
     g_state = JOB_STATE_IDLE;
     g_abort_requested = false;
     g_exec_active = false;
+    g_focus_active = false;
     g_expected_seq = 1;
     g_last_seq = 0;
     g_resp_seq = 1;
