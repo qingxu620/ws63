@@ -71,6 +71,50 @@ TF card support. TF/FATFS is not implemented in this phase.
 - SD_CS = GPIO14 (reserved, not used). TF/FATFS not implemented.
 - Current phase: no LVGL, no SLE, no laser job status integration.
 
+## SPI / I2C speed tuning
+
+### LCD SPI speed
+
+Default: 16 MHz. Configurable via `SCREEN_LCD_SPI_BAUDRATE` in screen_config.h.
+
+Recommended test sequence:
+1. 8 MHz — baseline, should always work
+2. 12 MHz — moderate speed
+3. 16 MHz — default, good balance
+4. 20 MHz — high speed
+5. 24 MHz — maximum, may not be stable on all boards
+
+Test criteria:
+- Fill screen with solid color: no noise, no flicker
+- Fill screen with alternating pattern: no color shift
+- Touch polling during LCD write: no lost data
+- Run for >10 minutes continuously
+
+### Touch I2C1 speed
+
+Default: 100 kHz. Configurable via `SCREEN_TOUCH_I2C_BAUDRATE` in screen_config.h.
+
+- 100 kHz: standard mode, always stable
+- 400 kHz: fast mode, test after 100kHz is confirmed stable
+
+### Speed test results
+
+| Config | SPI | I2C1 | Result | Date |
+|--------|-----|------|--------|------|
+| 1 | 16 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 2 | 20 MHz | 100 kHz | Skipped | — |
+| 3 | 24 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 4 | 32 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 5 | 32 MHz | 400 kHz | **PASS** | 2026-06-20 |
+
+**Current validated baseline:**
+- ST7796 LCD over SPI0 @ 32MHz
+- FT6336U touch over I2C1 @ 400kHz
+
+I2C1 1MHz is not pursued; current touch responsiveness already meets requirements.
+
+Test 1: LCD color test OK, self-test page OK, FT6336 probe 0x38 OK, touch init OK.
+
 ## Memory plan
 
 Avoid a full framebuffer:

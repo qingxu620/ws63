@@ -59,11 +59,13 @@ errcode_t screen_board_init(void)
     uapi_pin_set_mode(SCREEN_LCD_SPI_MISO_PIN, SCREEN_LCD_SPI_PIN_MODE);
 
     /* SPI init */
+    osal_printk("[SCREEN] lcd spi baud=%d\r\n", SCREEN_LCD_SPI_BAUDRATE);
+
     spi_attr_t spi_attr = {0};
     spi_attr.is_slave = false;
     spi_attr.slave_num = 1;
     spi_attr.bus_clk = SCREEN_LCD_SPI_BUS_CLK;
-    spi_attr.freq_mhz = SCREEN_LCD_SPI_FREQ_MHZ;
+    spi_attr.freq_mhz = SCREEN_LCD_SPI_BAUDRATE / 1000000;
     spi_attr.clk_polarity = 0;
     spi_attr.clk_phase = 0;
     spi_attr.frame_format = 0;

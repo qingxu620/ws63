@@ -70,12 +70,15 @@ errcode_t ft6336_init(void)
     errcode_t ret;
 
 #if SCREEN_BOARD_REV_FINAL_HW_I2C || SCREEN_BOARD_REV_FLYWIRE_HW_I2C
+#if SCREEN_BOARD_REV_FINAL_HW_I2C
+    osal_printk("[TOUCH] board rev: final hardware i2c1\r\n");
+#else
     osal_printk("[TOUCH] board rev: flywire hardware i2c1\r\n");
+#endif
     osal_printk("[TOUCH] pinmap SCL=GPIO%d SDA=GPIO%d RST=GPIO%d INT=GPIO%d\r\n",
                 SCREEN_TOUCH_SCL_PIN, SCREEN_TOUCH_SDA_PIN,
                 SCREEN_TOUCH_RST_PIN, SCREEN_TOUCH_INT_PIN);
-    osal_printk("[TOUCH] i2c bus=%d baud=%d\r\n",
-                SCREEN_TOUCH_I2C_BUS_ID, SCREEN_TOUCH_I2C_BAUDRATE);
+    osal_printk("[TOUCH] i2c1 baud=%d\r\n", SCREEN_TOUCH_I2C_BAUDRATE);
     osal_printk("[TOUCH] use hardware i2c1 addr=0x%02X\r\n", SCREEN_TOUCH_I2C_ADDR);
 
     ret = screen_hw_i2c_init();

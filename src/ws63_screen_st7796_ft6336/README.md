@@ -51,7 +51,41 @@ In `src/screen_config.h`:
 ```c
 #define SCREEN_BOARD_REV_FINAL_HW_I2C  1   /* Final board with hardware I2C1 */
 #define SCREEN_LCD_ONLY_COLOR_TEST     0   /* 0 = normal mode, 1 = LCD-only test */
+#define SCREEN_LCD_SPI_BAUDRATE  16000000  /* SPI clock: 8/12/16/20/24 MHz */
+#define SCREEN_TOUCH_I2C_BAUDRATE 100000   /* I2C1: 100kHz or 400kHz */
 ```
+
+### SPI / I2C Speed Test Recommendations
+
+| Interface | Test Range | Notes |
+|-----------|-----------|-------|
+| LCD SPI | 8 / 12 / 16 / 20 / 24 MHz | Start low, increase until stable |
+| Touch I2C1 | 100kHz / 400kHz | Default 100kHz, 400kHz after validation |
+
+**Stability criteria:**
+- No screen glitches or color errors
+- Touch data not lost during LCD updates
+- Long-term stable operation (>10 minutes)
+
+**Flywire environment:** Do not default to high SPI frequencies. Start at 8MHz
+and increase step by step. Breadboard wires have significant parasitic
+capacitance that limits signal integrity at high frequencies.
+
+### Speed Test Results
+
+| Config | SPI | I2C1 | Result | Date |
+|--------|-----|------|--------|------|
+| 1 | 16 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 2 | 20 MHz | 100 kHz | Skipped | — |
+| 3 | 24 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 4 | 32 MHz | 100 kHz | **PASS** | 2026-06-20 |
+| 5 | 32 MHz | 400 kHz | **PASS** | 2026-06-20 |
+
+**Current validated baseline:**
+- ST7796 LCD over SPI0 @ 32MHz
+- FT6336U touch over I2C1 @ 400kHz
+
+I2C1 1MHz is not pursued; current touch responsiveness already meets requirements.
 
 ## Build
 

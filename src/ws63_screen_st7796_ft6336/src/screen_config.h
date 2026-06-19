@@ -25,7 +25,7 @@
  *   LCD_BL   -> GPIO5
  */
 #define SCREEN_LCD_SPI_BUS             0
-#define SCREEN_LCD_SPI_FREQ_MHZ        10
+#define SCREEN_LCD_SPI_BAUDRATE        32000000  /* 32MHz max */
 #define SCREEN_LCD_SPI_BUS_CLK         32000000
 #define SCREEN_LCD_SPI_SCK_PIN         7
 #define SCREEN_LCD_SPI_MOSI_PIN        9
@@ -47,14 +47,14 @@
 #define SCREEN_TOUCH_SCL_PIN           16
 #define SCREEN_TOUCH_SDA_PIN           15
 #define SCREEN_TOUCH_I2C_BUS_ID        1
-#define SCREEN_TOUCH_I2C_BAUDRATE      100000
+#define SCREEN_TOUCH_I2C_BAUDRATE      400000
 #define SCREEN_TOUCH_I2C_PIN_MODE      2   /* PIN_MODE_2 = I2C1 alternate function */
 #elif SCREEN_BOARD_REV_FLYWIRE_HW_I2C
 /* Flywire board: hardware I2C1 at 100kHz */
 #define SCREEN_TOUCH_SCL_PIN           16
 #define SCREEN_TOUCH_SDA_PIN           15
 #define SCREEN_TOUCH_I2C_BUS_ID        1
-#define SCREEN_TOUCH_I2C_BAUDRATE      100000
+#define SCREEN_TOUCH_I2C_BAUDRATE      400000
 #define SCREEN_TOUCH_I2C_PIN_MODE      2
 #else
 /* Original board: software bit-bang I2C */
