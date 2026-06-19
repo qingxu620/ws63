@@ -1,9 +1,11 @@
 /**
  * @file ft6336_touch.c
- * @brief FT6336U capacitive touch driver.
+ * @brief FT6336U capacitive touch driver with I2C diagnostics.
  */
 #include "ft6336_touch.h"
 #include "screen_board.h"
+#include "screen_config.h"
+#include "soc_osal.h"
 
 #include <string.h>
 
@@ -17,7 +19,11 @@
 
 static errcode_t ft6336_read_reg(uint8_t reg, uint8_t *buf, uint32_t len)
 {
+#if SCREEN_BOARD_REV_FINAL_HW_I2C || SCREEN_BOARD_REV_FLYWIRE_HW_I2C
+    return screen_hw_i2c_read_reg(SCREEN_TOUCH_I2C_ADDR, reg, buf, len);
+#else
     return screen_touch_i2c_read(reg, buf, len);
+#endif
 }
 
 errcode_t ft6336_read_ids(uint8_t *vendor, uint8_t *cipher_mid, uint8_t *cipher_low, uint8_t *cipher_high)
@@ -55,26 +61,101 @@ errcode_t ft6336_read_ids(uint8_t *vendor, uint8_t *cipher_mid, uint8_t *cipher_
 
 errcode_t ft6336_init(void)
 {
+    /* Reset sequence: low 50ms, high 300ms */
     screen_touch_rst(false);
-    screen_board_delay_ms(10);
+    screen_board_delay_ms(50);
     screen_touch_rst(true);
-    screen_board_delay_ms(500);
+    screen_board_delay_ms(300);
 
+    errcode_t ret;
+
+#if SCREEN_BOARD_REV_FINAL_HW_I2C || SCREEN_BOARD_REV_FLYWIRE_HW_I2C
+    osal_printk("[TOUCH] board rev: flywire hardware i2c1\r\n");
+    osal_printk("[TOUCH] pinmap SCL=GPIO%d SDA=GPIO%d RST=GPIO%d INT=GPIO%d\r\n",
+                SCREEN_TOUCH_SCL_PIN, SCREEN_TOUCH_SDA_PIN,
+                SCREEN_TOUCH_RST_PIN, SCREEN_TOUCH_INT_PIN);
+    osal_printk("[TOUCH] i2c bus=%d baud=%d\r\n",
+                SCREEN_TOUCH_I2C_BUS_ID, SCREEN_TOUCH_I2C_BAUDRATE);
+    osal_printk("[TOUCH] use hardware i2c1 addr=0x%02X\r\n", SCREEN_TOUCH_I2C_ADDR);
+
+    ret = screen_hw_i2c_init();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[TOUCH] hw i2c1 init FAILED (0x%x)\r\n", ret);
+        return ret;
+    }
+    osal_printk("[TOUCH] hw i2c1 init ok\r\n");
+
+    /* Probe by reading register 0x02 (TD_STATUS) */
+    uint8_t probe_td = 0xFF;
+    ret = screen_hw_i2c_read_reg(SCREEN_TOUCH_I2C_ADDR, FT_REG_NUM_FINGER,
+                                 &probe_td, 1);
+    if (ret == ERRCODE_SUCC) {
+        osal_printk("[TOUCH] probe 0x%02X ok (reg 0x02=0x%02X)\r\n",
+                    SCREEN_TOUCH_I2C_ADDR, probe_td);
+    } else {
+        osal_printk("[TOUCH] probe 0x%02X FAILED (0x%x)\r\n",
+                    SCREEN_TOUCH_I2C_ADDR, ret);
+        return ERRCODE_FAIL;
+    }
+
+#else
+    osal_printk("[TOUCH] use i2c addr=0x%02X (7-bit, software bit-bang)\r\n",
+                SCREEN_TOUCH_I2C_ADDR);
+
+    /* I2C bus scan */
+    screen_i2c_scan();
+
+    /* Probe target address */
+    if (!screen_i2c_probe(SCREEN_TOUCH_I2C_ADDR)) {
+        osal_printk("[TOUCH] ERROR: addr 0x%02X not responding!\r\n", SCREEN_TOUCH_I2C_ADDR);
+        return ERRCODE_FAIL;
+    }
+    osal_printk("[TOUCH] addr 0x%02X ACK ok\r\n", SCREEN_TOUCH_I2C_ADDR);
+#endif
+
+    /* Read register 0x02 (touch count / TD_STATUS) */
+    uint8_t td_status = 0xFF;
+    ret = ft6336_read_reg(FT_REG_NUM_FINGER, &td_status, 1);
+    if (ret == ERRCODE_SUCC) {
+        osal_printk("[TOUCH] reg 0x02 = 0x%02X\r\n", td_status);
+    } else {
+        osal_printk("[TOUCH] reg 0x02 read FAILED (0x%x)\r\n", ret);
+    }
+
+    /* Read raw bytes from 0x03 (first touch point) */
+    uint8_t raw[6] = {0};
+    ret = ft6336_read_reg(FT_TP1_REG, raw, sizeof(raw));
+    if (ret == ERRCODE_SUCC) {
+        osal_printk("[TOUCH] raw bytes: %02X %02X %02X %02X %02X %02X\r\n",
+                    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]);
+    } else {
+        osal_printk("[TOUCH] raw bytes read FAILED (0x%x)\r\n", ret);
+    }
+
+    /* Read chip IDs */
     uint8_t vendor = 0;
     uint8_t mid = 0;
     uint8_t low = 0;
     uint8_t high = 0;
-    errcode_t ret = ft6336_read_ids(&vendor, &mid, &low, &high);
+    ret = ft6336_read_ids(&vendor, &mid, &low, &high);
     if (ret != ERRCODE_SUCC) {
+        osal_printk("[TOUCH] read_ids FAILED (0x%x)\r\n", ret);
         return ret;
     }
 
+    osal_printk("[TOUCH] vendor=0x%02X mid=0x%02X low=0x%02X high=0x%02X\r\n",
+                vendor, mid, low, high);
+
     if (vendor != 0x11 || mid != 0x26 || high != 0x64) {
+        osal_printk("[TOUCH] ID mismatch: expect vendor=0x11 mid=0x26 high=0x64\r\n");
         return ERRCODE_FAIL;
     }
     if (low != 0x00 && low != 0x01 && low != 0x02) {
+        osal_printk("[TOUCH] cipher_low unexpected: 0x%02X\r\n", low);
         return ERRCODE_FAIL;
     }
+
+    osal_printk("[TOUCH] ft6336 init ok\r\n");
     return ERRCODE_SUCC;
 }
 

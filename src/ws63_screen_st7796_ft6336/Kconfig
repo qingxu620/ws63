@@ -1,0 +1,30 @@
+#===============================================================================
+# @brief WS63 ST7796 LCD + FT6336 touch screen Kconfig
+#===============================================================================
+
+menu "WS63 屏幕模块配置 (ST7796 + FT6336)"
+    depends on ENABLE_SCREEN_SAMPLE
+
+config SCREEN_LCD_WIDTH
+    int "LCD 宽度（像素）"
+    default 320
+
+config SCREEN_LCD_HEIGHT
+    int "LCD 高度（像素）"
+    default 480
+
+config SCREEN_LCD_SPI_FREQ_MHZ
+    int "SPI 时钟频率（MHz）"
+    default 10
+    range 1 40
+    help
+        LCD SPI 时钟频率，单位 MHz。
+        默认 10MHz，可根据屏幕规格调整。
+
+config SCREEN_TOUCH_I2C_ADDR
+    int "触摸 I2C 地址（7-bit）"
+    default 0x38
+    help
+        FT6336 I2C 地址，默认 0x38。
+
+endmenu

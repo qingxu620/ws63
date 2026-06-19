@@ -5,6 +5,7 @@
 #include "st7796_lcd.h"
 #include "screen_board.h"
 #include "screen_config.h"
+#include "soc_osal.h"
 
 #include <stddef.h>
 
@@ -102,18 +103,30 @@ static errcode_t st7796_init_sequence(void)
 
 errcode_t st7796_init(void)
 {
+    osal_printk("[SCREEN] lcd reset pin=GPIO%d active low\r\n", SCREEN_LCD_RST_PIN);
+
+    osal_printk("[SCREEN] lcd reset low\r\n");
     screen_lcd_rst(false);
     screen_board_delay_ms(100);
+
+    osal_printk("[SCREEN] lcd reset high\r\n");
     screen_lcd_rst(true);
     screen_board_delay_ms(50);
 
     errcode_t ret = st7796_init_sequence();
     if (ret != ERRCODE_SUCC) {
+        osal_printk("[LCD] init sequence FAILED (0x%x)\r\n", ret);
         return ret;
     }
+    osal_printk("[LCD] init sequence ok\r\n");
+
+    osal_printk("[SCREEN] sleep out 0x11\r\n");
+    osal_printk("[SCREEN] display on 0x29\r\n");
+
     ret = st7796_set_rotation(ST7796_ROTATION_0);
     if (ret == ERRCODE_SUCC) {
         screen_lcd_bl(true);
+        osal_printk("[LCD] backlight on\r\n");
     }
     return ret;
 }
