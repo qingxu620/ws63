@@ -4,8 +4,9 @@ set -euo pipefail
 # =============================================================================
 # WS63 Screen Firmware Build & Archive Script
 # =============================================================================
-# Builds the screen node firmware (ST7796 LCD + FT6336 touch) with either
-# the raw self-test module or the LVGL v9.3.0 port.
+# Builds the screen node firmware. Current hardware selection is MSP3223
+# (ILI9341V LCD + FT6336U touch). The raw self-test module still contains
+# historical ST7796 bring-up code until the MSP3223/ILI9341V port lands.
 #
 # Usage:
 #   ./scripts/build_screen_firmware.sh            # default: LVGL
@@ -34,7 +35,7 @@ Usage: $0 [--lvgl|--selftest]
 
 Options:
   --lvgl      Build LVGL v9.3.0 port (default)
-  --selftest  Build raw ST7796 self-test page
+  --selftest  Build raw screen self-test page (currently historical ST7796 code)
 
 Output:
   ${STAGE_DIR}/latest/${DEST_NAME}

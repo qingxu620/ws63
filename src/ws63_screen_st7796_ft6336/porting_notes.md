@@ -2,13 +2,26 @@
 
 ## Vendor reference
 
-Source package:
+Current selected source package:
 
-- `4.0inch_SPI/2-Specification/ST7796_Init.txt`
-- `4.0inch_SPI/1-Demo/Demo_STM32/.../HARDWARE/LCD/lcd.c`
-- `4.0inch_SPI/1-Demo/Demo_STM32/.../HARDWARE/TOUCH/ft6336.c`
-- `4.0inch_SPI/4-Driver_IC_Data_Sheet/ST7796S-Sitronix.pdf`
-- `4.0inch_SPI/4-Driver_IC_Data_Sheet/DFT6336UDataSheetV1.1.pdf`
+- `MSP3223/init/ILI9341V_Init.txt`
+- `MSP3223/docs/driver_ic/ILI9341_Datasheet.pdf`
+- `MSP3223/docs/driver_ic/DFT6336UDataSheetV1.1.pdf`
+- `MSP3223/docs/driver_ic/FT6336U_Register.xlsx`
+- `MSP3223/docs/specification/MSP3222_MSP3223_Specification_CN_V1.0.pdf`
+- `MSP3223/docs/schematic/3.2inch_SPI_Module_MSP3222_MSP3223_Schematic.pdf`
+
+The old `src/4.0inch_SPI/` ST7796 reference package is no longer the active
+screen selection and has been removed from the project tree. Existing source
+filenames in this directory still use the historical ST7796 naming until the
+MSP3223 ILI9341V port is completed.
+
+Current selected hardware:
+
+- Module: MSP3223 3.2-inch SPI touch display
+- LCD controller: ILI9341V
+- Resolution: 240x320 RGB565 (`LCD_W=240`, `LCD_H=320` in the vendor init)
+- Touch controller: FT6336U at 0x38
 
 ## LCD signals (final board)
 
@@ -63,11 +76,13 @@ TF card support. TF/FATFS is not implemented in this phase.
 
 ## Current test status
 
-- LCD: ST7796 color test passed (red/green/blue/white/black).
-- Touch: FT6336 I2C1 communication verified at 100kHz.
-- Display orientation: 320x480 portrait (ST7796_ROTATION_0).
-- Touch-to-LCD mapping: initial direct mapping (1:1). Needs hardware
-  verification to determine if swap_xy / invert_x / invert_y is needed.
+- MSP3223/ILI9341V LCD port: pending.
+- MSP3223/FT6336U touch verification: pending.
+- Old ST7796 LCD color test: historical pass only, not the current selected module.
+- Old FT6336 I2C1 communication: historical pass only; FT6336U remains the touch target for MSP3223.
+- Display orientation: pending MSP3223 ILI9341V bring-up.
+- Touch-to-LCD mapping: pending MSP3223 hardware verification to determine if
+  swap_xy / invert_x / invert_y is needed.
 - SD_CS = GPIO14 (reserved, not used). TF/FATFS not implemented.
 - Current phase: no LVGL, no SLE, no laser job status integration.
 
@@ -107,11 +122,13 @@ Default: 100 kHz. Configurable via `SCREEN_TOUCH_I2C_BAUDRATE` in screen_config.
 | 4 | 32 MHz | 100 kHz | **PASS** | 2026-06-20 |
 | 5 | 32 MHz | 400 kHz | **PASS** | 2026-06-20 |
 
-**Current validated baseline:**
+**Historical validated baseline for the old ST7796 module:**
 - ST7796 LCD over SPI0 @ 32MHz
 - FT6336U touch over I2C1 @ 400kHz
 
-I2C1 1MHz is not pursued; current touch responsiveness already meets requirements.
+**Current MSP3223 target baseline:** pending ILI9341V driver port and hardware
+verification. I2C1 1MHz is not pursued unless the 100kHz/400kHz path proves
+insufficient.
 
 Test 1: LCD color test OK, self-test page OK, FT6336 probe 0x38 OK, touch init OK.
 
@@ -119,9 +136,9 @@ Test 1: LCD color test OK, self-test page OK, FT6336 probe 0x38 OK, touch init O
 
 Avoid a full framebuffer:
 
-- Full framebuffer: 320 * 480 * 2 = 307200 bytes.
-- One line buffer: 320 * 2 = 640 bytes.
-- Ten-line tile buffer: 320 * 10 * 2 = 6400 bytes.
+- Full MSP3223 framebuffer: 240 * 320 * 2 = 153600 bytes.
+- One 240-pixel line buffer: 240 * 2 = 480 bytes.
+- Ten-line 240-pixel tile buffer: 240 * 10 * 2 = 4800 bytes.
 
 The driver in this directory supports direct solid fills and external
 RGB565 pixel buffers, so it can later be connected to a partial-refresh

@@ -21,6 +21,7 @@ The current active development focus is:
 - src/ws63_screen_st7796_ft6336/
 - src/ws63_screen_lvgl/
 - src/ws63_laser_rx_unified/
+- MSP3223/
 
 Do not modify old demo directories, unrelated SDK examples, vendor code, or historical experimental folders unless explicitly instructed.
 
@@ -129,10 +130,16 @@ For src/ws63_laser_sle_job_host/:
 
 For `src/ws63_screen_st7796_ft6336/`:
 
-1. This module is the dedicated WS63 screen node for ST7796S LCD + FT6336 touch bring-up and later SLE central-control UI work.
+1. This module is the dedicated WS63 screen node for screen bring-up and later SLE central-control UI work. The directory name is historical: the project screen selection has moved from the old 4.0-inch ST7796 module to the `MSP3223/` reference package.
 2. Keep it separate from `ws63_laser_single`, `ws63_laser_wifi`, and `ws63_laser_sle_job` unless the user explicitly asks for integration.
 3. Current screen build enable switch is `CONFIG_ENABLE_SCREEN_SAMPLE=y`.
-4. Current screen pins:
+4. Current selected screen hardware:
+   - Module: MSP3223 3.2-inch SPI touch display
+   - LCD controller: ILI9341V, 240x320 RGB565
+   - Touch controller: FT6336U, I2C address 0x38
+   - Vendor/reference package: `MSP3223/`
+   - Old reference package `src/4.0inch_SPI/` has been removed from the active project.
+5. Current planned WS63 screen pins:
 
    | Function | GPIO |
    | -------- | ---- |
@@ -149,22 +156,23 @@ For `src/ws63_screen_st7796_ft6336/`:
    | CTP_INT  | GPIO13 |
    | SD_CS    | GPIO14 / reserved |
 
-5. Screen verification order:
+6. Screen verification order:
    - LCD first: verify red/green/blue/black color switching.
    - Touch second: verify FT6336 touch coordinate logs.
    - Product integration last: status display, parameter setting, and SLE central-control UI.
-6. Avoid full-framebuffer designs unless memory is explicitly budgeted. Prefer line buffers, tile buffers, or partial refresh.
-7. When modifying screen code, OpenCode/Codex should compile the screen firmware unless the user explicitly says not to compile.
-8. Screen firmware archive path should sit beside TX/RX outputs:
+7. Avoid full-framebuffer designs unless memory is explicitly budgeted. For MSP3223, a full 240x320 RGB565 framebuffer is 153600 bytes; prefer line buffers, tile buffers, or partial refresh.
+8. When modifying screen code, OpenCode/Codex should compile the screen firmware unless the user explicitly says not to compile.
+9. Screen firmware archive path should sit beside TX/RX outputs:
    - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpkg`
    - Timestamped copies should use the same `fwstage/<timestamp>/` convention when a script supports it.
-9. Do not auto-flash the screen board. Burning remains a Win11 manual BurnTool step.
+10. Do not auto-flash the screen board. Burning remains a Win11 manual BurnTool step.
+11. Do not use `src/4.0inch_SPI/` as an active reference. Use `MSP3223/init/ILI9341V_Init.txt`, `MSP3223/docs/driver_ic/ILI9341_Datasheet.pdf`, and the MSP3223 FT6336U documents instead.
 
 ## LVGL Module Rules
 
 For `src/ws63_screen_lvgl/`:
 
-1. This module is the LVGL v9.3.0 minimal port for WS63, reusing the ST7796 LCD and FT6336 touch drivers from `ws63_screen_st7796_ft6336/`.
+1. This module is the LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are migration leftovers until the display driver is ported.
 2. Keep it separate from laser modules. Do not integrate SLE/Host logic unless explicitly asked.
 3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y`.
 4. `CONFIG_ENABLE_LVGL_SAMPLE` and `CONFIG_ENABLE_SCREEN_SAMPLE` are **mutually exclusive** (shared hardware). Only one can be enabled at a time.
@@ -175,7 +183,7 @@ For `src/ws63_screen_lvgl/`:
    - `LV_FONT_DEFAULT=&lv_font_montserrat_14`
    - Only label, button, bar widgets enabled
    - Only RGB565 draw support enabled
-7. Display buffer: 320×48 pixels, single buffer, RGB565.
+7. Display buffer should be sized for the active MSP3223 orientation after the ILI9341 port lands. The current 320x48 single RGB565 buffer is a legacy ST7796-era setting and should be reviewed during the MSP3223 migration.
 8. Tick source: hardware timer (timer index 1, 1ms).
 9. Task priority: 25 (low, non-critical UI task).
 10. Screen firmware archive path reuses the screen name:
@@ -357,7 +365,7 @@ cd /root/fbb_ws63
 
 - 脚本会自动关闭所有竞争 sample（`LASER_SLE_JOB_SAMPLE`、`LASER_RX_UNIFIED`、`LVGL_SAMPLE`/`SCREEN_SAMPLE` 互斥）；
 - `--lvgl` 启用 `CONFIG_ENABLE_LVGL_SAMPLE=y`（LVGL v9.3.0 端口）；
-- `--selftest` 启用 `CONFIG_ENABLE_SCREEN_SAMPLE=y`（原始 ST7796 自检页）；
+- `--selftest` 启用 `CONFIG_ENABLE_SCREEN_SAMPLE=y`（当前为历史 ST7796 自检代码，后续需迁移到 MSP3223/ILI9341）；
 - 归档文件名始终为 `ws63-liteos-app_screen_all.fwpkg`，不会因 variant 不同而改名。
 
 ### 4. Win11 BurnTool 烧录

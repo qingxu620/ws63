@@ -1,7 +1,24 @@
-# WS63 ST7796 + FT6336 Screen Port
+# WS63 Screen Port
 
-This directory is an isolated bring-up area for the
-`4.0inch_SPI_Module_ST7796_MSP4030_MSP4031_V1.0` touch display module.
+This directory is an isolated bring-up area for the WS63 screen node. The
+directory name is historical: the project screen selection has changed from the
+old 4.0-inch ST7796 module to the MSP3223 reference package.
+
+Current selected module:
+
+- Vendor/reference package: `MSP3223/`
+- Module: MSP3223 3.2-inch SPI touch display
+- LCD controller: ILI9341V
+- LCD resolution: 240x320 RGB565
+- Touch controller: FT6336U, I2C address 0x38
+- LCD init reference: `MSP3223/init/ILI9341V_Init.txt`
+- LCD datasheet: `MSP3223/docs/driver_ic/ILI9341_Datasheet.pdf`
+- Touch datasheet/registers: `MSP3223/docs/driver_ic/DFT6336UDataSheetV1.1.pdf`,
+  `MSP3223/docs/driver_ic/FT6336U_Register.xlsx`
+
+The source in this directory still contains the earlier ST7796 bring-up code.
+That code must be ported to ILI9341V before it is considered current for the
+MSP3223 hardware.
 
 ## Hardware Configuration (Final Board)
 
@@ -81,9 +98,12 @@ capacitance that limits signal integrity at high frequencies.
 | 4 | 32 MHz | 100 kHz | **PASS** | 2026-06-20 |
 | 5 | 32 MHz | 400 kHz | **PASS** | 2026-06-20 |
 
-**Current validated baseline:**
+**Historical validated baseline for the old ST7796 module:**
 - ST7796 LCD over SPI0 @ 32MHz
 - FT6336U touch over I2C1 @ 400kHz
+
+**Current MSP3223 target baseline:** pending ILI9341V driver port and hardware
+verification.
 
 I2C1 1MHz is not pursued; current touch responsiveness already meets requirements.
 
@@ -107,9 +127,10 @@ Firmware output: `src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpk
 
 ## Current test status
 
-- LCD: ST7796 color test passed (red/green/blue/white/black).
-- Touch: FT6336 I2C1 communication verified at 100kHz.
-- Display orientation: 320x480 portrait (ST7796_ROTATION_0).
-- Touch-to-LCD mapping: initial direct mapping (1:1).
+- MSP3223/ILI9341V port: pending.
+- Old ST7796 LCD color test: historical pass only, not the current selected module.
+- Old FT6336 I2C1 communication: historical pass only; FT6336U remains the touch target for MSP3223.
+- Target display orientation for MSP3223: 240x320 portrait or 320x240 landscape, to be confirmed during ILI9341V bring-up.
+- Touch-to-LCD mapping: pending MSP3223 hardware verification.
 - SD_CS = GPIO14 (reserved, not used). TF/FATFS not implemented.
 - Current phase: no LVGL, no SLE, no laser job status integration.
