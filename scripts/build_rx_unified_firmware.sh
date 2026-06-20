@@ -25,7 +25,8 @@ Build the unified RX sample and archive the firmware as:
   ${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg
 
 The script switches ws63_liteos_app.config to CONFIG_LASER_RX_UNIFIED=y,
-enables only USART Direct for Phase 2A, builds serially, and immediately
+enables the legacy UART route and compiles the legacy WiFi route for R3A
+validation, keeps SLE disabled, builds serially, and immediately
 copies the shared raw fwpkg output into fwstage/latest and fwstage/<timestamp>.
 EOF
 }
@@ -129,10 +130,13 @@ switch_to_rx_unified() {
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
     set_config_y CONFIG_LASER_RX_UNIFIED
 
-    # Phase 2A enables only USART Direct. WiFi and SLE remain disabled.
+    # R3A starts the prefixed legacy UART route and compiles the prefixed
+    # legacy WiFi route, but main.c must not start SoftAP/TCP yet. SLE remains
+    # disabled.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
-    set_config_n CONFIG_LASER_RX_TRANSPORT_WIFI
+    set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_n CONFIG_LASER_RX_TRANSPORT_SLE_JOB
+    set_config_n CONFIG_LASER_RX_UART_STATUS_PERIODIC
     set_config_int CONFIG_LASER_RX_UART_BAUD 115200
     set_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 70
     set_config_int CONFIG_LASER_RX_WORK_AREA_Y_MM 70
@@ -165,10 +169,11 @@ verify_rx_unified_config() {
     done
 
     assert_config_y CONFIG_LASER_RX_TRANSPORT_UART
+    assert_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
 
     local disabled_transports=(
-        CONFIG_LASER_RX_TRANSPORT_WIFI
         CONFIG_LASER_RX_TRANSPORT_SLE_JOB
+        CONFIG_LASER_RX_UART_STATUS_PERIODIC
     )
 
     for symbol in "${disabled_transports[@]}"; do
@@ -176,7 +181,7 @@ verify_rx_unified_config() {
     done
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
-    echo "  UART transport enabled for Phase 2A; WiFi/SLE remain disabled"
+    echo "  R3A OK: legacy UART active; legacy WiFi compile-only; SLE disabled"
 }
 
 resolve_unique_fwpkg() {
@@ -260,7 +265,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=phase2a_uart_direct
+phase=r3a_legacy_wifi_compile_only
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}
@@ -277,7 +282,8 @@ CONFIG_ENABLE_SCREEN_SAMPLE=not_set
 CONFIG_ENABLE_LVGL_SAMPLE=not_set
 CONFIG_LASER_RX_TRANSPORT_UART=y
 CONFIG_LASER_RX_UART_BAUD=115200
-CONFIG_LASER_RX_TRANSPORT_WIFI=not_set
+CONFIG_LASER_RX_UART_STATUS_PERIODIC=not_set
+CONFIG_LASER_RX_TRANSPORT_WIFI=y
 CONFIG_LASER_RX_TRANSPORT_SLE_JOB=not_set
 EOF
 
