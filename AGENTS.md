@@ -18,7 +18,6 @@ The current active development focus is:
 
 - src/ws63_laser_sle_job/
 - src/ws63_laser_sle_job_host/
-- src/ws63_screen_st7796_ft6336/
 - src/ws63_screen_lvgl/
 - src/ws63_laser_rx_unified/
 - MSP3223/
@@ -128,9 +127,9 @@ For src/ws63_laser_sle_job_host/:
 
 ## Screen Module Rules
 
-For `src/ws63_screen_st7796_ft6336/`:
+For `src/deprecated/ws63_screen_st7796_ft6336/`:
 
-1. This module is the dedicated WS63 screen node for screen bring-up and later SLE central-control UI work. The directory name is historical: the project screen selection has moved from the old 4.0-inch ST7796 module to the `MSP3223/` reference package.
+1. This module is the deprecated historical WS63 screen self-test project. The project screen selection has moved from the old 4.0-inch ST7796 module to the `MSP3223/` reference package.
 2. Keep it separate from `ws63_laser_single`, `ws63_laser_wifi`, and `ws63_laser_sle_job` unless the user explicitly asks for integration.
 3. Current screen build enable switch is `CONFIG_ENABLE_SCREEN_SAMPLE=y`.
 4. Current selected screen hardware:
@@ -172,7 +171,7 @@ For `src/ws63_screen_st7796_ft6336/`:
 
 For `src/ws63_screen_lvgl/`:
 
-1. This module is the LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are migration leftovers until the display driver is ported.
+1. This module is the LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are temporary deprecated-driver references until the display driver is ported.
 2. Keep it separate from laser modules. Do not integrate SLE/Host logic unless explicitly asked.
 3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y`.
 4. `CONFIG_ENABLE_LVGL_SAMPLE` and `CONFIG_ENABLE_SCREEN_SAMPLE` are **mutually exclusive** (shared hardware). Only one can be enabled at a time.
@@ -199,13 +198,21 @@ For `src/ws63_laser_rx_unified/`:
 1. This module is the new final RX firmware line for three transport modes: USART Direct, WiFi TCP, and SLE job packet.
 2. Keep it separate from `ws63_laser_single`, `ws63_laser_wifi`, and `ws63_laser_sle_job` until the user explicitly asks for migration or integration.
 3. Current build enable switch is `CONFIG_LASER_RX_UNIFIED=y`.
-4. Phase 2A behavior enables only USART Direct byte-stream input. WiFi/SLE receive tasks, runtime MODE_SET, and SLE protocol changes remain out of scope unless explicitly requested.
-5. Internal motion command compatibility headers should not be named `protocol.h`; use names such as `rx_motion_protocol.h` to avoid confusion with SLE `common/protocol.h`.
-6. Unified RX firmware archive path should sit beside TX/RX/screen outputs:
+4. Current mainline is route-based integration, not the old shared `rx_stream` approach.
+5. `rx_core/rx_stream.c` and `transports/uart_transport.c` are experimental Phase 2A prototype files. Do not use them as the three-mode integration mainline unless explicitly requested.
+6. R3A behavior starts the prefixed Legacy UART route when `CONFIG_LASER_RX_TRANSPORT_UART=y` and compiles the prefixed Legacy WiFi route when `CONFIG_LASER_RX_TRANSPORT_WIFI=y`, but must not start SoftAP, the TCP server, or a WiFi task yet. SLE remains stopped until its own integration phase.
+7. Later routes should reuse mature source behavior first:
+   - Legacy UART route: `src/ws63_laser_single/`
+   - Legacy WiFi route: `src/ws63_laser_wifi/`
+   - SLE Job route: `src/ws63_laser_sle_job/receiver/`
+8. Do not force USART/WiFi Grbl parsing and SLE job packet/cache parsing through one common parser.
+9. LaserGRBL validation settings are route-specific. Legacy UART should be validated first with Grbl + UsbSerial + Synchronous; Legacy WiFi should use Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000`; SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_sle_job_host`.
+10. Internal motion command compatibility headers should not be named `protocol.h`; use names such as `rx_motion_protocol.h` to avoid confusion with SLE `common/protocol.h`.
+11. Unified RX firmware archive path should sit beside TX/RX/screen outputs:
    - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`
    - Timestamped copies should use the same `fwstage/<timestamp>/` convention.
-7. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
-8. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
+12. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
+13. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
 
 ## Development Environment
 
@@ -397,8 +404,9 @@ cd /root/fbb_ws63
 
 **关键规则：**
 
-- Phase 2A 默认只启用 UART Direct transport；
-- WiFi/SLE transport 仍保持关闭，除非用户明确进入对应阶段；
+- R3A 默认启用 `CONFIG_LASER_RX_TRANSPORT_UART=y` and starts the prefixed Legacy UART route for LaserGRBL wired USART validation；
+- R3A 同时启用 `CONFIG_LASER_RX_TRANSPORT_WIFI=y` only to compile the prefixed Legacy WiFi route；不要启动 SoftAP/TCP server/WiFi task；
+- SLE route 仍保持关闭，除非用户明确进入对应阶段；
 - 脚本会关闭 `ENABLE_LASER_SINGLE_SAMPLE`、`ENABLE_LASER_WIFI_SAMPLE`、`ENABLE_LASER_SLE_JOB_SAMPLE`、`ENABLE_SCREEN_SAMPLE`、`ENABLE_LVGL_SAMPLE` 等竞争入口；
 - 脚本会修改 `src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config`；
 - 构建 TX/RX、screen、LVGL 或其它固件时，必须使用对应脚本重新切配置；
