@@ -200,13 +200,13 @@ For `src/ws63_laser_rx_unified/`:
 3. Current build enable switch is `CONFIG_LASER_RX_UNIFIED=y`.
 4. Current mainline is route-based integration, not the old shared `rx_stream` approach.
 5. `rx_core/rx_stream.c` and `transports/uart_transport.c` are experimental Phase 2A prototype files. Do not use them as the three-mode integration mainline unless explicitly requested.
-6. R3A behavior starts the prefixed Legacy UART route when `CONFIG_LASER_RX_TRANSPORT_UART=y` and compiles the prefixed Legacy WiFi route when `CONFIG_LASER_RX_TRANSPORT_WIFI=y`, but must not start SoftAP, the TCP server, or a WiFi task yet. SLE remains stopped until its own integration phase.
+6. R3B behavior starts the prefixed Legacy WiFi route when `CONFIG_LASER_RX_TRANSPORT_WIFI=y`. The prefixed Legacy UART route may remain compiled for coverage, but `main.c` must not start the UART RX task in R3B. SLE remains stopped until its own integration phase.
 7. Later routes should reuse mature source behavior first:
    - Legacy UART route: `src/ws63_laser_single/`
    - Legacy WiFi route: `src/ws63_laser_wifi/`
    - SLE Job route: `src/ws63_laser_sle_job/receiver/`
 8. Do not force USART/WiFi Grbl parsing and SLE job packet/cache parsing through one common parser.
-9. LaserGRBL validation settings are route-specific. Legacy UART should be validated first with Grbl + UsbSerial + Synchronous; Legacy WiFi should use Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000`; SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_sle_job_host`.
+9. LaserGRBL validation settings are route-specific. Do not use one streaming mode to evaluate every route. Legacy UART is not required to use Buffered and should be validated first with Grbl + UsbSerial + Synchronous. Legacy WiFi currently uses Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000` as its fixed acceptance baseline. SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_sle_job_host`.
 10. Internal motion command compatibility headers should not be named `protocol.h`; use names such as `rx_motion_protocol.h` to avoid confusion with SLE `common/protocol.h`.
 11. Unified RX firmware archive path should sit beside TX/RX/screen outputs:
    - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`
@@ -404,8 +404,8 @@ cd /root/fbb_ws63
 
 **关键规则：**
 
-- R3A 默认启用 `CONFIG_LASER_RX_TRANSPORT_UART=y` and starts the prefixed Legacy UART route for LaserGRBL wired USART validation；
-- R3A 同时启用 `CONFIG_LASER_RX_TRANSPORT_WIFI=y` only to compile the prefixed Legacy WiFi route；不要启动 SoftAP/TCP server/WiFi task；
+- R3B 默认启用 `CONFIG_LASER_RX_TRANSPORT_WIFI=y` and starts the prefixed Legacy WiFi route for LaserGRBL Telnet validation；
+- R3B 可以继续编译 `CONFIG_LASER_RX_TRANSPORT_UART=y` for symbol coverage, but must not start the Legacy UART RX task；
 - SLE route 仍保持关闭，除非用户明确进入对应阶段；
 - 脚本会关闭 `ENABLE_LASER_SINGLE_SAMPLE`、`ENABLE_LASER_WIFI_SAMPLE`、`ENABLE_LASER_SLE_JOB_SAMPLE`、`ENABLE_SCREEN_SAMPLE`、`ENABLE_LVGL_SAMPLE` 等竞争入口；
 - 脚本会修改 `src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config`；

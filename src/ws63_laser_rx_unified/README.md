@@ -218,6 +218,76 @@ R3A boot validation:
   firmware for compile-only validation, but it is not started at boot. R3A
   keeps Legacy UART active, keeps WiFi/SLE stopped, and leaves the laser OFF.
 
+## R3B Scope
+
+R3B starts the prefixed Legacy WiFi route when
+`CONFIG_LASER_RX_TRANSPORT_WIFI=y`. The prefixed Legacy UART route may remain
+compiled for symbol coverage, but `main.c` does not start the UART RX task in
+R3B.
+
+Implemented in R3B:
+
+- `legacy_wifi_route_start()` initializes the Legacy WiFi G-code processor,
+  motion executor, route wrapper, WiFi/TCP task, and Legacy WiFi motion task.
+- `route_manager_set_active(RX_ROUTE_LEGACY_WIFI)` validates that the laser is
+  OFF and no active route is running before starting the WiFi route.
+- `main.c` starts `RX_ROUTE_LEGACY_WIFI` automatically when the WiFi transport
+  config is enabled.
+- Legacy UART is compile-only in this phase; SLE remains disabled and is not
+  started.
+
+Expected R3B boot log:
+
+```text
+WS63 Laser RX Integrated
+Route-based integration R3B
+[RX_INTEGRATED] R3B start legacy_wifi route
+[ROUTE] start LEGACY_WIFI
+[LEGACY_WIFI] legacy_wifi_route_init OK ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=6 hidden_flag=1
+[LEGACY_WIFI] route started
+[RX_INTEGRATED] active_route=LEGACY_WIFI
+[RX_INTEGRATED] laser=OFF
+[laser wifi] task started
+[laser wifi] softap ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=6 hidden_flag=1
+[laser wifi] tcp server listening port=5000
+```
+
+Expected absent from R3B boot:
+
+- `LEGACY_UART UART RX task start`
+- SLE job server start
+- experimental `rx_stream` startup path
+
+R3B Legacy WiFi route validation: passed.
+
+Validated integrated configuration:
+
+- Active route: `LEGACY_WIFI`
+- Legacy UART: compiled but not started
+- SLE route: not started
+- SSID: `WS63_LASER_WIFI`
+- Password: `12345678`
+- Controller IP: `192.168.43.1`
+- TCP port: `5000`
+- SoftAP channel: `6`
+- SSID mode: hidden (`hidden_flag=1`)
+- LaserGRBL: Grbl + Telnet + Buffered + Fast
+- Soft reset Ctrl-X: enabled
+- DTR/RTS hard reset: disabled
+
+Validated behavior:
+
+- Integrated R3B boot completed with `active_route=LEGACY_WIFI`.
+- SoftAP and TCP server started successfully.
+- Win11 connected to `WS63_LASER_WIFI`.
+- LaserGRBL connected to `192.168.43.1:5000` over Telnet and received the
+  Grbl welcome response.
+- `$I`, `$G`, `$X`, `?`, `$D`, and `M5` passed.
+- Small rectangle job completed.
+- Image job completed in Buffered/Fast mode.
+- Final laser state was physically OFF.
+- Legacy UART and SLE routes did not start or preempt the active WiFi route.
+
 ## Route Validation Baselines
 
 LaserGRBL settings are route-specific. Do not force one streaming mode across
@@ -239,6 +309,7 @@ Legacy WiFi route validation baseline:
 - Password: `12345678`
 - Controller IP: `192.168.43.1`
 - TCP port: `5000`
+- SSID broadcast: hidden (`hidden_flag=1`)
 - Streaming mode: Buffered
 - Thread mode: Fast
 - Soft reset Ctrl-X: enabled
@@ -278,7 +349,7 @@ Independent WiFi connection parameters:
 - Password: `12345678`
 - Controller IP: `192.168.43.1`
 - TCP port: `5000`
-- SoftAP channel: `13`
+- SoftAP channel: `6`
 - Hidden SSID flag: `1`
 - TCP receive buffer: `512`
 - TCP socket buffer: `8192`
@@ -400,8 +471,8 @@ cd /root/fbb_ws63
 The script switches `ws63_liteos_app.config` to `CONFIG_LASER_RX_UNIFIED=y`,
 disables competing app samples, enables `CONFIG_LASER_RX_TRANSPORT_UART=y` for
 R2B Legacy UART active validation, enables
-`CONFIG_LASER_RX_TRANSPORT_WIFI=y` for R3A Legacy WiFi compile-only validation,
-keeps SLE route transport disabled, builds serially, and archives the generated
+`CONFIG_LASER_RX_TRANSPORT_WIFI=y` for R3B Legacy WiFi active validation, keeps
+SLE route transport disabled, builds serially, and archives the generated
 firmware as:
 
 ```text

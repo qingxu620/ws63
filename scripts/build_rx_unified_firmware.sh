@@ -25,8 +25,8 @@ Build the unified RX sample and archive the firmware as:
   ${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg
 
 The script switches ws63_liteos_app.config to CONFIG_LASER_RX_UNIFIED=y,
-enables the legacy UART route and compiles the legacy WiFi route for R3A
-validation, keeps SLE disabled, builds serially, and immediately
+compiles the legacy UART route and enables the legacy WiFi route for R3B
+active validation, keeps SLE disabled, builds serially, and immediately
 copies the shared raw fwpkg output into fwstage/latest and fwstage/<timestamp>.
 EOF
 }
@@ -130,9 +130,9 @@ switch_to_rx_unified() {
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
     set_config_y CONFIG_LASER_RX_UNIFIED
 
-    # R3A starts the prefixed legacy UART route and compiles the prefixed
-    # legacy WiFi route, but main.c must not start SoftAP/TCP yet. SLE remains
-    # disabled.
+    # R3B starts the prefixed legacy WiFi route. The prefixed legacy UART route
+    # remains compiled for symbol coverage but main.c must not start UART.
+    # SLE remains disabled.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_n CONFIG_LASER_RX_TRANSPORT_SLE_JOB
@@ -181,7 +181,7 @@ verify_rx_unified_config() {
     done
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
-    echo "  R3A OK: legacy UART active; legacy WiFi compile-only; SLE disabled"
+    echo "  R3B OK: legacy WiFi active; legacy UART compile-only; SLE disabled"
 }
 
 resolve_unique_fwpkg() {
@@ -265,7 +265,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r3a_legacy_wifi_compile_only
+phase=r3b_legacy_wifi_active
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}

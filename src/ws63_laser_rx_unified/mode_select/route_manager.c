@@ -8,6 +8,9 @@
 #if defined(CONFIG_LASER_RX_TRANSPORT_UART)
 #include "legacy_uart_route.h"
 #endif
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+#include "legacy_wifi_route.h"
+#endif
 #include <string.h>
 
 static volatile rx_route_t g_active_route = RX_ROUTE_NONE;
@@ -20,6 +23,12 @@ static bool route_manager_active_route_busy(void)
         case RX_ROUTE_LEGACY_UART:
 #if defined(CONFIG_LASER_RX_TRANSPORT_UART)
             return !legacy_uart_route_is_idle();
+#else
+            return false;
+#endif
+        case RX_ROUTE_LEGACY_WIFI:
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+            return !legacy_wifi_route_is_idle();
 #else
             return false;
 #endif
@@ -106,6 +115,21 @@ bool route_manager_set_active(rx_route_t route)
         }
 #else
         osal_printk("[ROUTE] start LEGACY_UART failed: transport disabled\r\n");
+        return false;
+#endif
+    }
+
+    if (route == RX_ROUTE_LEGACY_WIFI) {
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+        osal_printk("[ROUTE] start LEGACY_WIFI\r\n");
+        errcode_t ret = legacy_wifi_route_start();
+        if (ret != ERRCODE_SUCC) {
+            osal_printk("[ROUTE] start LEGACY_WIFI failed: 0x%x\r\n", ret);
+            laser_force_off();
+            return false;
+        }
+#else
+        osal_printk("[ROUTE] start LEGACY_WIFI failed: transport disabled\r\n");
         return false;
 #endif
     }

@@ -45,6 +45,7 @@ static unsigned long g_ok_count = 0;
 static unsigned long g_error_count = 0;
 static unsigned long g_status_count = 0;
 static bool g_wifi_event_registered = false;
+static volatile bool g_route_started = false;
 #if LEGACY_WIFI_STATUS_PERIODIC
 static unsigned long g_last_status_ms = 0;
 #endif
@@ -665,7 +666,7 @@ static int start_softap(void)
     config.gi = 0;
     config.group_rekey = 86400;
     config.protocol_mode = 4;
-    config.hidden_ssid_flag = 1;
+    config.hidden_ssid_flag = LEGACY_WIFI_AP_HIDDEN_FLAG;
     if (wifi_set_softap_config_advance(&config) != 0) {
         osal_printk("[laser wifi] set softap advance failed\r\n");
         return -1;
@@ -811,6 +812,74 @@ int legacy_wifi_route_task_entry(void *arg)
 
 errcode_t legacy_wifi_route_init(void)
 {
-    osal_printk("[laser wifi] init OK\r\n");
+    osal_printk("[LEGACY_WIFI] legacy_wifi_route_init OK ssid=%s ip=%d.%d.%d.%d port=%d channel=%d hidden_flag=%d\r\n",
+                LEGACY_WIFI_AP_SSID, LEGACY_WIFI_AP_IP_A, LEGACY_WIFI_AP_IP_B, LEGACY_WIFI_AP_IP_C,
+                LEGACY_WIFI_AP_IP_D, LEGACY_WIFI_TCP_PORT, LEGACY_WIFI_AP_CHANNEL, LEGACY_WIFI_AP_HIDDEN_FLAG);
     return ERRCODE_SUCC;
+}
+
+errcode_t legacy_wifi_route_start(void)
+{
+    if (g_route_started) {
+        osal_printk("[LEGACY_WIFI] route already started\r\n");
+        return ERRCODE_SUCC;
+    }
+
+    laser_force_off();
+    legacy_wifi_gcode_processor_init();
+    legacy_wifi_motion_executor_init();
+
+    errcode_t ret = legacy_wifi_route_init();
+    if (ret != ERRCODE_SUCC) {
+        laser_force_off();
+        return ret;
+    }
+
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(legacy_wifi_route_task_entry, NULL, "legacy_wifi",
+                                          LEGACY_WIFI_TASK_STACK_SIZE_DEFAULT);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        osal_printk("[LEGACY_WIFI] create WiFi TCP task failed\r\n");
+        laser_force_off();
+        return ERRCODE_FAIL;
+    }
+    if (osal_kthread_set_priority(task, LEGACY_WIFI_TASK_PRIO_WIFI) != OSAL_SUCCESS) {
+        osal_printk("[LEGACY_WIFI] set WiFi TCP priority failed\r\n");
+    }
+    osal_kfree(task);
+    osal_kthread_unlock();
+
+    ret = legacy_wifi_motion_executor_start_task();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[LEGACY_WIFI] legacy_wifi_motion_executor_start_task failed: 0x%x\r\n", ret);
+        legacy_wifi_route_force_stop();
+        return ret;
+    }
+
+    g_route_started = true;
+    osal_printk("[LEGACY_WIFI] route started\r\n");
+    return ERRCODE_SUCC;
+}
+
+bool legacy_wifi_route_is_idle(void)
+{
+    if (!g_route_started) {
+        return true;
+    }
+    return !legacy_wifi_motion_executor_is_busy() && !legacy_wifi_motion_executor_abort_requested();
+}
+
+void legacy_wifi_route_force_stop(void)
+{
+    if (g_client_sock >= 0) {
+        close_client();
+    }
+    if (g_listen_sock >= 0) {
+        lwip_close(g_listen_sock);
+        g_listen_sock = -1;
+    }
+    legacy_wifi_motion_executor_request_abort();
+    legacy_wifi_motion_executor_flush();
+    laser_force_off();
 }
