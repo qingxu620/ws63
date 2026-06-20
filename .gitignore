@@ -78,6 +78,9 @@ compile_flags.txt
 # 2. 开发工具和 IDE 配置
 # ------------------------------------------------------------------------------
 
+# OpenCode
+.opencode/
+
 # Visual Studio Code
 .vscode/
 *.code-workspace
