@@ -37,6 +37,42 @@ done
 log()  { echo "=== $* ==="; }
 err()  { echo "ERROR: $*" >&2; exit 1; }
 
+# --- Config helpers (shared) -------------------------------------------------
+
+set_config_y() {
+    local symbol=$1
+    if grep -q "^${symbol}=y$" "$CONFIG"; then return; fi
+    if grep -q "^# ${symbol} is not set$" "$CONFIG"; then
+        sed -i "s/^# ${symbol} is not set$/${symbol}=y/" "$CONFIG"; return
+    fi
+    if grep -q "^${symbol}=" "$CONFIG"; then
+        sed -i "s/^${symbol}=.*/${symbol}=y/" "$CONFIG"; return
+    fi
+    printf '%s=y\n' "$symbol" >> "$CONFIG"
+}
+
+set_config_n() {
+    local symbol=$1
+    if grep -q "^# ${symbol} is not set$" "$CONFIG"; then return; fi
+    if grep -q "^${symbol}=y$" "$CONFIG"; then
+        sed -i "s/^${symbol}=y$/# ${symbol} is not set/" "$CONFIG"; return
+    fi
+    if grep -q "^${symbol}=" "$CONFIG"; then
+        sed -i "s/^${symbol}=.*/# ${symbol} is not set/" "$CONFIG"; return
+    fi
+    printf '# %s is not set\n' "$symbol" >> "$CONFIG"
+}
+
+# Disable ALL competing app samples so only one is active per build.
+disable_all_samples() {
+    set_config_n CONFIG_ENABLE_LASER_SINGLE_SAMPLE
+    set_config_n CONFIG_ENABLE_LASER_WIFI_SAMPLE
+    set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
+    set_config_n CONFIG_ENABLE_SCREEN_SAMPLE
+    set_config_n CONFIG_ENABLE_LVGL_SAMPLE
+    set_config_n CONFIG_LASER_RX_UNIFIED
+}
+
 find_build_py() {
     if [[ -f "${ROOT}/build.py" ]]; then
         echo "${ROOT}/build.py"
@@ -49,9 +85,10 @@ find_build_py() {
 
 switch_to_tx() {
     log "Switching config to TX"
+    disable_all_samples
+    set_config_y CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     sed -i 's/^CONFIG_LASER_SLE_JOB_RECEIVER=y$/# CONFIG_LASER_SLE_JOB_RECEIVER is not set/' "$CONFIG"
     sed -i 's/^# CONFIG_LASER_SLE_JOB_TRANSMITTER is not set$/CONFIG_LASER_SLE_JOB_TRANSMITTER=y/' "$CONFIG"
-    # Also handle the case where TRANSMITTER line doesn't exist yet
     if ! grep -q '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG"; then
         sed -i '/^# CONFIG_LASER_SLE_JOB_RECEIVER is not set$/a CONFIG_LASER_SLE_JOB_TRANSMITTER=y' "$CONFIG"
     fi
@@ -60,9 +97,10 @@ switch_to_tx() {
 
 switch_to_rx() {
     log "Switching config to RX"
+    disable_all_samples
+    set_config_y CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     sed -i 's/^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$/# CONFIG_LASER_SLE_JOB_TRANSMITTER is not set/' "$CONFIG"
     sed -i 's/^# CONFIG_LASER_SLE_JOB_RECEIVER is not set$/CONFIG_LASER_SLE_JOB_RECEIVER=y/' "$CONFIG"
-    # Also handle the case where RECEIVER line doesn't exist yet
     if ! grep -q '^CONFIG_LASER_SLE_JOB_RECEIVER=y$' "$CONFIG"; then
         sed -i '/^# CONFIG_LASER_SLE_JOB_TRANSMITTER is not set$/a CONFIG_LASER_SLE_JOB_RECEIVER=y' "$CONFIG"
     fi

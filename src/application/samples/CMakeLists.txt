@@ -37,6 +37,12 @@ elseif(DEFINED CONFIG_ENABLE_LASER_WIFI_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_wifi ws63_laser_wifi)
 elseif(DEFINED CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_sle_job ws63_laser_sle_job)
+elseif(DEFINED CONFIG_LASER_RX_UNIFIED)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_laser_rx_unified ws63_laser_rx_unified)
+elseif(DEFINED CONFIG_ENABLE_SCREEN_SAMPLE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_st7796_ft6336 ws63_screen_st7796_ft6336)
+elseif(DEFINED CONFIG_ENABLE_LVGL_SAMPLE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_lvgl ws63_screen_lvgl)
 endif()
 
 

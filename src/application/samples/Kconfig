@@ -121,4 +121,36 @@ if ENABLE_LASER_SLE_JOB_SAMPLE
 source "ws63_laser_sle_job/Kconfig"
 endif
 
+config LASER_RX_UNIFIED
+    bool
+    prompt "WS63 RX 三模融合骨架（USART / WiFi / SLE）"
+    default n
+    depends on SAMPLE_ENABLE
+    select SPI_SUPPORT_MASTER
+    help
+        用途：新的统一 RX 固件主线。目标是最终融合 USART Direct、
+        WiFi TCP 和 SLE job packet 三种 transport，同时复用同一套
+        G-code parser、motion executor、laser control、safety 和 diagnostics。
+        当前 Phase 2A 接入 USART Direct 字节流；WiFi/SLE transport 仍未接入。
 
+if LASER_RX_UNIFIED
+source "ws63_laser_rx_unified/Kconfig"
+endif
+
+comment "WS63 LVGL 模块：LVGL v9.3.0 + ST7796 + FT6336"
+
+config ENABLE_LVGL_SAMPLE
+    bool
+    prompt "WS63 LVGL 最小移植（ST7796 + FT6336 + LVGL v9.3.0）"
+    default n
+    depends on SAMPLE_ENABLE
+    select SPI_SUPPORT_MASTER
+    help
+        用途：LVGL v9.3.0 最小移植验证。
+        复用 ws63_screen_st7796_ft6336 的 LCD/触摸驱动，
+        显示 WS63 Laser Panel demo 页面。
+        注意：与 ENABLE_SCREEN_SAMPLE 互斥（共用硬件）。
+
+if ENABLE_LVGL_SAMPLE
+source "ws63_screen_lvgl/Kconfig"
+endif

@@ -1,0 +1,16 @@
+#===============================================================================
+# @brief WS63 LVGL minimal port Kconfig
+#===============================================================================
+
+menu "WS63 LVGL 配置"
+    depends on ENABLE_LVGL_SAMPLE
+
+config LVGL_DISP_BUF_LINES
+    int "LVGL 显示缓冲区行数"
+    default 48
+    range 10 480
+    help
+        LVGL 显示缓冲区大小 = 320 * N 行 * 2 字节。
+        默认 48 行 = 30720 字节。
+
+endmenu

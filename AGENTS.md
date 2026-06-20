@@ -18,6 +18,9 @@ The current active development focus is:
 
 - src/ws63_laser_sle_job/
 - src/ws63_laser_sle_job_host/
+- src/ws63_screen_st7796_ft6336/
+- src/ws63_screen_lvgl/
+- src/ws63_laser_rx_unified/
 
 Do not modify old demo directories, unrelated SDK examples, vendor code, or historical experimental folders unless explicitly instructed.
 
@@ -122,6 +125,80 @@ For src/ws63_laser_sle_job_host/:
 3. Do not add large dependencies unless necessary.
 4. Keep serial protocol behavior explicit.
 
+## Screen Module Rules
+
+For `src/ws63_screen_st7796_ft6336/`:
+
+1. This module is the dedicated WS63 screen node for ST7796S LCD + FT6336 touch bring-up and later SLE central-control UI work.
+2. Keep it separate from `ws63_laser_single`, `ws63_laser_wifi`, and `ws63_laser_sle_job` unless the user explicitly asks for integration.
+3. Current screen build enable switch is `CONFIG_ENABLE_SCREEN_SAMPLE=y`.
+4. Current screen pins:
+
+   | Function | GPIO |
+   | -------- | ---- |
+   | LCD_SCK  | GPIO7 |
+   | LCD_MOSI | GPIO9 |
+   | LCD_MISO | GPIO11 |
+   | LCD_CS   | GPIO8 |
+   | LCD_DC   | GPIO10 |
+   | LCD_RST  | GPIO0 |
+   | LCD_BL   | GPIO5 |
+   | CTP_SCL  | GPIO16 / I2C1_SCL |
+   | CTP_SDA  | GPIO15 / I2C1_SDA |
+   | CTP_RST  | GPIO12 / held high |
+   | CTP_INT  | GPIO13 |
+   | SD_CS    | GPIO14 / reserved |
+
+5. Screen verification order:
+   - LCD first: verify red/green/blue/black color switching.
+   - Touch second: verify FT6336 touch coordinate logs.
+   - Product integration last: status display, parameter setting, and SLE central-control UI.
+6. Avoid full-framebuffer designs unless memory is explicitly budgeted. Prefer line buffers, tile buffers, or partial refresh.
+7. When modifying screen code, OpenCode/Codex should compile the screen firmware unless the user explicitly says not to compile.
+8. Screen firmware archive path should sit beside TX/RX outputs:
+   - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpkg`
+   - Timestamped copies should use the same `fwstage/<timestamp>/` convention when a script supports it.
+9. Do not auto-flash the screen board. Burning remains a Win11 manual BurnTool step.
+
+## LVGL Module Rules
+
+For `src/ws63_screen_lvgl/`:
+
+1. This module is the LVGL v9.3.0 minimal port for WS63, reusing the ST7796 LCD and FT6336 touch drivers from `ws63_screen_st7796_ft6336/`.
+2. Keep it separate from laser modules. Do not integrate SLE/Host logic unless explicitly asked.
+3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y`.
+4. `CONFIG_ENABLE_LVGL_SAMPLE` and `CONFIG_ENABLE_SCREEN_SAMPLE` are **mutually exclusive** (shared hardware). Only one can be enabled at a time.
+5. LVGL source lives at `src/ws63_screen_lvgl/src/lvgl/` (v9.3.0). Do not modify LVGL core source unless patching a build warning; prefer port-layer changes.
+6. LVGL config is `src/ws63_screen_lvgl/lv_conf.h`. Key settings:
+   - `LV_COLOR_DEPTH=16`, `LV_COLOR_16_SWAP=1`
+   - `LV_MEM_SIZE=40*1024` (40KB heap)
+   - `LV_FONT_DEFAULT=&lv_font_montserrat_14`
+   - Only label, button, bar widgets enabled
+   - Only RGB565 draw support enabled
+7. Display buffer: 320×48 pixels, single buffer, RGB565.
+8. Tick source: hardware timer (timer index 1, 1ms).
+9. Task priority: 25 (low, non-critical UI task).
+10. Screen firmware archive path reuses the screen name:
+    - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpkg`
+    - Do not create a separate `lvgl` firmware name; always replace `screen_all.fwpkg`.
+11. LVGL demo page is `WS63 Laser Panel` with fake data. Do not connect to SLE/RX/Host unless explicitly asked.
+12. When modifying LVGL port code, compile the screen firmware unless the user explicitly says not to compile.
+
+## Unified RX Module Rules
+
+For `src/ws63_laser_rx_unified/`:
+
+1. This module is the new final RX firmware line for three transport modes: USART Direct, WiFi TCP, and SLE job packet.
+2. Keep it separate from `ws63_laser_single`, `ws63_laser_wifi`, and `ws63_laser_sle_job` until the user explicitly asks for migration or integration.
+3. Current build enable switch is `CONFIG_LASER_RX_UNIFIED=y`.
+4. Phase 2A behavior enables only USART Direct byte-stream input. WiFi/SLE receive tasks, runtime MODE_SET, and SLE protocol changes remain out of scope unless explicitly requested.
+5. Internal motion command compatibility headers should not be named `protocol.h`; use names such as `rx_motion_protocol.h` to avoid confusion with SLE `common/protocol.h`.
+6. Unified RX firmware archive path should sit beside TX/RX/screen outputs:
+   - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`
+   - Timestamped copies should use the same `fwstage/<timestamp>/` convention.
+7. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
+8. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
+
 ## Development Environment
 
 1. Firmware code editing and compilation happen in **WSL2**.
@@ -134,6 +211,12 @@ For src/ws63_laser_sle_job_host/:
    ```
 
    For normal TX/RX firmware builds, prefer `./scripts/build_sle_job_firmwares.sh --both` because it builds and archives TX/RX outputs separately. Use raw `build.py` only for menuconfig or low-level SDK debugging.
+
+   For screen firmware builds, prefer `./scripts/build_screen_firmware.sh` because it switches to the correct config (`CONFIG_ENABLE_LVGL_SAMPLE=y` or `CONFIG_ENABLE_SCREEN_SAMPLE=y`), disables all competing samples, builds, and archives the output. Use raw `build.py` only for menuconfig or low-level SDK debugging.
+
+   For unified RX firmware builds, prefer `./scripts/build_rx_unified_firmware.sh`. It switches to `CONFIG_LASER_RX_UNIFIED=y`, builds, and archives the generated package as `src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`.
+
+   The SDK firmware output directory `src/output/ws63/fwpkg/ws63-liteos-app/` is shared and each build overwrites `ws63-liteos-app_all.fwpkg`. When building multiple firmware variants, the correct automated flow is serial: configure one variant, build it, immediately copy the generated package into `src/output/ws63/fwstage/latest/` with a function-specific name, then configure and build the next variant. Never assume multiple variants remain available in the raw `fwpkg/ws63-liteos-app/` output directory.
 
 4. Do NOT move the firmware project to `/mnt/c/...` or Windows Desktop for compilation.
 5. Host tool source (`src/ws63_laser_sle_job_host/`) can be edited in WSL2, but **running and serial debugging happen on Win11**.
@@ -205,7 +288,7 @@ python main.py
 
 **路径：** `/root/fbb_ws63/scripts/build_sle_job_firmwares.sh`
 
-**用途：** 自动切换 TX/RX 配置，分别编译，归档到 `fwstage`，避免同名产物互相覆盖。
+**用途：** 自动切换 TX/RX 配置，串行编译，且每次编译后立即归档到 `fwstage`，避免唯一 `ws63-liteos-app_all.fwpkg` 产物被下一次编译覆盖。
 
 **使用命令：**
 
@@ -235,13 +318,85 @@ cd /root/fbb_ws63
 /root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_all.fwpkg
 ```
 
-### 3. Win11 BurnTool 烧录
+**关键规则：**
+
+- `src/output/ws63/fwpkg/ws63-liteos-app/ws63-liteos-app_all.fwpkg` 是唯一临时产物；
+- 多固件构建必须串行执行；
+- 每个功能固件编译成功后必须立即复制到 `fwstage/latest/`；
+- 归档文件必须按功能命名，例如 `tx`、`rx`、`screen`，不要直接依赖 raw fwpkg 目录里的文件。
+- 脚本会自动关闭所有竞争 sample（`LASER_RX_UNIFIED`、`SCREEN_SAMPLE`、`LVGL_SAMPLE` 等），避免配置残留导致编译出错误固件。
+
+### 3. 屏幕固件编译与归档脚本
+
+**路径：** `/root/fbb_ws63/scripts/build_screen_firmware.sh`
+
+**用途：** 自动切换到屏幕固件配置（LVGL 或自检页），关闭其它 app sample，编译并归档。
+
+**使用命令：**
+
+```bash
+cd /root/fbb_ws63
+
+# 编译 LVGL 屏幕固件（默认）
+./scripts/build_screen_firmware.sh
+
+# 明确编译 LVGL
+./scripts/build_screen_firmware.sh --lvgl
+
+# 编译原始自检页
+./scripts/build_screen_firmware.sh --selftest
+```
+
+**归档路径：**
+
+```text
+/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpkg
+```
+
+**关键规则：**
+
+- 脚本会自动关闭所有竞争 sample（`LASER_SLE_JOB_SAMPLE`、`LASER_RX_UNIFIED`、`LVGL_SAMPLE`/`SCREEN_SAMPLE` 互斥）；
+- `--lvgl` 启用 `CONFIG_ENABLE_LVGL_SAMPLE=y`（LVGL v9.3.0 端口）；
+- `--selftest` 启用 `CONFIG_ENABLE_SCREEN_SAMPLE=y`（原始 ST7796 自检页）；
+- 归档文件名始终为 `ws63-liteos-app_screen_all.fwpkg`，不会因 variant 不同而改名。
+
+### 4. Win11 BurnTool 烧录
 
 - BurnTool 在 Win11 手动使用，不自动调用。
 - `ws63-liteos-app_tx_all.fwpkg` 烧录到 TX 板。
 - `ws63-liteos-app_rx_all.fwpkg` 烧录到 RX 板。
+- `ws63-liteos-app_screen_all.fwpkg` 烧录到屏幕节点板。
+- `ws63-liteos-app_rx_unified_all.fwpkg` 烧录到统一 RX 板。
 
-### 4. 常用开发流程
+### 5. Unified RX 固件编译与归档规则
+
+**路径：** `/root/fbb_ws63/scripts/build_rx_unified_firmware.sh`
+
+**用途：** 自动切换到 `CONFIG_LASER_RX_UNIFIED=y`，关闭其它 app sample，编译 unified RX，并把唯一 raw fwpkg 立即归档到 `fwstage`。
+
+**使用命令：**
+
+```bash
+cd /root/fbb_ws63
+./scripts/build_rx_unified_firmware.sh
+```
+
+**归档路径：**
+
+```text
+/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg
+```
+
+**关键规则：**
+
+- Phase 2A 默认只启用 UART Direct transport；
+- WiFi/SLE transport 仍保持关闭，除非用户明确进入对应阶段；
+- 脚本会关闭 `ENABLE_LASER_SINGLE_SAMPLE`、`ENABLE_LASER_WIFI_SAMPLE`、`ENABLE_LASER_SLE_JOB_SAMPLE`、`ENABLE_SCREEN_SAMPLE`、`ENABLE_LVGL_SAMPLE` 等竞争入口；
+- 脚本会修改 `src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config`；
+- 构建 TX/RX、screen、LVGL 或其它固件时，必须使用对应脚本重新切配置；
+- 仍然遵守唯一 raw fwpkg 产物规则：构建成功后立即复制到功能命名的归档文件。
+
+### 6. 常用开发流程
 
 ```bash
 # 1. WSL2 修改 Host 上位机
@@ -262,7 +417,7 @@ cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_sle_job_host
 python main.py
 ```
 
-### 5. 手动调焦功能
+### 7. 手动调焦功能
 
 **功能：** Host 手动控制激光调焦光开关。
 
@@ -290,7 +445,7 @@ python main.py
 
 Changing `PKT_FOCUS_CTRL` or `focus_ctrl_payload_t` requires rebuilding and flashing both TX and RX firmware.
 
-### 6. Demo Stable Checklist
+### 8. Demo Stable Checklist
 
 Before a demo run:
 

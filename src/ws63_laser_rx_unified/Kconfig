@@ -1,0 +1,43 @@
+#===============================================================================
+# @brief WS63 unified laser RX configuration
+#===============================================================================
+
+menu "WS63 Laser RX Unified Options"
+    depends on LASER_RX_UNIFIED
+
+config LASER_RX_TRANSPORT_UART
+    bool "Enable USART Direct transport option"
+    default n
+    help
+        Enable the Phase 2A USART Direct byte-stream input path.
+        This starts a UART RX task and feeds bytes into the shared rx_stream.
+
+config LASER_RX_UART_BAUD
+    int "USART Direct baud rate"
+    default 115200
+    depends on LASER_RX_TRANSPORT_UART
+    help
+        UART baud rate for the direct PC-to-RX command stream. Keep 115200 for
+        the demo-safe baseline unless explicitly testing a rebuilt firmware.
+
+config LASER_RX_TRANSPORT_WIFI
+    bool "Enable WiFi TCP transport option"
+    default n
+    help
+        Phase 2A still only declares this option. No real WiFi TCP server is created yet.
+
+config LASER_RX_TRANSPORT_SLE_JOB
+    bool "Enable SLE job packet transport option"
+    default n
+    help
+        Phase 2A still only declares this option. SLE job packet input is not wired yet.
+
+config LASER_RX_WORK_AREA_X_MM
+    int "Work area X in mm"
+    default 70
+
+config LASER_RX_WORK_AREA_Y_MM
+    int "Work area Y in mm"
+    default 70
+
+endmenu
