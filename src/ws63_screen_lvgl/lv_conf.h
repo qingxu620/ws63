@@ -1,6 +1,6 @@
 /**
  * @file lv_conf.h
- * LVGL v9.3.0 configuration for WS63 + ST7796 (320x480 RGB565)
+ * LVGL v9.3.0 configuration for WS63 + MSP3223 ILI9341 (240x320 RGB565)
  * Minimal config: label, button, bar only.
  */
 #ifndef LV_CONF_H
@@ -78,7 +78,7 @@
     #define LV_DRAW_SW_DRAW_UNIT_CNT    1
     #define LV_USE_DRAW_ARM2D_SYNC      0
     #define LV_USE_NATIVE_HELIUM_ASM    0
-    #define LV_DRAW_SW_COMPLEX          0
+    #define LV_DRAW_SW_COMPLEX          1
     #define LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_NONE
     #define LV_USE_DRAW_SW_COMPLEX_GRADIENTS    0
 #endif
@@ -158,7 +158,7 @@
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 0
 #define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_16 0
+#define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0
 #define LV_FONT_MONTSERRAT_22 1
@@ -188,7 +188,7 @@
 
 #define LV_FONT_CUSTOM_DECLARE
 
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+#define LV_FONT_DEFAULT &lv_font_montserrat_16
 
 #define LV_FONT_FMT_TXT_LARGE 0
 #define LV_USE_FONT_COMPRESSED 0

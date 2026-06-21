@@ -1,10 +1,10 @@
 /**
  * @file main.c
- * @brief WS63 LVGL minimal port: ST7796 LCD + FT6336 touch + LVGL v9.3.0.
+ * @brief WS63 LVGL minimal port: MSP3223 ILI9341 LCD + FT6336 touch + LVGL v9.3.0.
  *
  * Initialization order:
  *   1. Board init (GPIO, SPI, I2C)
- *   2. ST7796 LCD init
+ *   2. ILI9341 LCD init
  *   3. FT6336 touch init
  *   4. LVGL init
  *   5. Display buffer + flush_cb
@@ -16,7 +16,7 @@
 #include "app_init.h"
 #include "screen_board.h"
 #include "screen_config.h"
-#include "st7796_lcd.h"
+#include "ili9341_lcd.h"
 #include "ft6336_touch.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
@@ -56,12 +56,23 @@ static int lvgl_task(void *arg)
     }
 
     /* LCD init */
-    ret = st7796_init();
+    ret = ili9341_init();
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[LVGL] st7796 init failed: 0x%x\r\n", ret);
+        osal_printk("[LVGL] ili9341 init failed: 0x%x\r\n", ret);
         return -1;
     }
-    osal_printk("[LVGL] lcd ok size=%u,%u\r\n", st7796_width(), st7796_height());
+    osal_printk("[LVGL] lcd ok size=%u,%u\r\n", ili9341_width(), ili9341_height());
+
+    /* Color test: fill screen with primary colors */
+    osal_printk("[LVGL] color test begin\r\n");
+    ili9341_clear(SCREEN_COLOR_RED);
+    osal_msleep(500);
+    ili9341_clear(SCREEN_COLOR_GREEN);
+    osal_msleep(500);
+    ili9341_clear(SCREEN_COLOR_BLUE);
+    osal_msleep(500);
+    ili9341_clear(SCREEN_COLOR_BLACK);
+    osal_printk("[LVGL] color test done\r\n");
 
     /* Touch init */
     ret = ft6336_init();
@@ -88,11 +99,20 @@ static int lvgl_task(void *arg)
     /* Demo page */
     lv_demo_panel_create();
 
+    /* Force LVGL to refresh */
+    osal_printk("[LVGL] force refresh\r\n");
+    lv_refr_now(NULL);
+
     osal_printk("[LVGL] init done, entering handler loop\r\n");
 
     /* Main loop: call lv_timer_handler periodically */
+    uint32_t loop_count = 0;
     while (1) {
         lv_timer_handler();
+        loop_count++;
+        if (loop_count <= 10 || (loop_count % 100) == 0) {
+            osal_printk("[LVGL] handler loop #%lu\r\n", loop_count);
+        }
         osal_msleep(LVGL_HANDLER_MS);
     }
 
@@ -103,7 +123,7 @@ static void lvgl_entry(void)
 {
     osal_printk("========================================\r\n");
     osal_printk("  WS63 LVGL Minimal Port\r\n");
-    osal_printk("  LVGL v9.3.0 + ST7796 + FT6336\r\n");
+    osal_printk("  LVGL v9.3.0 + MSP3223 ILI9341 + FT6336\r\n");
     osal_printk("========================================\r\n");
 
     osal_kthread_lock();
