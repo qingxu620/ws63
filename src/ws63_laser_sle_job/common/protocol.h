@@ -32,6 +32,7 @@ typedef enum {
     PKT_EXEC_RESUME = 0x12,
     PKT_EXEC_STOP     = 0x13,
     PKT_FOCUS_CTRL    = 0x14,
+    PKT_ROUTE_SWITCH  = 0x15,
 
     PKT_STATUS_REQ    = 0x20,
     PKT_STATUS_RESP = 0x21,
@@ -103,6 +104,18 @@ typedef struct __attribute__((packed)) {
     uint8_t on;
     uint8_t power;
 } focus_ctrl_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t target_route;
+    uint8_t flags;
+    uint16_t reserved;
+} route_switch_payload_t;
+
+#define SLE_JOB_ROUTE_TARGET_NONE 0U
+#define SLE_JOB_ROUTE_TARGET_LEGACY_UART 1U
+#define SLE_JOB_ROUTE_TARGET_LEGACY_WIFI 2U
+#define SLE_JOB_ROUTE_TARGET_SLE_JOB 3U
+#define SLE_JOB_ROUTE_TARGET_SAFE 4U
 
 typedef struct __attribute__((packed)) {
     uint8_t ack_type;

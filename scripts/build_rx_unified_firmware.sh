@@ -146,8 +146,8 @@ switch_to_rx_unified() {
     set_config_y CONFIG_LASER_SLE_JOB_RECEIVER
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
-    # R5B compiles all three routes but starts only SLE Job. SLE advertising
-    # remains active indefinitely until a TX connects; no automatic fallback.
+    # R5C compiles all three routes, starts SLE Job, and allows only manual
+    # one-way SLE_JOB -> Legacy WiFi switching after a safe idle ACK.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
@@ -204,7 +204,7 @@ verify_rx_unified_config() {
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
     echo "  Role selector OK: RECEIVER=y, TRANSMITTER=not set"
-    echo "  R5B OK: persistent SLE advertising; no automatic WiFi fallback"
+    echo "  R5C OK: manual SLE_JOB -> Legacy WiFi switch; no automatic fallback"
     echo "  SLE job cache fixed at 131072 bytes"
 }
 
@@ -289,7 +289,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r5b_sle_persistent_advertising
+phase=r5c_sle_to_wifi_manual_switch
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}

@@ -20,9 +20,15 @@
 static volatile rx_route_t g_active_route = RX_ROUTE_NONE;
 static volatile rx_route_t g_recommended_route = RX_ROUTE_SLE_JOB;
 static volatile uint32_t g_switch_count = 0;
+static volatile bool g_switching = false;
 
 static bool route_manager_active_route_busy_known(bool *known)
 {
+    if (g_switching) {
+        *known = true;
+        return true;
+    }
+
     *known = true;
     switch (g_active_route) {
         case RX_ROUTE_LEGACY_UART:
@@ -84,6 +90,7 @@ void route_manager_init(void)
     g_active_route = RX_ROUTE_NONE;
     g_recommended_route = RX_ROUTE_SLE_JOB;
     g_switch_count = 0;
+    g_switching = false;
     osal_printk("[ROUTE] manager init active=%s recommended=%s\r\n",
                 rx_route_name(g_active_route), rx_route_name(g_recommended_route));
 }
@@ -224,6 +231,89 @@ bool route_manager_set_active(rx_route_t route)
                 rx_route_name(g_active_route), (unsigned int)g_switch_count);
     route_manager_print_status();
     return true;
+}
+
+bool route_manager_is_switching(void)
+{
+    return g_switching;
+}
+
+bool route_manager_can_request_switch(rx_route_t target)
+{
+    if (g_switching) {
+        return false;
+    }
+    if (target != RX_ROUTE_LEGACY_WIFI) {
+        return false;
+    }
+    if (g_active_route != RX_ROUTE_SLE_JOB) {
+        return false;
+    }
+    if (laser_is_enabled()) {
+        return false;
+    }
+
+    bool known = false;
+    bool busy = route_manager_active_route_busy_known(&known);
+    return known && !busy;
+}
+
+bool route_manager_request_safe_switch(rx_route_t target)
+{
+    if (!route_manager_can_request_switch(target)) {
+        osal_printk("[ROUTE_SWITCH] reject active=%s target=%s laser=%s switching=%d\r\n",
+                    rx_route_name(g_active_route), rx_route_name(target),
+                    laser_is_enabled() ? "ON" : "OFF", g_switching ? 1 : 0);
+        laser_force_off();
+        return false;
+    }
+
+    g_switching = true;
+    laser_force_off();
+
+    osal_printk("[ROUTE_SWITCH] stop SLE_JOB\r\n");
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+    sle_job_route_force_stop();
+#else
+    g_switching = false;
+    g_active_route = RX_ROUTE_SAFE;
+    g_switch_count++;
+    osal_printk("[ROUTE_SWITCH] fail SLE_JOB transport disabled\r\n");
+    return false;
+#endif
+
+    if (target == RX_ROUTE_LEGACY_WIFI) {
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+        osal_printk("[ROUTE_SWITCH] start LEGACY_WIFI\r\n");
+        errcode_t ret = legacy_wifi_route_start();
+        if (ret != ERRCODE_SUCC) {
+            osal_printk("[ROUTE_SWITCH] start LEGACY_WIFI failed: 0x%x\r\n", ret);
+            laser_force_off();
+            g_active_route = RX_ROUTE_SAFE;
+            g_switch_count++;
+            g_switching = false;
+            route_manager_dump_status();
+            return false;
+        }
+        g_active_route = RX_ROUTE_LEGACY_WIFI;
+        g_switch_count++;
+        g_switching = false;
+        osal_printk("[RX_MODE] mode=%s route=%s\r\n",
+                    route_manager_mode_name(route_manager_get_mode()),
+                    rx_route_name(g_active_route));
+        route_manager_dump_status();
+        return true;
+#else
+        osal_printk("[ROUTE_SWITCH] fail LEGACY_WIFI transport disabled\r\n");
+#endif
+    }
+
+    laser_force_off();
+    g_active_route = RX_ROUTE_SAFE;
+    g_switch_count++;
+    g_switching = false;
+    route_manager_dump_status();
+    return false;
 }
 
 void route_manager_get_status(rx_route_status_t *out_status)

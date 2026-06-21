@@ -592,9 +592,10 @@ requested for a separate experiment.
 
 ## R5 Minimal Mode Design Draft
 
-This section is a design record only. Runtime mode switching, dual Grbl
-frontends, fallback timers, and new SLE control packets are not implemented.
-R4B TX + Host job execution acceptance has passed; R5 remains unimplemented.
+This section records the R5 direction. R5A and R5B are implemented. R5C adds
+only the first manual one-way switch from SLE Job to Legacy WiFi. The full
+shared Grbl Stream route, reverse switching, owner/arbitration, and fallback
+timers are still not implemented.
 
 R5 exposes only two upper-level modes:
 
@@ -633,13 +634,14 @@ R5B boots into SLE Job and keeps SLE advertising active indefinitely. A late
 TX must still be able to connect, so absence of a TX never triggers automatic
 fallback. Legacy UART and Legacy WiFi remain compiled but stopped.
 
-Planned explicit switching paths:
+Explicit switching paths:
 
 - GRBL Stream to SLE Job: accept a complete command such as `@RX MODE=SLE`
-  from either UART or WiFi. Do not use a single-character command.
-- SLE Job to GRBL Stream: use a dedicated SLE control packet such as
-  `PKT_ROUTE_SWITCH(target=GRBL_STREAM)`. Do not place route-control characters
-  inside ordinary SLE job data.
+  from either UART or WiFi. Do not use a single-character command. This is not
+  implemented in R5C.
+- SLE Job to Legacy WiFi: R5C uses Host command `@RX MODE=GRBL`, TX packet
+  `PKT_ROUTE_SWITCH=0x15`, and target `LEGACY_WIFI`. Do not place route-control
+  characters inside ordinary SLE job data.
 
 No switch is allowed while work is active. The minimum safe switch gate is:
 
@@ -736,6 +738,62 @@ Validated behavior:
 - Small job upload and execution completed successfully.
 - Final laser state was physically OFF.
 - Legacy WiFi and Legacy UART did not start automatically at any point.
+
+## R5C Manual SLE Job To Legacy WiFi Switch
+
+R5C implements only one direction:
+
+```text
+SLE_JOB -> LEGACY_WIFI
+```
+
+It does not implement reverse switching, the future UART/WiFi dual frontend,
+an owner mechanism, or automatic fallback.
+
+Control path:
+
+1. Host button sends `@RX MODE=GRBL`.
+2. TX parses the command without entering data mode.
+3. TX sends `PKT_ROUTE_SWITCH=0x15` with a 4-byte payload:
+   `target_route=LEGACY_WIFI`, `flags=0`, `reserved=0`.
+4. RX verifies safe idle state while SLE is still connected.
+5. RX sends ACK first, then starts a delayed switch task.
+6. The delayed switch stops SLE advertising/connection, starts Legacy WiFi, and
+   updates mode/route to `GRBL_STREAM` / `LEGACY_WIFI`.
+
+The ACK text `route_switch_accepted` means the request passed the safe gate and
+the delayed switch was queued. It is not a guarantee that Host has already
+validated the WiFi server. After acceptance, the operator manually connects
+LaserGRBL to:
+
+- SSID: `WS63_LASER_WIFI`
+- Password: `12345678`
+- Address: `192.168.43.1`
+- Port: `5000`
+- LaserGRBL mode: Grbl + Telnet + Buffered + Fast
+
+R5C safe gate:
+
+- active route is `SLE_JOB`
+- target route is `LEGACY_WIFI`
+- job manager is idle
+- no receiving or executing job is active
+- SLE motion executor is not busy
+- SLE motion queue is empty
+- laser is physically OFF
+- no route switch is already in progress
+
+Expected R5C logs:
+
+```text
+Route-based integration R5C
+[ROUTE_SWITCH] request from=SLE_JOB target=2 ...
+[ROUTE_SWITCH] safe idle check passed
+[ROUTE_SWITCH] ack accepted, delayed switch start
+[ROUTE_SWITCH] stop SLE_JOB
+[ROUTE_SWITCH] start LEGACY_WIFI
+[RX_MODE] mode=GRBL_STREAM route=LEGACY_WIFI
+```
 
 ## Planned Route Phases
 

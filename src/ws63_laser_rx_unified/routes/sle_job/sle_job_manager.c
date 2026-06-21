@@ -11,6 +11,7 @@
 #include "sle_job_motion_executor.h"
 #include "sle_job_packet.h"
 #include "sle_job_protocol.h"
+#include "route_manager.h"
 #include "sle_errcode.h"
 #include "sle_job_route_server.h"
 #include "soc_osal.h"
@@ -26,11 +27,14 @@
 #define SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK 12U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_SLEEP_MS 5U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_LOG_MS 500U
+#define SLE_JOB_ROUTE_SWITCH_DELAY_MS 200U
+#define SLE_JOB_ROUTE_SWITCH_TASK_STACK_SIZE 0x1000U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
 static volatile bool g_exec_active = false;
 static volatile bool g_focus_active = false;
+static volatile bool g_route_switch_pending = false;
 static uint16_t g_expected_seq = 1;
 static uint16_t g_last_seq = 0;
 static uint16_t g_resp_seq = 1;
@@ -591,6 +595,89 @@ static void handle_focus_ctrl(const sle_job_packet_view_t *pkt)
     }
 }
 
+static int route_switch_task(void *arg)
+{
+    unused(arg);
+
+    osal_msleep(SLE_JOB_ROUTE_SWITCH_DELAY_MS);
+    osal_printk("[ROUTE_SWITCH] delayed switch execute target=LEGACY_WIFI\r\n");
+    bool ok = route_manager_request_safe_switch(RX_ROUTE_LEGACY_WIFI);
+    if (!ok) {
+        osal_printk("[ROUTE_SWITCH] delayed switch failed target=LEGACY_WIFI\r\n");
+        laser_force_off();
+    }
+    g_route_switch_pending = false;
+    return ok ? 0 : -1;
+}
+
+static bool start_route_switch_task(void)
+{
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(route_switch_task, NULL, "route_switch",
+                                          SLE_JOB_ROUTE_SWITCH_TASK_STACK_SIZE);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        return false;
+    }
+    if (osal_kthread_set_priority(task, SLE_JOB_TASK_PRIO_JOB_EXECUTOR) != OSAL_SUCCESS) {
+        osal_printk("[ROUTE_SWITCH] set switch priority failed\r\n");
+    }
+    osal_kfree(task);
+    osal_kthread_unlock();
+    return true;
+}
+
+static void handle_route_switch(const sle_job_packet_view_t *pkt)
+{
+    if (pkt->len != sizeof(sle_job_route_switch_payload_t)) {
+        osal_printk("[ROUTE_SWITCH] reject reason=bad_len len=%u need=%u\r\n",
+                    (unsigned int)pkt->len,
+                    (unsigned int)sizeof(sle_job_route_switch_payload_t));
+        send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB, "bad_len");
+        return;
+    }
+
+    sle_job_route_switch_payload_t req;
+    memcpy(&req, pkt->payload, sizeof(req));
+    osal_printk("[ROUTE_SWITCH] request from=SLE_JOB target=%u flags=%u pending=%d state=%s exec=%d\r\n",
+                (unsigned int)req.target_route, (unsigned int)req.flags,
+                g_route_switch_pending ? 1 : 0, state_name(g_state), g_exec_active ? 1 : 0);
+
+    if (req.target_route != SLE_JOB_ROUTE_TARGET_LEGACY_WIFI || req.flags != 0 || req.reserved != 0) {
+        osal_printk("[ROUTE_SWITCH] reject reason=bad_target target=%u flags=%u reserved=%u\r\n",
+                    (unsigned int)req.target_route, (unsigned int)req.flags,
+                    (unsigned int)req.reserved);
+        send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB, "bad_target");
+        return;
+    }
+
+    if (g_route_switch_pending || !route_manager_can_request_switch(RX_ROUTE_LEGACY_WIFI)) {
+        osal_printk("[ROUTE_SWITCH] reject reason=busy state=%s exec=%d queue=%u motion_busy=%d laser=%d switching=%d\r\n",
+                    state_name(g_state), g_exec_active ? 1 : 0,
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    sle_job_motion_executor_is_busy() ? 1 : 0,
+                    laser_is_enabled() ? 1 : 0,
+                    route_manager_is_switching() ? 1 : 0);
+        laser_force_off();
+        send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_STATE, "busy");
+        return;
+    }
+
+    laser_force_off();
+    g_route_switch_pending = true;
+    if (!start_route_switch_task()) {
+        g_route_switch_pending = false;
+        osal_printk("[ROUTE_SWITCH] reject reason=create_task_failed\r\n");
+        send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_INTERNAL_ERROR, "create_task_failed");
+        return;
+    }
+
+    osal_printk("[ROUTE_SWITCH] safe idle check passed\r\n");
+    osal_printk("[ROUTE_SWITCH] ack accepted, delayed switch start\r\n");
+    seq_commit(pkt->seq);
+    send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_OK);
+}
+
 void sle_job_manager_on_packet(const uint8_t *data, uint16_t len)
 {
     sle_job_packet_view_t pkt;
@@ -655,6 +742,9 @@ void sle_job_manager_on_packet(const uint8_t *data, uint16_t len)
         case SLE_JOB_PKT_FOCUS_CTRL:
             handle_focus_ctrl(&pkt);
             break;
+        case SLE_JOB_PKT_ROUTE_SWITCH:
+            handle_route_switch(&pkt);
+            break;
         default:
             osal_printk("[JOB_RX] unsupported type=0x%02x seq=%u\r\n", pkt.type, pkt.seq);
             send_ack(pkt.type, pkt.seq, SLE_JOB_STATUS_BAD_JOB);
@@ -674,6 +764,7 @@ void sle_job_manager_on_disconnect(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
+    g_route_switch_pending = false;
 }
 
 bool sle_job_manager_is_idle(void)
@@ -697,5 +788,6 @@ void sle_job_manager_init(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
+    g_route_switch_pending = false;
     osal_printk("[JOB_RX] manager init cache=%u sliding-window\r\n", (unsigned int)sle_job_cache_size());
 }

@@ -396,6 +396,22 @@ static void send_simple_control(uint8_t type)
     }
 }
 
+static void send_route_switch_to_wifi(void)
+{
+    route_switch_payload_t payload = {0};
+    payload.target_route = SLE_JOB_ROUTE_TARGET_LEGACY_WIFI;
+    payload.flags = 0;
+    payload.reserved = 0;
+
+    host_sendf("@OK route_switch_request target=LEGACY_WIFI\r\n");
+    osal_printk("[JOB_TX_ROUTE_SWITCH] target=LEGACY_WIFI\r\n");
+    if (send_packet_wait_ack(PKT_ROUTE_SWITCH, &payload, sizeof(payload)) == ERRCODE_SUCC) {
+        host_sendf("@OK route_switch_accepted target=LEGACY_WIFI\r\n");
+    } else {
+        host_sendf("@ERR route_switch_failed status=%u\r\n", (unsigned int)g_wait_status);
+    }
+}
+
 static void handle_command_line(char *line)
 {
     osal_printk("[JOB_TX_CMD] line=\"%s\" data_mode=%d off=%u/%u preroll_bytes=%u preroll_signaled=%d\r\n",
@@ -498,6 +514,14 @@ static void handle_command_line(char *line)
         if (sle_packet_encode(PKT_STATUS_REQ, 0, seq, NULL, 0, packet, sizeof(packet), &packet_len)) {
             (void)sle_job_client_send_packet(packet, packet_len);
         }
+        return;
+    }
+    if (strcmp(line, "@RX MODE=GRBL") == 0) {
+        if (g_data_mode) {
+            host_sendf("@ERR route_switch_busy data_mode=1\r\n");
+            return;
+        }
+        send_route_switch_to_wifi();
         return;
     }
 

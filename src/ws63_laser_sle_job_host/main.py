@@ -569,6 +569,8 @@ class SleJobHostApp(tk.Tk):
         ttk.Button(quick, text="@EXEC_START", command=self.exec_start).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(quick, text="@EXEC_STOP", command=self.exec_stop).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(quick, text="@ABORT", command=self.abort_job).grid(row=0, column=3, padx=(0, 6))
+        ttk.Button(quick, text="切换到 WiFi / GRBL",
+                   command=self.switch_to_wifi_grbl).grid(row=0, column=4, padx=(0, 6))
 
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
@@ -1010,6 +1012,30 @@ class SleJobHostApp(tk.Tk):
 
     def abort_job(self) -> None:
         self._run_worker(lambda: self._control_worker("@ABORT", "@ACK type=4", "已放弃任务"))
+
+    def switch_to_wifi_grbl(self) -> None:
+        if not self.client.is_open():
+            self.enqueue_log("error", "请先连接 TX 命令串口")
+            return
+        status = self.task_status_var.get().strip()
+        if not (status.startswith("空闲") or status.startswith("执行完成")):
+            messagebox.showwarning("不能切换", f"当前任务状态不适合切换：{status}")
+            return
+        self._run_worker(self._switch_to_wifi_grbl_worker)
+
+    def _switch_to_wifi_grbl_worker(self) -> None:
+        try:
+            self.enqueue_log("status", "请求切换到 WiFi / GRBL")
+            result = self.client.send_control(
+                "@RX MODE=GRBL",
+                "@OK route_switch_accepted",
+                CMD_TIMEOUT_DEFAULT,
+            )
+            self.enqueue_progress("已切换到 WiFi / GRBL")
+            self.enqueue_task_status("已切换到 WiFi / GRBL", 100)
+            self.enqueue_log("status", f"ROUTE_SWITCH {result.elapsed_ms} ms: {result.line}")
+        except Exception as exc:
+            self.enqueue_log("error", f"ROUTE_SWITCH 失败: {exc}")
 
     def query_status(self) -> None:
         self._run_worker(self._status_worker)

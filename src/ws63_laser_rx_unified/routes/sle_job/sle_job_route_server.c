@@ -51,6 +51,7 @@ static uint16_t g_data_property_handle = 0;
 static uint16_t g_resp_property_handle = 0;
 static sle_job_route_packet_rx_cb_t g_packet_cb = NULL;
 static sle_job_route_disconnect_cb_t g_disconnect_cb = NULL;
+static volatile bool g_server_stopping = false;
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -206,6 +207,10 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
         osal_printk("[job_rx] SLE connected conn_id=%u\r\n", conn_id);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         g_conn_id = SLE_CONN_INVALID;
+        if (g_server_stopping) {
+            osal_printk("[job_rx] SLE disconnected during route stop\r\n");
+            return;
+        }
         osal_printk("[job_rx] SLE disconnected, force safe stop\r\n");
         if (g_disconnect_cb != NULL) {
             g_disconnect_cb();
@@ -351,6 +356,7 @@ static void sle_announce_register_cbks(void)
 errcode_t sle_job_route_server_init(void)
 {
     g_conn_id = SLE_CONN_INVALID;
+    g_server_stopping = false;
     sle_announce_register_cbks();
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
@@ -358,6 +364,21 @@ errcode_t sle_job_route_server_init(void)
     errcode_t ret = enable_sle();
     osal_printk("[job_rx] enable_sle ret=0x%x\r\n", ret);
     return ret;
+}
+
+errcode_t sle_job_route_server_stop(void)
+{
+    g_server_stopping = true;
+    osal_printk("[job_rx] route server stop begin connected=%d\r\n",
+                (g_conn_id != SLE_CONN_INVALID) ? 1 : 0);
+    if (g_conn_id != SLE_CONN_INVALID) {
+        errcode_t disc_ret = sle_disconnect_all_remote_device();
+        osal_printk("[job_rx] disconnect all ret=0x%x\r\n", disc_ret);
+        g_conn_id = SLE_CONN_INVALID;
+    }
+    errcode_t adv_ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+    osal_printk("[job_rx] stop announce ret=0x%x\r\n", adv_ret);
+    return ERRCODE_SLE_SUCCESS;
 }
 
 bool sle_job_route_server_is_connected(void)

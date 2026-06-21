@@ -114,6 +114,10 @@ void sle_job_route_force_stop(void)
 {
     if (g_route_started) {
         sle_job_manager_safe_stop("route-force-stop");
+        (void)sle_job_route_server_stop();
     }
     laser_force_off();
+    g_route_started = false;
+    g_server_ready = false;
+    g_server_failed = false;
 }

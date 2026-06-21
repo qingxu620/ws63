@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief Integrated RX route-based R5B entry.
+ * @brief Integrated RX route-based R5C entry.
  */
 #include "app_init.h"
 #include "boot_policy.h"
@@ -14,7 +14,7 @@ static void laser_rx_unified_entry(void)
 {
     osal_printk("========================================\r\n");
     osal_printk("  WS63 Laser RX Integrated\r\n");
-    osal_printk("  Route-based integration R5B\r\n");
+    osal_printk("  Route-based integration R5C\r\n");
     osal_printk("========================================\r\n");
 
     errcode_t ret = dac8562_init();
@@ -35,13 +35,13 @@ static void laser_rx_unified_entry(void)
     route_status_print_boot_summary();
     route_manager_print_status();
 #if defined(CONFIG_LASER_RX_TRANSPORT_UART)
-    osal_printk("[RX_INTEGRATED] legacy_uart compiled but not started in R5B\r\n");
+    osal_printk("[RX_INTEGRATED] legacy_uart compiled but not started in R5C\r\n");
 #endif
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
-    osal_printk("[RX_INTEGRATED] legacy_wifi compiled but not started in R5B\r\n");
+    osal_printk("[RX_INTEGRATED] legacy_wifi compiled, starts only after manual route switch in R5C\r\n");
 #endif
 #if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
-    osal_printk("[RX_INTEGRATED] R5B start sle_job route\r\n");
+    osal_printk("[RX_INTEGRATED] R5C start sle_job route\r\n");
     if (!route_manager_set_active(RX_ROUTE_SLE_JOB)) {
         osal_printk("[RX_INTEGRATED] start sle_job failed\r\n");
         laser_force_off();
