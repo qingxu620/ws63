@@ -25,8 +25,8 @@ Build the unified RX sample and archive the firmware as:
   ${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg
 
 The script switches ws63_liteos_app.config to CONFIG_LASER_RX_UNIFIED=y,
-compiles the legacy UART route and enables the legacy WiFi route for R3B
-active validation, keeps SLE disabled, builds serially, and immediately
+compiles the validated legacy UART/WiFi routes, enables the SLE job route for
+R4B active validation, builds serially, and immediately
 copies the shared raw fwpkg output into fwstage/latest and fwstage/<timestamp>.
 EOF
 }
@@ -110,6 +110,16 @@ assert_config_n() {
     fi
 }
 
+assert_config_int() {
+    local symbol=$1
+    local value=$2
+    local count
+    count=$(grep -c "^${symbol}=${value}$" "$CONFIG" || true)
+    if [[ "$count" -ne 1 ]]; then
+        err "${symbol}=${value} count=${count} (expected 1)"
+    fi
+}
+
 switch_to_rx_unified() {
     log "Switching config to unified RX"
 
@@ -130,12 +140,17 @@ switch_to_rx_unified() {
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
     set_config_y CONFIG_LASER_RX_UNIFIED
 
-    # R3B starts the prefixed legacy WiFi route. The prefixed legacy UART route
-    # remains compiled for symbol coverage but main.c must not start UART.
-    # SLE remains disabled.
+    # The standalone SLE sample is disabled, but keep its role selector on RX
+    # so the checked-in build configuration cannot retain a previous TX build.
+    set_config_y CONFIG_LASER_SLE_JOB_RECEIVER
+    set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
+
+    # R4B compiles all three routes. main.c starts only SLE Job; Legacy UART and
+    # Legacy WiFi remain compile-only and must not create transport tasks.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
-    set_config_n CONFIG_LASER_RX_TRANSPORT_SLE_JOB
+    set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
+    set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 131072
     set_config_n CONFIG_LASER_RX_UART_STATUS_PERIODIC
     set_config_int CONFIG_LASER_RX_UART_BAUD 115200
     set_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 70
@@ -148,6 +163,8 @@ verify_rx_unified_config() {
     log "Verifying unified RX config"
 
     assert_config_y CONFIG_LASER_RX_UNIFIED
+    assert_config_y CONFIG_LASER_SLE_JOB_RECEIVER
+    assert_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
     local conflicting=(
         CONFIG_ENABLE_BT_SAMPLE
@@ -170,9 +187,10 @@ verify_rx_unified_config() {
 
     assert_config_y CONFIG_LASER_RX_TRANSPORT_UART
     assert_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
+    assert_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
+    assert_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 131072
 
     local disabled_transports=(
-        CONFIG_LASER_RX_TRANSPORT_SLE_JOB
         CONFIG_LASER_RX_UART_STATUS_PERIODIC
     )
 
@@ -181,7 +199,9 @@ verify_rx_unified_config() {
     done
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
-    echo "  R3B OK: legacy WiFi active; legacy UART compile-only; SLE disabled"
+    echo "  Role selector OK: RECEIVER=y, TRANSMITTER=not set"
+    echo "  R4B OK: SLE Job active; legacy UART/WiFi routes compile-only"
+    echo "  SLE job cache fixed at 131072 bytes"
 }
 
 resolve_unique_fwpkg() {
@@ -265,7 +285,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r3b_legacy_wifi_active
+phase=r4b_sle_job_active
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}
@@ -275,6 +295,8 @@ output_path=${fw}
 file_size=${file_size}
 sha256=${file_sha}
 enabled_sample_config=CONFIG_LASER_RX_UNIFIED=y
+CONFIG_LASER_SLE_JOB_RECEIVER=y
+CONFIG_LASER_SLE_JOB_TRANSMITTER=not_set
 CONFIG_ENABLE_LASER_SINGLE_SAMPLE=not_set
 CONFIG_ENABLE_LASER_WIFI_SAMPLE=not_set
 CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=not_set
@@ -284,7 +306,8 @@ CONFIG_LASER_RX_TRANSPORT_UART=y
 CONFIG_LASER_RX_UART_BAUD=115200
 CONFIG_LASER_RX_UART_STATUS_PERIODIC=not_set
 CONFIG_LASER_RX_TRANSPORT_WIFI=y
-CONFIG_LASER_RX_TRANSPORT_SLE_JOB=not_set
+CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y
+CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE=131072
 EOF
 
     echo "  Manifest: ${manifest}"

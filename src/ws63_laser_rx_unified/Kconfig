@@ -40,7 +40,18 @@ config LASER_RX_TRANSPORT_SLE_JOB
     bool "Enable SLE job route option"
     default n
     help
-        Future SLE job route option. SLE job packet input is not wired in R2A.
+        R4B starts the route-local SLE receiver, packet/cache state machine,
+        G-code processor, motion executor, and SLE server as the default active
+        route. Legacy UART/WiFi routes remain compiled but inactive.
+
+config LASER_RX_SLE_JOB_CACHE_SIZE
+    int "Integrated SLE job cache size"
+    default 131072
+    range 131072 131072
+    depends on LASER_RX_TRANSPORT_SLE_JOB
+    help
+        Keep the validated SLE RX cache at 131072 bytes. R4A intentionally has
+        no 64 KiB fallback because that would silently change job behavior.
 
 config LASER_RX_WORK_AREA_X_MM
     int "Work area X in mm"

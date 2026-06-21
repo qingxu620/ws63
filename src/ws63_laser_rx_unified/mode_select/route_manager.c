@@ -11,6 +11,9 @@
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
 #include "legacy_wifi_route.h"
 #endif
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+#include "sle_job_route.h"
+#endif
 #include <string.h>
 
 static volatile rx_route_t g_active_route = RX_ROUTE_NONE;
@@ -29,6 +32,12 @@ static bool route_manager_active_route_busy(void)
         case RX_ROUTE_LEGACY_WIFI:
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
             return !legacy_wifi_route_is_idle();
+#else
+            return false;
+#endif
+        case RX_ROUTE_SLE_JOB:
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+            return !sle_job_route_is_idle();
 #else
             return false;
 #endif
@@ -130,6 +139,21 @@ bool route_manager_set_active(rx_route_t route)
         }
 #else
         osal_printk("[ROUTE] start LEGACY_WIFI failed: transport disabled\r\n");
+        return false;
+#endif
+    }
+
+    if (route == RX_ROUTE_SLE_JOB) {
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+        osal_printk("[ROUTE] start SLE_JOB\r\n");
+        errcode_t ret = sle_job_route_start();
+        if (ret != ERRCODE_SUCC) {
+            osal_printk("[ROUTE] start SLE_JOB failed: 0x%x\r\n", ret);
+            laser_force_off();
+            return false;
+        }
+#else
+        osal_printk("[ROUTE] start SLE_JOB failed: transport disabled\r\n");
         return false;
 #endif
     }

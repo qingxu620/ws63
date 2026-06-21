@@ -39,6 +39,22 @@ if(DEFINED CONFIG_LASER_RX_TRANSPORT_WIFI)
         ${CMAKE_CURRENT_SOURCE_DIR}/routes/legacy_wifi)
 endif()
 
+if(DEFINED CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+    list(APPEND RX_UNIFIED_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_route.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_route_server.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_manager.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_cache.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_packet.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_crc16.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_gcode_parser.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_gcode_processor.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job/sle_job_motion_executor.c)
+
+    list(APPEND RX_UNIFIED_PUBLIC_HEADER
+        ${CMAKE_CURRENT_SOURCE_DIR}/routes/sle_job)
+endif()
+
 set(SOURCES
     ${SOURCES}
     ${RX_UNIFIED_SOURCES}

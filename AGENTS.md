@@ -200,7 +200,7 @@ For `src/ws63_laser_rx_unified/`:
 3. Current build enable switch is `CONFIG_LASER_RX_UNIFIED=y`.
 4. Current mainline is route-based integration, not the old shared `rx_stream` approach.
 5. `rx_core/rx_stream.c` and `transports/uart_transport.c` are experimental Phase 2A prototype files. Do not use them as the three-mode integration mainline unless explicitly requested.
-6. R3B behavior starts the prefixed Legacy WiFi route when `CONFIG_LASER_RX_TRANSPORT_WIFI=y`. The prefixed Legacy UART route may remain compiled for coverage, but `main.c` must not start the UART RX task in R3B. SLE remains stopped until its own integration phase.
+6. R4A compile-only boot validation passed. R4B starts only the route-local SLE Job RX, makes `RX_ROUTE_SLE_JOB` active, and reaches SLE server ready; Legacy UART/WiFi remain compiled but their transport tasks must not start. R4B-job TX + Host execution validation has passed repeatedly with the stable TX transmitter, `src/ws63_laser_sle_job_host`, and `preroll=4096`, including `@STATUS`, `@DATA_READY`, `DATA_RESUME`, `JOB_READY`, `EXEC_DONE`, and final laser OFF.
 7. Later routes should reuse mature source behavior first:
    - Legacy UART route: `src/ws63_laser_single/`
    - Legacy WiFi route: `src/ws63_laser_wifi/`
@@ -213,6 +213,15 @@ For `src/ws63_laser_rx_unified/`:
    - Timestamped copies should use the same `fwstage/<timestamp>/` convention.
 12. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
 13. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
+14. The integrated SLE Job route must keep its cache at 131072 bytes and preserve the stable protocol framing, CRC, ACK/NACK, sequence, duplicate, cache, and preroll behavior. Its Host demo preroll baseline remains 4096.
+15. The R5 design has only two upper-level modes: `RX_MODE_GRBL_STREAM` and `RX_MODE_SLE_JOB`. This is a design draft only; runtime switching is not implemented yet.
+16. `RX_MODE_GRBL_STREAM` should use one G-code parser, one processor, and one motion executor with UART and WiFi as simultaneous input frontends. Do not start two complete Legacy UART/WiFi execution cores together.
+17. Do not add a GRBL owner mechanism for the current demo. The operator must not send UART and WiFi jobs concurrently; concurrent input behavior is unspecified. A simple response broadcast to UART and WiFi is acceptable for the demo.
+18. The planned boot policy is SLE-first: wait approximately 5 to 10 seconds for TX, stay in SLE Job when connected, otherwise safely fall back to GRBL Stream with both UART and WiFi listeners enabled.
+19. Planned switching commands must remain explicit: GRBL Stream uses `@RX MODE=SLE`, while SLE Job uses a dedicated control packet such as `PKT_ROUTE_SWITCH(target=GRBL_STREAM)`. Do not use a single character or embed route control in job data.
+20. Any later mode switch must require IDLE, laser OFF, an empty motion queue, no SLE receive/execute operation, and no GRBL stream in progress. A failed switch must force the laser OFF and must not update the active mode incorrectly.
+21. One first-integration attempt produced `@DATA_READY timeout / bad_begin`, then succeeded without code changes and remained non-reproducible across many later runs. Record it as an occasional initial handshake/state synchronization observation; do not change protocol framing, ACK/NACK semantics, TX, RX, or Host behavior unless reproducible evidence identifies a structural defect.
+22. Before implementing R5, review the R4B checkpoint diff and create a checkpoint commit only after the user explicitly requests the commit.
 
 ## Development Environment
 
@@ -404,9 +413,9 @@ cd /root/fbb_ws63
 
 **关键规则：**
 
-- R3B 默认启用 `CONFIG_LASER_RX_TRANSPORT_WIFI=y` and starts the prefixed Legacy WiFi route for LaserGRBL Telnet validation；
-- R3B 可以继续编译 `CONFIG_LASER_RX_TRANSPORT_UART=y` for symbol coverage, but must not start the Legacy UART RX task；
-- SLE route 仍保持关闭，除非用户明确进入对应阶段；
+- R4B 启用 `CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` 并默认激活 SLE Job route；
+- Legacy UART/WiFi 继续编译用于 symbol coverage，但不得启动 UART RX、SoftAP 或 TCP server；
+- integrated SLE job cache 固定为 131072 字节，Host demo preroll baseline 保持 4096；
 - 脚本会关闭 `ENABLE_LASER_SINGLE_SAMPLE`、`ENABLE_LASER_WIFI_SAMPLE`、`ENABLE_LASER_SLE_JOB_SAMPLE`、`ENABLE_SCREEN_SAMPLE`、`ENABLE_LVGL_SAMPLE` 等竞争入口；
 - 脚本会修改 `src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config`；
 - 构建 TX/RX、screen、LVGL 或其它固件时，必须使用对应脚本重新切配置；

@@ -288,6 +288,151 @@ Validated behavior:
 - Final laser state was physically OFF.
 - Legacy UART and SLE routes did not start or preempt the active WiFi route.
 
+## R4A Scope
+
+R4A compiles a route-local copy of the validated SLE Job RX implementation
+from `src/ws63_laser_sle_job/receiver/` and its common packet code. It does not
+start SLE advertising, initialize the SLE server, or create SLE/job execution
+tasks.
+
+Implemented in R4A:
+
+- `routes/sle_job/sle_job_route.c/.h` compile-only lifecycle stub
+- route-local server, job manager, 131072-byte cache, packet, CRC16, G-code,
+  and motion executor sources
+- exported symbols prefixed with `sle_job_`
+- route-local headers named `sle_job_*.h`; no generic `config.h`, `protocol.h`,
+  `packet.h`, or receiver component includes
+- packet framing and state-machine behavior preserved from the stable SLE RX
+- `CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` enables compile coverage
+
+R4A protocol invariants:
+
+- packet magic: `0xA55A`
+- packet header: 10 bytes
+- maximum payload: 224 bytes
+- CRC16-CCITT initial value: `0xFFFF`
+- packed structures and little-endian multi-byte fields remain unchanged
+- ACK/NACK, sequence, duplicate, cache, and preroll behavior remain unchanged
+- SLE job cache is fixed at 131072 bytes; there is no 64 KiB fallback
+- Host demo preroll baseline remains 4096 bytes
+
+Expected R4A boot log:
+
+```text
+WS63 Laser RX Integrated
+Route-based integration R4A
+[RX_INTEGRATED] compiled_routes=LEGACY_UART,LEGACY_WIFI,SLE_JOB
+[RX_INTEGRATED] R4A sle_job compiled but not started
+[RX_INTEGRATED] laser=OFF
+```
+
+R4A must not print SLE advertising/server/connection logs, initialize the job
+manager, create `job_exec_task`, or process SLE job packets. The validated
+Legacy WiFi route remains the active route during this compile-only phase.
+
+R4A SLE Job compile-only boot validation: passed.
+
+Validated boot state:
+
+- `WS63 Laser RX Integrated` and `Route-based integration R4A` were printed.
+- Compiled routes reported `LEGACY_UART,LEGACY_WIFI,SLE_JOB`.
+- Active route remained `LEGACY_WIFI`; Legacy UART was compiled but not
+  started.
+- Legacy WiFi started normally with SSID `WS63_LASER_WIFI`, controller IP
+  `192.168.43.1`, TCP port `5000`, channel `6`, and `hidden_flag=1`.
+- TCP server reported listening on port `5000`.
+- `R4A sle_job compiled but not started` was printed.
+- Final boot laser state was `OFF`.
+
+Confirmed absent from the boot log:
+
+- SLE advertising or SLE server start
+- `sle_job_route_server_init`
+- SLE connection events
+- `job_manager_init` or `job_exec_task created`
+- `PKT_JOB_BEGIN`, `PKT_JOB_DATA`, or `PKT_EXEC_START`
+
+Conclusion: the route-local SLE Job implementation is compiled into the R4A
+build without starting any SLE runtime path. Legacy WiFi remains operational,
+and the laser remains physically OFF.
+
+## R4B Scope
+
+R4B makes `RX_ROUTE_SLE_JOB` the default active route. Legacy UART and Legacy
+WiFi remain compiled for coverage but do not start their UART, SoftAP, or TCP
+tasks.
+
+R4B startup flow follows the stable standalone SLE receiver:
+
+1. Initialize the route-local G-code processor, motion executor, and job
+   manager.
+2. Register packet and disconnect callbacks with the route-local SLE server.
+3. Start the route-local motion executor task.
+4. Create the SLE initialization task, delay 500 ms for stack readiness, and
+   initialize the SLE server.
+5. Return from the app initialization callback without blocking. The SLE
+   initialization task reports `[SLE_JOB_ROUTE] server ready` asynchronously.
+
+The app initialization callback must not wait on an OSAL semaphore because it
+runs in the SDK `osMain` initialization context rather than a normal waitable
+task. Task-creation failures leave the route manager unchanged. Asynchronous
+server initialization failures use the existing SLE safe-stop path and force
+the laser OFF; `sle_job_route_is_idle()` remains false until the server is
+ready.
+
+Expected R4B boot state:
+
+```text
+WS63 Laser RX Integrated
+Route-based integration R4B
+[RX_INTEGRATED] legacy_uart compiled but not started in R4B
+[RX_INTEGRATED] legacy_wifi compiled but not started in R4B
+[RX_INTEGRATED] R4B start sle_job route
+[ROUTE] start SLE_JOB
+[SLE_JOB_ROUTE] route started, server init pending
+[RX_ROUTE] active=SLE_JOB
+[RX_INTEGRATED] active_route=SLE_JOB
+[RX_INTEGRATED] laser=OFF
+[SLE_JOB_ROUTE] server ready
+```
+
+R4B preserves the R4A protocol invariants and the 131072-byte cache. Hardware
+acceptance uses the existing SLE TX firmware and
+`src/ws63_laser_sle_job_host` with `preroll=4096`.
+
+## R4B Job Execution Validation
+
+R4B SLE Job active and job execution validation: passed.
+
+Validated combination:
+
+- TX: stable transmitter from `src/ws63_laser_sle_job`
+- RX: integrated R4B firmware with `active_route=SLE_JOB`
+- Host: `src/ws63_laser_sle_job_host`
+- preroll: 4096 bytes
+
+Validated behavior:
+
+- TX and RX established and maintained the SLE connection.
+- Host `@STATUS` completed successfully.
+- Job upload and `@DATA_READY` completed successfully.
+- The 4096-byte preroll path completed successfully.
+- `DATA_RESUME`, `JOB_READY`, and `EXEC_DONE` completed successfully.
+- Repeated job uploads and executions completed successfully after the first
+  successful run.
+- Final laser state was physically OFF.
+- No persistent NACK storm, CRC mismatch, offset mismatch, cache overflow,
+  hard fault, or assert was observed.
+
+One initial integration attempt reported `@DATA_READY timeout / bad_begin`.
+No code or configuration was changed before retrying, the retry succeeded, and
+the condition did not recur during many subsequent successful runs. It is
+recorded as a currently non-reproducible first-connection or first-job-begin
+handshake/state synchronization event. It is not treated as a structural
+protocol defect, and it does not justify changing the validated protocol, TX,
+RX, or Host paths without reproducible evidence.
+
 ## Route Validation Baselines
 
 LaserGRBL settings are route-specific. Do not force one streaming mode across
@@ -445,6 +590,71 @@ They belong to the experimental Phase 2A shared-stream prototype. They should
 not be used as the basis for Legacy UART/WiFi/SLE integration unless explicitly
 requested for a separate experiment.
 
+## R5 Minimal Mode Design Draft
+
+This section is a design record only. Runtime mode switching, dual Grbl
+frontends, fallback timers, and new SLE control packets are not implemented.
+R4B TX + Host job execution acceptance has passed; R5 remains unimplemented.
+
+R5 exposes only two upper-level modes:
+
+- `RX_MODE_GRBL_STREAM`: UART listener and WiFi TCP server are both enabled as
+  frontends to one shared G-code parser, G-code processor, motion executor, and
+  laser control path.
+- `RX_MODE_SLE_JOB`: the existing SLE packet, cache, preroll, and local job
+  execution path used by the TX board and `src/ws63_laser_sle_job_host`.
+
+### Grbl Stream Rules
+
+- UART and WiFi may listen at the same time.
+- The demo does not use `GRBL_OWNER_UART`, `GRBL_OWNER_WIFI`, or another owner
+  mechanism.
+- The operator is responsible for sending a task through only one frontend at
+  a time. Concurrent UART and WiFi command input has unspecified behavior.
+- Productization may add ownership or arbitration later if concurrent clients
+  become a requirement.
+- Grbl responses may initially use a simple broadcast strategy and be written
+  to both UART and the connected WiFi client.
+
+The implementation must not simply start the complete
+`legacy_uart_route_start()` and `legacy_wifi_route_start()` paths together.
+Those routes each contain their own parser, processor, and executor. A later
+R5 implementation must instead create or refactor one GRBL Stream route with:
+
+- one G-code parser
+- one G-code processor
+- one motion executor
+- one UART frontend
+- one WiFi TCP frontend
+
+### Boot And Switching Draft
+
+The planned boot policy is SLE-first:
+
+1. Start or probe SLE Job and wait approximately 5 to 10 seconds for TX.
+2. If TX connects, remain in `RX_MODE_SLE_JOB`.
+3. If TX does not connect before the timeout, safely enter
+   `RX_MODE_GRBL_STREAM` and enable both UART and WiFi listeners.
+
+Planned explicit switching paths:
+
+- GRBL Stream to SLE Job: accept a complete command such as `@RX MODE=SLE`
+  from either UART or WiFi. Do not use a single-character command.
+- SLE Job to GRBL Stream: use a dedicated SLE control packet such as
+  `PKT_ROUTE_SWITCH(target=GRBL_STREAM)`. Do not place route-control characters
+  inside ordinary SLE job data.
+
+No switch is allowed while work is active. The minimum safe switch gate is:
+
+- controller state is IDLE
+- laser is physically OFF
+- motion queue is empty
+- SLE is not RECEIVING or EXECUTING
+- Grbl is not streaming
+
+On any failed switch, the implementation must call `laser_force_off()` and
+must not update the active mode unless the target mode started successfully.
+
 ## Planned Route Phases
 
 1. R1: route manager skeleton, no real route.
@@ -454,10 +664,19 @@ requested for a separate experiment.
 4. R3A: compile prefixed Legacy WiFi route without starting it.
 5. R3B: start the mature `ws63_laser_wifi` SoftAP TCP route and verify with
    LaserGRBL over WiFi.
-6. R4: copy/adapt the mature `ws63_laser_sle_job/receiver` route and verify
-   with `src/ws63_laser_sle_job_host`.
-7. R5: add Host route query/select commands.
-8. R6: clean up build scripts, README, and manifest fields.
+6. R4A: compile a route-local copy of the mature SLE Job RX without starting it.
+7. R4B boot: activate SLE Job and reach SLE server ready. This boot milestone
+   is complete.
+8. R4B-job: TX + Host SLE job execution acceptance passed using the 4096-byte
+   preroll demo baseline, including repeated successful executions and final
+   laser OFF verification.
+9. R5A: add read-only mode status/query reporting.
+10. R5B: implement SLE-first startup with timeout fallback to Grbl Stream.
+11. R5C: implement one GRBL Stream execution core with simultaneous UART and
+    WiFi listeners, without an owner mechanism.
+12. R5D: implement safe explicit switching between GRBL Stream and SLE Job.
+13. R5E: expose the validated mode controls and status to the screen UI.
+14. R6: clean up build scripts, README, and manifest fields.
 
 ## Build
 
@@ -470,9 +689,11 @@ cd /root/fbb_ws63
 
 The script switches `ws63_liteos_app.config` to `CONFIG_LASER_RX_UNIFIED=y`,
 disables competing app samples, enables `CONFIG_LASER_RX_TRANSPORT_UART=y` for
-R2B Legacy UART active validation, enables
-`CONFIG_LASER_RX_TRANSPORT_WIFI=y` for R3B Legacy WiFi active validation, keeps
-SLE route transport disabled, builds serially, and archives the generated
+Legacy UART compile coverage, enables `CONFIG_LASER_RX_TRANSPORT_WIFI=y` for
+the validated Legacy WiFi route, and enables
+`CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` for the R4B active route. The SLE job
+cache is fixed at 131072 bytes. Legacy UART/WiFi remain compiled but are not
+started. The script builds serially and archives the generated
 firmware as:
 
 ```text
@@ -484,7 +705,8 @@ firmware as:
 - Boot must leave the laser physically OFF.
 - Route switching must only be allowed when the active route is idle, laser is
   OFF, queue is empty, and no job is executing.
-- R1 does not implement runtime route switching yet.
+- Runtime mode switching is not implemented yet; the R5 behavior above remains
+  a design draft.
 - Later route ports must preserve each source route's proven protocol behavior.
 
 ## Rollback
