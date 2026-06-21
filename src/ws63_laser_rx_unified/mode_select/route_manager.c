@@ -305,9 +305,16 @@ void route_manager_dump_status(void)
         (void)snprintf(compiled, sizeof(compiled), "NONE");
     }
 
-    osal_printk("[RX_MODE] mode=%s route=%s recommended=%s laser=%s busy=%d switchable=%d reason=%s switches=%u\r\n",
+    int tx_connected = 0;
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+    if (status.active_route == RX_ROUTE_SLE_JOB) {
+        tx_connected = sle_job_route_is_connected() ? 1 : 0;
+    }
+#endif
+    osal_printk("[RX_MODE] mode=%s route=%s recommended=%s tx_connected=%d laser=%s busy=%d switchable=%d reason=%s switches=%u\r\n",
                 route_manager_mode_name(status.mode), rx_route_name(status.active_route),
-                rx_route_name(status.recommended_route), status.laser_on ? "ON" : "OFF",
+                rx_route_name(status.recommended_route), tx_connected,
+                status.laser_on ? "ON" : "OFF",
                 status.busy ? 1 : 0, status.switchable ? 1 : 0,
                 route_manager_switch_block_reason_name(status.switch_block_reason),
                 (unsigned int)status.switch_count);

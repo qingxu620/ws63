@@ -629,12 +629,9 @@ R5 implementation must instead create or refactor one GRBL Stream route with:
 
 ### Boot And Switching Draft
 
-The planned boot policy is SLE-first:
-
-1. Start or probe SLE Job and wait approximately 5 to 10 seconds for TX.
-2. If TX connects, remain in `RX_MODE_SLE_JOB`.
-3. If TX does not connect before the timeout, safely enter
-   `RX_MODE_GRBL_STREAM` and enable both UART and WiFi listeners.
+R5B boots into SLE Job and keeps SLE advertising active indefinitely. A late
+TX must still be able to connect, so absence of a TX never triggers automatic
+fallback. Legacy UART and Legacy WiFi remain compiled but stopped.
 
 Planned explicit switching paths:
 
@@ -658,7 +655,7 @@ must not update the active mode unless the target mode started successfully.
 ## R5A Read-Only Mode Status
 
 R5A adds status expression and logging only. It does not implement runtime
-mode switching, SLE-first fallback, the dual Grbl frontend, or an owner.
+mode switching, automatic fallback, the dual Grbl frontend, or an owner.
 
 The upper-level mode and lower-level route have different meanings:
 
@@ -698,6 +695,48 @@ The initial status can conservatively report `ROUTE_BUSY` while asynchronous
 SLE server initialization is still pending. Later callers of
 `route_manager_get_status_snapshot()` receive the current route state.
 
+## R5B Persistent SLE Advertising
+
+R5B starts the validated SLE Job route and keeps it active whether or not a TX
+is currently connected. After the server becomes ready, a low-priority monitor
+reports connection-state changes but never stops SLE and never starts another
+route. This lets TX and Host come online at any later point in the demo.
+
+The former 8000 ms automatic WiFi fallback was removed after hardware testing:
+RX could leave SLE Job before TX/Host completed startup, leaving TX disconnected
+and causing Host `@DATA_READY` timeouts. Increasing the timeout would only hide
+that lifecycle mismatch, so R5B now uses persistent SLE standby instead.
+
+Legacy UART and Legacy WiFi remain compiled but stopped. R5B does not implement
+WiFi fallback, the UART/WiFi dual frontend, an owner mechanism, manual mode
+commands, or a SLE route-switch packet. Packet framing, CRC, job cache,
+ACK/NACK, sequence, duplicate, and preroll behavior are unchanged.
+
+Expected persistent standby logs:
+
+```text
+[RX_BOOT] policy=SLE_PERSISTENT_ADVERTISING
+[RX_BOOT] sle advertising persistent, waiting tx indefinitely
+[RX_MODE] mode=SLE_JOB route=SLE_JOB tx_connected=0 laser=OFF ...
+[RX_BOOT] tx_connected=1 stay SLE_JOB
+[RX_MODE] mode=SLE_JOB route=SLE_JOB tx_connected=1 laser=OFF ...
+```
+
+## R5B Persistent SLE Advertising Validation
+
+R5B persistent SLE advertising validation: passed.
+
+Validated behavior:
+
+- RX booted with `policy=SLE_PERSISTENT_ADVERTISING`.
+- RX remained in `mode=SLE_JOB` and `active_route=SLE_JOB` beyond the former
+  8000 ms timeout without falling back to WiFi or UART.
+- TX connected after the original timeout window and established the SLE link.
+- Host `@STATUS` completed successfully.
+- Small job upload and execution completed successfully.
+- Final laser state was physically OFF.
+- Legacy WiFi and Legacy UART did not start automatically at any point.
+
 ## Planned Route Phases
 
 1. R1: route manager skeleton, no real route.
@@ -715,10 +754,10 @@ SLE server initialization is still pending. Later callers of
    laser OFF verification.
 9. R5A: read-only mode status/query reporting passed build, flash, and SLE Job
    execution validation without changing the R4B startup or execution path.
-10. R5B: implement SLE-first startup with timeout fallback to Grbl Stream.
-11. R5C: implement one GRBL Stream execution core with simultaneous UART and
-    WiFi listeners, without an owner mechanism.
-12. R5D: implement safe explicit switching between GRBL Stream and SLE Job.
+10. R5B: keep SLE Job advertising persistently with no automatic fallback.
+11. R5C: implement safe idle switching from SLE Job to the future Grbl Stream
+    route.
+12. R5D: implement safe idle switching from Grbl Stream back to SLE Job.
 13. R5E: expose the validated mode controls and status to the screen UI.
 14. R6: clean up build scripts, README, and manifest fields.
 
@@ -735,7 +774,7 @@ The script switches `ws63_liteos_app.config` to `CONFIG_LASER_RX_UNIFIED=y`,
 disables competing app samples, enables `CONFIG_LASER_RX_TRANSPORT_UART=y` for
 Legacy UART compile coverage, enables `CONFIG_LASER_RX_TRANSPORT_WIFI=y` for
 the validated Legacy WiFi route, and enables
-`CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` for the R4B active route. The SLE job
+`CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` for the R5B persistent route. The SLE job
 cache is fixed at 131072 bytes. Legacy UART/WiFi remain compiled but are not
 started. The script builds serially and archives the generated
 firmware as:
@@ -749,8 +788,7 @@ firmware as:
 - Boot must leave the laser physically OFF.
 - Route switching must only be allowed when the active route is idle, laser is
   OFF, queue is empty, and no job is executing.
-- Runtime mode switching is not implemented yet; the R5 behavior above remains
-  a design draft.
+- Runtime mode switching is not implemented yet; R5B remains in SLE Job.
 - Later route ports must preserve each source route's proven protocol behavior.
 
 ## Rollback

@@ -25,8 +25,8 @@ Build the unified RX sample and archive the firmware as:
   ${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg
 
 The script switches ws63_liteos_app.config to CONFIG_LASER_RX_UNIFIED=y,
-compiles the validated legacy UART/WiFi routes, enables the SLE job route for
-R4B active validation, builds serially, and immediately
+compiles all validated routes, enables the R5B persistent SLE advertising
+policy, builds serially, and immediately
 copies the shared raw fwpkg output into fwstage/latest and fwstage/<timestamp>.
 EOF
 }
@@ -138,6 +138,7 @@ switch_to_rx_unified() {
     set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     set_config_n CONFIG_ENABLE_SCREEN_SAMPLE
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
+    set_config_n CONFIG_ENABLE_LVGL_PANEL
     set_config_y CONFIG_LASER_RX_UNIFIED
 
     # The standalone SLE sample is disabled, but keep its role selector on RX
@@ -145,12 +146,13 @@ switch_to_rx_unified() {
     set_config_y CONFIG_LASER_SLE_JOB_RECEIVER
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
-    # R4B compiles all three routes. main.c starts only SLE Job; Legacy UART and
-    # Legacy WiFi remain compile-only and must not create transport tasks.
+    # R5B compiles all three routes but starts only SLE Job. SLE advertising
+    # remains active indefinitely until a TX connects; no automatic fallback.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
     set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 131072
+    set_config_n CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS
     set_config_n CONFIG_LASER_RX_UART_STATUS_PERIODIC
     set_config_int CONFIG_LASER_RX_UART_BAUD 115200
     set_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 70
@@ -178,6 +180,7 @@ verify_rx_unified_config() {
         CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
         CONFIG_ENABLE_SCREEN_SAMPLE
         CONFIG_ENABLE_LVGL_SAMPLE
+        CONFIG_ENABLE_LVGL_PANEL
     )
 
     local symbol
@@ -189,6 +192,7 @@ verify_rx_unified_config() {
     assert_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     assert_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
     assert_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 131072
+    assert_config_n CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS
 
     local disabled_transports=(
         CONFIG_LASER_RX_UART_STATUS_PERIODIC
@@ -200,7 +204,7 @@ verify_rx_unified_config() {
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
     echo "  Role selector OK: RECEIVER=y, TRANSMITTER=not set"
-    echo "  R4B OK: SLE Job active; legacy UART/WiFi routes compile-only"
+    echo "  R5B OK: persistent SLE advertising; no automatic WiFi fallback"
     echo "  SLE job cache fixed at 131072 bytes"
 }
 
@@ -285,7 +289,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r5a_mode_status_query
+phase=r5b_sle_persistent_advertising
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}
@@ -308,6 +312,7 @@ CONFIG_LASER_RX_UART_STATUS_PERIODIC=not_set
 CONFIG_LASER_RX_TRANSPORT_WIFI=y
 CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y
 CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE=131072
+CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS=not_set
 EOF
 
     echo "  Manifest: ${manifest}"

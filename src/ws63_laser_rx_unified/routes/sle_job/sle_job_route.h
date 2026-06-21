@@ -14,6 +14,9 @@ extern "C" {
 
 errcode_t sle_job_route_start(void);
 bool sle_job_route_is_idle(void);
+bool sle_job_route_is_server_ready(void);
+bool sle_job_route_server_failed(void);
+bool sle_job_route_is_connected(void);
 void sle_job_route_force_stop(void);
 
 #ifdef __cplusplus

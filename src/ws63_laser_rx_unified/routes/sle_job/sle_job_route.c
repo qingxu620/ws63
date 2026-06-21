@@ -95,6 +95,21 @@ bool sle_job_route_is_idle(void)
            sle_job_motion_executor_queue_depth() == 0 && !laser_is_enabled();
 }
 
+bool sle_job_route_is_server_ready(void)
+{
+    return g_route_started && g_server_ready && !g_server_failed;
+}
+
+bool sle_job_route_server_failed(void)
+{
+    return g_server_failed;
+}
+
+bool sle_job_route_is_connected(void)
+{
+    return g_route_started && sle_job_route_server_is_connected();
+}
+
 void sle_job_route_force_stop(void)
 {
     if (g_route_started) {

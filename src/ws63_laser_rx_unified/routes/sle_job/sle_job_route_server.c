@@ -44,7 +44,7 @@
 #define SLE_CONN_INVALID 0xFFFF
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static uint16_t g_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_conn_id = SLE_CONN_INVALID;
 static uint8_t g_server_id = 0;
 static uint16_t g_service_handle = 0;
 static uint16_t g_data_property_handle = 0;
