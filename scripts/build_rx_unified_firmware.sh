@@ -285,7 +285,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r4b_sle_job_active
+phase=r5a_mode_status_query
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}

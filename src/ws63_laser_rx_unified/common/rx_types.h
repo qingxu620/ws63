@@ -9,10 +9,14 @@
 #include <stdint.h>
 
 typedef enum {
-    RX_MODE_IDLE = 0,
+    RX_MODE_NONE = 0,
+    RX_MODE_GRBL_STREAM,
+    RX_MODE_SLE_JOB,
+
+    /* Experimental Phase 2A prototype modes retained for source compatibility. */
+    RX_MODE_IDLE,
     RX_MODE_UART_DIRECT,
     RX_MODE_WIFI_TCP,
-    RX_MODE_SLE_JOB,
     RX_MODE_ERROR,
 } rx_mode_t;
 

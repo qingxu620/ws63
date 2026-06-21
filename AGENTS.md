@@ -214,14 +214,16 @@ For `src/ws63_laser_rx_unified/`:
 12. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
 13. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
 14. The integrated SLE Job route must keep its cache at 131072 bytes and preserve the stable protocol framing, CRC, ACK/NACK, sequence, duplicate, cache, and preroll behavior. Its Host demo preroll baseline remains 4096.
-15. The R5 design has only two upper-level modes: `RX_MODE_GRBL_STREAM` and `RX_MODE_SLE_JOB`. This is a design draft only; runtime switching is not implemented yet.
+15. R5 has only two operational upper-level modes: `RX_MODE_GRBL_STREAM` and `RX_MODE_SLE_JOB`. R5A read-only mode/status query build and flash validation passed. With `SLE_JOB` active, `@STATUS`, `preroll=4096`, `EXEC_START`, `DATA_RESUME`, `JOB_READY`, `JOB_END`, and `EXEC_DONE` all passed, with final `active=0` and laser OFF. R5A implements snapshots and logs only; it did not add switching, an owner mechanism, or changes to the validated SLE protocol path.
 16. `RX_MODE_GRBL_STREAM` should use one G-code parser, one processor, and one motion executor with UART and WiFi as simultaneous input frontends. Do not start two complete Legacy UART/WiFi execution cores together.
 17. Do not add a GRBL owner mechanism for the current demo. The operator must not send UART and WiFi jobs concurrently; concurrent input behavior is unspecified. A simple response broadcast to UART and WiFi is acceptable for the demo.
 18. The planned boot policy is SLE-first: wait approximately 5 to 10 seconds for TX, stay in SLE Job when connected, otherwise safely fall back to GRBL Stream with both UART and WiFi listeners enabled.
 19. Planned switching commands must remain explicit: GRBL Stream uses `@RX MODE=SLE`, while SLE Job uses a dedicated control packet such as `PKT_ROUTE_SWITCH(target=GRBL_STREAM)`. Do not use a single character or embed route control in job data.
 20. Any later mode switch must require IDLE, laser OFF, an empty motion queue, no SLE receive/execute operation, and no GRBL stream in progress. A failed switch must force the laser OFF and must not update the active mode incorrectly.
 21. One first-integration attempt produced `@DATA_READY timeout / bad_begin`, then succeeded without code changes and remained non-reproducible across many later runs. Record it as an occasional initial handshake/state synchronization observation; do not change protocol framing, ACK/NACK semantics, TX, RX, or Host behavior unless reproducible evidence identifies a structural defect.
-22. Before implementing R5, review the R4B checkpoint diff and create a checkpoint commit only after the user explicitly requests the commit.
+22. R4B checkpoint commit is `35501db4`. In later development, determine the current communication state from `mode` and `active_route`, not from `compiled_routes`; compiled routes only indicate code included in the firmware and do not imply runtime activation.
+23. R5A must remain read-only. Do not add fallback, mode commands, route control packets, route switching, dual Grbl frontends, or owner behavior as part of R5A work.
+24. `src/ws63_screen_panel_lvgl/` is a separate untracked screen workspace. Do not modify, stage, or commit it during unified RX work unless the user explicitly changes its scope.
 
 ## Development Environment
 

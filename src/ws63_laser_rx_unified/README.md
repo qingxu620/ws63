@@ -655,6 +655,49 @@ No switch is allowed while work is active. The minimum safe switch gate is:
 On any failed switch, the implementation must call `laser_force_off()` and
 must not update the active mode unless the target mode started successfully.
 
+## R5A Read-Only Mode Status
+
+R5A adds status expression and logging only. It does not implement runtime
+mode switching, SLE-first fallback, the dual Grbl frontend, or an owner.
+
+The upper-level mode and lower-level route have different meanings:
+
+- `RX_MODE_NONE`: no operating mode is active.
+- `RX_MODE_GRBL_STREAM`: future shared Grbl execution core with UART and WiFi
+  input frontends. A Legacy UART or Legacy WiFi route maps to this mode.
+- `RX_MODE_SLE_JOB`: validated SLE job packet/cache/preroll execution mode.
+- `active_route` identifies the concrete route currently running.
+- `compiled_routes` only identifies code included in the firmware and does not
+  imply that a route is active.
+
+R5A provides a read-only status snapshot containing mode, active and
+recommended routes, compiled route flags, laser state, conservative busy and
+switchable state, switch block reason, and switch count. If route idleness
+cannot be established, the snapshot reports busy with `UNKNOWN_BUSY` instead
+of reporting that switching is safe.
+
+R5A boot still starts only the validated SLE Job route. Legacy UART and Legacy
+WiFi remain compiled but stopped. The SLE protocol, cache, ACK/NACK, sequence,
+preroll, TX compatibility, and Host job path are unchanged.
+
+R5A mode/status query build and flash validation passed. With `SLE_JOB` active,
+the existing path still completed `@STATUS`, `preroll=4096`, `EXEC_START`,
+`DATA_RESUME`, `JOB_READY`, `JOB_END`, and `EXEC_DONE`. The final status
+reported `active=0`, and the laser was physically OFF. R5A introduced no
+switching, no owner mechanism, and no SLE protocol-path changes.
+
+Expected additional boot logs:
+
+```text
+[RX_MODE] mode=SLE_JOB route=SLE_JOB recommended=SLE_JOB laser=OFF busy=1 switchable=0 reason=ROUTE_BUSY switches=1
+[RX_MODE] compiled=UART,WIFI,SLE_JOB
+[RX_MODE] grbl_stream=planned uart_wifi_dual_frontend owner=disabled
+```
+
+The initial status can conservatively report `ROUTE_BUSY` while asynchronous
+SLE server initialization is still pending. Later callers of
+`route_manager_get_status_snapshot()` receive the current route state.
+
 ## Planned Route Phases
 
 1. R1: route manager skeleton, no real route.
@@ -670,7 +713,8 @@ must not update the active mode unless the target mode started successfully.
 8. R4B-job: TX + Host SLE job execution acceptance passed using the 4096-byte
    preroll demo baseline, including repeated successful executions and final
    laser OFF verification.
-9. R5A: add read-only mode status/query reporting.
+9. R5A: read-only mode status/query reporting passed build, flash, and SLE Job
+   execution validation without changing the R4B startup or execution path.
 10. R5B: implement SLE-first startup with timeout fallback to Grbl Stream.
 11. R5C: implement one GRBL Stream execution core with simultaneous UART and
     WiFi listeners, without an owner mechanism.
