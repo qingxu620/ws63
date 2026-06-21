@@ -146,8 +146,8 @@ switch_to_rx_unified() {
     set_config_y CONFIG_LASER_SLE_JOB_RECEIVER
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
-    # R5C compiles all three routes, starts SLE Job, and allows only manual
-    # one-way SLE_JOB -> Legacy WiFi switching after a safe idle ACK.
+    # R5D experiment compiles all three routes, starts SLE Job, then starts
+    # Legacy WiFi as a coexist demo listener after the SLE server is ready.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
@@ -204,7 +204,7 @@ verify_rx_unified_config() {
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
     echo "  Role selector OK: RECEIVER=y, TRANSMITTER=not set"
-    echo "  R5C OK: manual SLE_JOB -> Legacy WiFi switch; no automatic fallback"
+    echo "  R5D OK: SLE + WiFi coexist demo; no owner/arbitration"
     echo "  SLE job cache fixed at 131072 bytes"
 }
 
@@ -289,7 +289,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r5c_sle_to_wifi_manual_switch
+phase=r5d_sle_wifi_coexist_demo
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}

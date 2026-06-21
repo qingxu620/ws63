@@ -795,6 +795,76 @@ Route-based integration R5C
 [RX_MODE] mode=GRBL_STREAM route=LEGACY_WIFI
 ```
 
+## R5D SLE + WiFi Coexist Demo Experiment
+
+R5D is an experiment on branch `experiment/r5d-sle-wifi-coexist`. It keeps the
+R5C code available but changes the boot policy for a demo-friendly coexistence
+test:
+
+- boot starts `SLE_JOB`
+- SLE server remains advertising/connectable as `sle_job_rx`
+- after SLE server readiness, Legacy WiFi starts as a coexist listener
+- WiFi SoftAP remains `WS63_LASER_WIFI`
+- TCP server remains `192.168.43.1:5000`
+- Legacy UART remains compiled but stopped
+- laser is forced OFF at boot and before route startup
+
+R5D is not the final `GRBL_STREAM` architecture. It does not implement owner
+or arbitration, does not merge UART/WiFi frontends, and does not implement
+reverse switching. During the experiment, the operator must ensure only one
+upstream is actively sending a job at a time:
+
+- SLE Host through TX, or
+- LaserGRBL through WiFi/Telnet
+
+Concurrent SLE and WiFi job input is unsupported and has unspecified behavior.
+
+R5D hardware validation passed:
+
+- SLE connected normally.
+- SLE 23 KB job executed successfully.
+- WiFi `WS63_LASER_WIFI` was visible.
+- LaserGRBL Telnet `192.168.43.1:5000` executed a TCP marking job.
+- After disconnecting WiFi, returning to the SLE Host and running another
+  23 KB SLE job still worked.
+- Final laser state was OFF.
+- No hard fault or assert was observed.
+
+### SLE Stop and Abort Semantics
+
+The current SLE Host stop controls are software control packets, not a
+hardware-level emergency-stop circuit:
+
+- `@EXEC_STOP` sends `PKT_EXEC_STOP = 0x13` and RX runs
+  `job_manager_safe_stop("exec-stop")`.
+- `@ABORT` sends `PKT_JOB_ABORT = 0x04`; RX runs
+  `job_manager_safe_stop("job-abort")`, clears the job cache, and returns to
+  IDLE.
+
+For demo wording, the Host UI should present these as:
+
+- "停止执行": software safe stop of the current execution.
+- "急停 / 放弃任务": abort current job, clear cache, and force the laser OFF.
+
+There is not yet a separate high-priority hard emergency-stop packet or
+latched emergency state. Productization should add a dedicated
+`PKT_EMERGENCY_STOP` path and an `ESTOP_LATCHED` state if true emergency-stop
+behavior is required.
+
+Expected R5D logs:
+
+```text
+Route-based integration R5D
+[RX_BOOT] policy=SLE_WIFI_COEXIST_DEMO
+[ROUTE] start SLE_JOB
+[SLE_JOB_ROUTE] server ready
+[RX_BOOT] start WiFi coexist listener
+[ROUTE] start LEGACY_WIFI coexist
+[RX_MODE] primary=SLE_JOB wifi_coexist=1 laser=OFF
+[laser wifi] softap ssid=WS63_LASER_WIFI ...
+[laser wifi] tcp server listening port=5000
+```
+
 ## Planned Route Phases
 
 1. R1: route manager skeleton, no real route.

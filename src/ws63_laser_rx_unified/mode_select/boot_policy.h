@@ -1,6 +1,6 @@
 /**
  * @file boot_policy.h
- * @brief R5B persistent SLE advertising boot policy.
+ * @brief R5D SLE + WiFi coexist demo boot policy.
  */
 #ifndef WS63_LASER_RX_UNIFIED_BOOT_POLICY_H
 #define WS63_LASER_RX_UNIFIED_BOOT_POLICY_H
@@ -15,6 +15,7 @@ typedef enum {
     RX_BOOT_STATE_SLE_STARTING = 0,
     RX_BOOT_STATE_SLE_ADVERTISING,
     RX_BOOT_STATE_SLE_CONNECTED,
+    RX_BOOT_STATE_SLE_WIFI_COEXIST,
     RX_BOOT_STATE_SAFE,
 } rx_boot_state_t;
 

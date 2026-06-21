@@ -88,6 +88,31 @@ def compact_text(text: str, limit: int = 220) -> str:
     return clean[: limit - 3] + "..."
 
 
+class ToolTip:
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self.window: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event: tk.Event) -> None:
+        if self.window is not None:
+            return
+        x = self.widget.winfo_rootx() + 16
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{x}+{y}")
+        label = ttk.Label(self.window, text=self.text, padding=(6, 3), relief="solid", borderwidth=1)
+        label.pack()
+
+    def _hide(self, _event: tk.Event) -> None:
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+
 def crc16_ccitt(data: bytes, initial: int = 0xFFFF) -> int:
     crc = initial & 0xFFFF
     for byte in data:
@@ -514,8 +539,12 @@ class SleJobHostApp(tk.Tk):
         ttk.Button(controls, text="上传任务", command=self.upload_job).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(controls, text="上传并执行", command=self.upload_and_start).grid(row=0, column=2, padx=(0, 6))
         ttk.Button(controls, text="执行", command=self.exec_start).grid(row=0, column=3, padx=(0, 6))
-        ttk.Button(controls, text="停止", command=self.exec_stop).grid(row=0, column=4, padx=(0, 6))
-        ttk.Button(controls, text="放弃任务", command=self.abort_job).grid(row=0, column=5, padx=(0, 12))
+        stop_button = ttk.Button(controls, text="停止执行", command=self.exec_stop)
+        stop_button.grid(row=0, column=4, padx=(0, 6))
+        ToolTip(stop_button, "发送 @EXEC_STOP：软件安全停止当前执行")
+        abort_button = ttk.Button(controls, text="急停 / 放弃任务", command=self.abort_job)
+        abort_button.grid(row=0, column=5, padx=(0, 12))
+        ToolTip(abort_button, "发送 @ABORT：取消任务、清缓存并安全关光")
 
         ttk.Label(controls, text="Job ID").grid(row=0, column=6, padx=(0, 4))
         self.job_id_var = tk.StringVar(value=str(DEFAULT_JOB_ID))
