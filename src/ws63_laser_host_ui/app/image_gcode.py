@@ -203,6 +203,7 @@ def vector_contours_to_gcode(
     width_mm: float,
     speed_mm_min: int,
     height_mm: float | None = None,
+    power_s: int = 1000,
 ) -> str:
     """Convert closed pixel-space contours into continuous outline toolpaths."""
     if image_width <= 0 or image_height <= 0:
@@ -213,6 +214,7 @@ def vector_contours_to_gcode(
         raise ValueError("height_mm must be greater than zero")
     if speed_mm_min <= 0:
         raise ValueError("speed_mm_min must be greater than zero")
+    mark_power = max(0, min(1000, int(power_s)))
 
     step = width_mm / image_width
     if height_mm is not None:
@@ -239,14 +241,17 @@ def vector_contours_to_gcode(
         ordered.append(rotated)
         current = rotated[-1]
 
-    lines = ["G90", "M5", f"G0 F{int(speed_mm_min)}"]
+    lines = ["G90", "M3 S0", f"F{int(speed_mm_min)}"]
     for contour in ordered:
         start_x = contour[0][0] * step
         start_y = contour[0][1] * step
-        lines.extend((f"G0 X{start_x:.3f} Y{start_y:.3f}", "M3 S1000"))
+        lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} S0")
+        first_mark = True
         for x, y in contour[1:]:
-            lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f} F{int(speed_mm_min)}")
-        lines.append("M5")
+            suffix = f" S{mark_power}" if first_mark else ""
+            lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}{suffix}")
+            first_mark = False
+        lines.append(f"G0 X{contour[-1][0] * step:.3f} Y{contour[-1][1] * step:.3f} S0")
     lines.extend(("M5", "M30"))
     return "\n".join(lines) + "\n"
 
@@ -257,6 +262,7 @@ def raster_rows_to_gcode(
     width_mm: float,
     speed_mm_min: int,
     height_mm: float | None = None,
+    power_s: int = 1000,
 ) -> str:
     """Convert grayscale rows into a bounded horizontal line-segment toolpath."""
     width, height = _validated_rows(rows)
@@ -266,6 +272,7 @@ def raster_rows_to_gcode(
         raise ValueError("height_mm must be greater than zero")
     if speed_mm_min <= 0:
         raise ValueError("speed_mm_min must be greater than zero")
+    mark_power = max(0, min(1000, int(power_s)))
 
     x_step = width_mm / width
     if height_mm is not None:
@@ -273,8 +280,8 @@ def raster_rows_to_gcode(
     y_step = x_step
     lines = [
         "G90",
-        "M5",
-        f"G0 F{int(speed_mm_min)}",
+        "M3 S0",
+        f"F{int(speed_mm_min)}",
     ]
     for y, runs in enumerate(trace_dark_runs(rows, threshold)):
         ordered = runs if y % 2 == 0 else list(reversed(runs))
@@ -286,10 +293,8 @@ def raster_rows_to_gcode(
             y_mm = y * y_step
             lines.extend(
                 (
-                    f"G0 X{x0:.3f} Y{y_mm:.3f}",
-                    "M3 S1000",
-                    f"G1 X{x1:.3f} Y{y_mm:.3f} F{int(speed_mm_min)}",
-                    "M5",
+                    f"G0 X{x0:.3f} Y{y_mm:.3f} S0",
+                    f"G1 X{x1:.3f} Y{y_mm:.3f} S{mark_power}",
                 )
             )
     lines.extend(("M5", "M30"))

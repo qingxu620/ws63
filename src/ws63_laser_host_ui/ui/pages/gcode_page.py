@@ -137,6 +137,9 @@ class GcodePage(QWidget):
         self.speed_slider, self.speed_spin = self._parameter_row(
             params_layout, "工件雕刻速度 (mm/min)", 100, 10_000, 3000
         )
+        self.power_slider, self.power_spin = self._parameter_row(
+            params_layout, "最大功率 S (0-1000)", 0, 1000, 1000
+        )
         vector_row = QHBoxLayout()
         vector_row.setSpacing(8)
         self.vector_simplify_label = QLabel("路径简化 (px)")
@@ -424,6 +427,7 @@ class GcodePage(QWidget):
                 size_mm,
                 self.speed_spin.value(),
                 height_mm=size_mm,
+                power_s=self.power_spin.value(),
             )
             self._converted_image = self._build_vector_preview(rows, contours)
             mode_label = "轮廓矢量"
@@ -437,6 +441,7 @@ class GcodePage(QWidget):
                 size_mm,
                 self.speed_spin.value(),
                 height_mm=size_mm,
+                power_s=self.power_spin.value(),
             )
             self._converted_image = self._build_effect_preview(
                 rows, self.threshold_spin.value()
@@ -456,7 +461,8 @@ class GcodePage(QWidget):
             f"{mode_label} · X 0–{self.size_spin.value()} mm · "
             f"Y 0–{self.size_spin.value()} mm · "
             f"图形 {actual_width:.1f}×{actual_height:.1f} mm · "
-            f"阈值 {self.threshold_spin.value()}{vector_stats} · {output_bytes} bytes{size_warning}"
+            f"阈值 {self.threshold_spin.value()} · S{self.power_spin.value()}"
+            f"{vector_stats} · {output_bytes} bytes{size_warning}"
         )
         source = Path(self._image_path).stem if self._image_path else "generated_image"
         self.set_content(f"{source}.{suffix}.generated.gcode", text.encode("utf-8"))

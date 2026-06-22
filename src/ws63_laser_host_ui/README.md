@@ -38,19 +38,18 @@ main.py  →  MainWindow
   switching, file loading, manual editing, and byte-size preview
 - **Job Control**: Upload, preroll execution, exec start/stop, abort
 - **Safety**: Software safe stop, job abort, manual focus laser on/off
-- **Monitor**: mixed download/execution progress, RX state, executed-line count,
-  and cache credit
+- **Monitor**: upload byte progress, RX state, cache credit, and link status
 - **Logs**: Filtered multi-channel log viewer with pause/resume
 - **Settings**: JSON-persisted connection and job defaults
 - **Responsive Desktop UI**: HTML-matched status strip, sidebar, card grid,
   fixed-view connection/task pages, and live task summary
 
-## 执行状态与进度
+## 状态与上传进度
 
-- 只连接 TX 命令串口也能周期查询并解析 `@STATUS`；TX/RX 调试日志串口均为可选。
-- 上传阶段按已接收字节显示下载进度，执行阶段按已执行行数显示打标进度。
-- 执行期间每 300 ms 查询一次状态，非执行期间降为每 1000 ms。
-- 正常完成由 RX 状态回到空闲且执行行数达到任务总行数确认；停止或放弃不会误报为完成。
+- Host 不做自动 `@STATUS` 轮询；“查询状态”按钮只在用户手动点击时发送一次。
+- 上传阶段按已接收字节显示下载进度。
+- 执行阶段只显示任务处于执行中或完成，不显示执行行数进度。
+- 正常完成优先由 RX 日志中的 `EXEC_DONE` 被动确认；停止或放弃不会误报为完成。
 
 ## Protocol
 

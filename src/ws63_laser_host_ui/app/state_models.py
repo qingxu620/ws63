@@ -37,8 +37,6 @@ class AppState:
     rx_received: int = 0
     rx_job_total: int = 0
     rx_cache_free: int = 0
-    executed_lines: int = 0
-    total_lines: int = 0
     execution_expected: bool = False
     termination_requested: bool = False
     execution_complete: bool = False

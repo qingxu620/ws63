@@ -104,7 +104,7 @@ class JobPage(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(24, 16, 24, 16)
 
-        subtitle = QLabel("上传并执行 G-code 雕刻任务，查询接收端状态与任务进度，控制软件停止及调焦光。")
+        subtitle = QLabel("上传并执行 G-code 雕刻任务，查看接收端状态，控制软件停止及调焦光。")
         subtitle.setObjectName("pageSubtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -150,7 +150,6 @@ class JobPage(QWidget):
             ("当前任务 ID", "--"),
             ("已接收字节", "--"),
             ("任务总字节", "--"),
-            ("执行行数", "--"),
             ("缓存剩余", "--"),
             ("调焦指示", "关闭"),
             ("TX 命令串口", "未连接"),
@@ -241,8 +240,8 @@ class JobPage(QWidget):
 
         right_column.addWidget(param_group, 0, 0)
 
-        # Card 2: 状态与进度
-        prog_group = QGroupBox("状态与进度")
+        # Card 2: 上传状态
+        prog_group = QGroupBox("上传状态")
         pr_layout = QVBoxLayout(prog_group)
         pr_layout.setSpacing(7)
         pr_layout.setContentsMargins(14, 20, 14, 10)
@@ -432,7 +431,6 @@ class JobPage(QWidget):
 
     def update_state(self, rx_state: str, rx_state_code: int, job_id: int,
                      received: int, total: int, cache_free: int,
-                     executed_lines: int, total_lines: int,
                      focus: str, tx_link: str, rx_link: str) -> None:
         """Called by MainWindow to update system telemetry and visualization."""
         if rx_state_code == 1 and total > 0:
@@ -443,18 +441,10 @@ class JobPage(QWidget):
             calc_progress = 100
             progress_caption = "下载完成"
             phase_detail = "任务就绪，等待执行"
-        elif rx_state_code == 3 and total_lines > 0:
-            calc_progress = max(0, min(100, int(executed_lines * 100 / total_lines)))
-            progress_caption = "打标进度"
-            phase_detail = f"执行 {min(executed_lines, total_lines)}/{total_lines} 行"
         elif rx_state_code == 3:
             calc_progress = 0
-            progress_caption = "打标进度"
-            phase_detail = f"已执行 {executed_lines} 行，总行数未知"
-        elif rx_state_code in (0, 5, 6) and total_lines > 0 and executed_lines > 0:
-            calc_progress = max(0, min(100, int(executed_lines * 100 / total_lines)))
-            progress_caption = "执行结果"
-            phase_detail = f"已执行 {min(executed_lines, total_lines)}/{total_lines} 行"
+            progress_caption = "正在执行"
+            phase_detail = "任务正在执行"
         else:
             calc_progress = 0
             progress_caption = "等待任务"
@@ -464,9 +454,6 @@ class JobPage(QWidget):
         self.cards["当前任务 ID"].setText(str(job_id) if job_id > 0 else "--")
         self.cards["已接收字节"].setText(f"{received} 字节" if total > 0 else "--")
         self.cards["任务总字节"].setText(f"{total} 字节" if total > 0 else "--")
-        self.cards["执行行数"].setText(
-            f"{executed_lines}/{total_lines}" if total_lines > 0 else str(executed_lines)
-        )
         self.cards["缓存剩余"].setText(f"{cache_free} 字节")
 
         # Focus state styling

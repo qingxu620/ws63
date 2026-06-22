@@ -298,7 +298,7 @@ static int job_exec_task(void *arg)
                 wait_start_ms = (uint32_t)uapi_systick_get_ms();
             }
             uint32_t wait_elapsed = (uint32_t)uapi_systick_get_ms() - wait_start_ms;
-            if (wait_elapsed >= 5000U) {
+            if (wait_elapsed >= SLE_JOB_EXEC_WAIT_DATA_TIMEOUT_MS) {
                 osal_printk("[JOB_EXEC_WAIT_TIMEOUT] job=%u wait_ms=%u avail=%u all_received=%d\r\n",
                             (unsigned int)sle_job_cache_job_id(), (unsigned int)wait_elapsed,
                             (unsigned int)sle_job_cache_available(), (int)sle_job_cache_is_all_received());

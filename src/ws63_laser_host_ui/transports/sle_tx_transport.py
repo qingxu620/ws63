@@ -24,6 +24,7 @@ BAUD_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 214
 JOB_MAX_SIZE = 131072
 GCODE_LINE_MAX_BYTES = 159
+DATA_ACK_TIMEOUT_MIN_S = 10.0
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
 JOB_PREROLL_BYTES = 4096
@@ -36,7 +37,7 @@ RX_STATUS_COMPAT_RE = re.compile(
     r"cache_free=(\d+) cache_total=(\d+)"
 )
 RX_EXEC_DONE_RE = re.compile(
-    r"\[JOB_EXEC\]\s+done\s+job=(\d+)\s+lines=(\d+)\s+x_um=(-?\d+)\s+y_um=(-?\d+)"
+    r"\[JOB_EXEC\]\s+done\s+job=(\d+)\b"
 )
 
 
@@ -54,7 +55,6 @@ class RxStatus:
     received_size: int
     job_total: int
     cache_free: int
-    executed_lines: int
 
 
 def parse_rx_status(line: str) -> Optional[RxStatus]:
@@ -68,7 +68,6 @@ def parse_rx_status(line: str) -> Optional[RxStatus]:
             received_size=int(match.group(4)),
             job_total=int(match.group(5)),
             cache_free=int(match.group(6)),
-            executed_lines=int(match.group(7)),
         )
     match = RX_STATUS_COMPAT_RE.search(line)
     if match:
@@ -79,7 +78,6 @@ def parse_rx_status(line: str) -> Optional[RxStatus]:
             received_size=0,
             job_total=int(match.group(6)),
             cache_free=int(match.group(5)),
-            executed_lines=int(match.group(4)),
         )
     return None
 
@@ -98,12 +96,6 @@ def crc16_ccitt(data: bytes, initial: int = 0xFFFF) -> int:
 
 def normalize_gcode_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def count_rx_job_lines(data: bytes) -> int:
-    """Count lines using the RX job manager's semicolon/whitespace rules."""
-    text = normalize_gcode_text(data.decode("utf-8", errors="replace"))
-    return sum(1 for line in text.split("\n") if line.split(";", 1)[0].strip())
 
 
 def prepare_gcode_for_rx(data: bytes) -> tuple[bytes, int]:
@@ -317,6 +309,7 @@ class SleJobSerialClient:
             chunk_count = 0
             t_data = time.perf_counter()
             preroll_done = False
+            data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
 
             try:
                 while offset < total:
@@ -325,7 +318,7 @@ class SleJobSerialClient:
                     self.write_bytes(chunk, f"<chunk> off={offset} len={len(chunk)}")
                     ack = self.wait_for(
                         rf"@ACK type=2 .*status=0 .*offset={end}\b",
-                        timeout, regex=True,
+                        data_timeout, regex=True,
                     )
                     offset = end
                     chunk_count += 1

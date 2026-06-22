@@ -95,11 +95,6 @@ class ConnectionPage(QWidget):
         self.btn_connect.setObjectName("btnPrimary")
         self.btn_connect.clicked.connect(self._on_connect)
         connect_row.addWidget(self.btn_connect, 1)
-        self.btn_disconnect = QPushButton("断开连接")
-        self.btn_disconnect.setObjectName("btnDanger")
-        self.btn_disconnect.clicked.connect(self.disconnect_requested.emit)
-        self.btn_disconnect.setEnabled(False)
-        connect_row.addWidget(self.btn_disconnect, 1)
         cmd_layout.addLayout(connect_row)
 
         log_group = QGroupBox("调试日志监控")
@@ -210,8 +205,8 @@ class ConnectionPage(QWidget):
             return 115200
 
     def set_connected(self, connected: bool) -> None:
-        self.btn_connect.setEnabled(not connected)
-        self.btn_disconnect.setEnabled(connected)
+        self.btn_connect.setText("断开连接" if connected else "连接")
+        self._repolish(self.btn_connect, "btnDanger" if connected else "btnPrimary")
         self.cmd_combo.setEnabled(not connected)
         self.baud_edit.setEnabled(not connected)
 
@@ -232,6 +227,9 @@ class ConnectionPage(QWidget):
         self.rx_log_combo.setEnabled(not active)
 
     def _on_connect(self) -> None:
+        if self.btn_connect.text() == "断开连接":
+            self.disconnect_requested.emit()
+            return
         display = self.cmd_combo.currentText().strip()
         if display:
             from transports.sle_tx_transport import port_device

@@ -3,21 +3,17 @@ from __future__ import annotations
 import unittest
 
 from transports.sle_tx_transport import (
+    DATA_ACK_TIMEOUT_MIN_S,
     GCODE_LINE_MAX_BYTES,
     JOB_MAX_SIZE,
     SleJobSerialClient,
-    count_rx_job_lines,
+    WaitResult,
     parse_rx_status,
     prepare_gcode_for_rx,
 )
 
 
 class StatusParsingTests(unittest.TestCase):
-    def test_rx_job_line_count_matches_semicolon_and_whitespace_rules(self) -> None:
-        data = b"\n; comment only\n G90 ; metric mode\nM5\n  G1 X1 Y1 ; move\n"
-
-        self.assertEqual(count_rx_job_lines(data), 3)
-
     def test_prepare_gcode_removes_standalone_metric_declaration(self) -> None:
         prepared, removed = prepare_gcode_for_rx(b"G21 ; millimeters\nG90\nM5\n")
 
@@ -42,6 +38,28 @@ class StatusParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "仅上传"):
             client.upload_job(1, b"M5\n", 1.0, preroll_bytes=4096)
 
+    def test_upload_uses_ten_second_floor_for_data_ack_waits(self) -> None:
+        waits: list[tuple[str, float]] = []
+
+        class FakeClient(SleJobSerialClient):
+            def send_line(self, line: str) -> None:
+                return None
+
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                return None
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                waits.append((pattern, timeout))
+                if "offset=3" in pattern:
+                    return WaitResult("@ACK type=2 seq=2 status=0 job=1 offset=3 credit=1", 1)
+                return WaitResult("@DATA_READY job=1 size=3", 1)
+
+        client = FakeClient(lambda channel, message: None)
+        client.upload_job(1, b"M5\n", 8.0, wait_ready=False)
+
+        self.assertEqual(waits[0], ("@DATA_READY job=1", 8.0))
+        self.assertEqual(waits[1][1], DATA_ACK_TIMEOUT_MIN_S)
+
     def test_parses_firmware_status_format(self) -> None:
         status = parse_rx_status(
             "@STATUS state=3 status=0 job=7 rx=900 total=1200 free=300 lines=42"
@@ -53,7 +71,6 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(status.received_size, 900)
         self.assertEqual(status.job_total, 1200)
         self.assertEqual(status.cache_free, 300)
-        self.assertEqual(status.executed_lines, 42)
 
     def test_parses_mockup_compatible_status_format(self) -> None:
         status = parse_rx_status(
@@ -67,7 +84,6 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(status.received_size, 0)
         self.assertEqual(status.job_total, 16384)
         self.assertEqual(status.cache_free, 8192)
-        self.assertEqual(status.executed_lines, 124)
 
 
 if __name__ == "__main__":

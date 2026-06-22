@@ -37,6 +37,8 @@ class ImageGcodeTests(unittest.TestCase):
             any(line.lstrip().startswith((";", "(")) for line in gcode.splitlines())
         )
         self.assertIn("F3000", gcode)
+        self.assertIn("M3 S0", gcode)
+        self.assertIn("S1000", gcode)
         self.assertIn("G0 X0.000 Y0.000", gcode)
         self.assertIn("G1 X50.000 Y0.000", gcode)
         self.assertTrue(gcode.endswith("M5\nM30\n"))
@@ -44,6 +46,30 @@ class ImageGcodeTests(unittest.TestCase):
     def test_raster_rows_to_gcode_rejects_ragged_rows(self) -> None:
         with self.assertRaisesRegex(ValueError, "same width"):
             raster_rows_to_gcode([[0, 255], [0]], 128, 10.0, 1000)
+
+    def test_generated_gcode_uses_selected_mark_power(self) -> None:
+        rows = [[0, 0, 255]]
+
+        raster = raster_rows_to_gcode(
+            rows,
+            threshold=128,
+            width_mm=30.0,
+            speed_mm_min=3000,
+            power_s=420,
+        )
+        vector = vector_contours_to_gcode(
+            [[(0, 0), (1, 0), (1, 1), (0, 0)]],
+            image_width=3,
+            image_height=3,
+            width_mm=30.0,
+            speed_mm_min=3000,
+            power_s=420,
+        )
+
+        self.assertIn("S420", raster)
+        self.assertIn("S420", vector)
+        self.assertNotIn("S1000", raster)
+        self.assertNotIn("S1000", vector)
 
     def test_raster_rows_fit_inside_square_work_area(self) -> None:
         rows = [[0, 0] for _ in range(8)]
@@ -106,7 +132,8 @@ class ImageGcodeTests(unittest.TestCase):
         ]
 
         self.assertEqual(gcode.splitlines()[0], "G90")
-        self.assertIn("M3 S1000", gcode)
+        self.assertIn("M3 S0", gcode)
+        self.assertIn("S1000", gcode)
         self.assertTrue(coordinates)
         self.assertGreaterEqual(min(coordinates), 0.0)
         self.assertLessEqual(max(coordinates), 60.0)

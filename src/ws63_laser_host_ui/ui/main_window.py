@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget,
 )
@@ -17,7 +17,7 @@ from app.event_bus import EventBus
 from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, available_ports, crc16_ccitt,
-    count_rx_job_lines, parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
+    parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
 )
 from workers.serial_worker import WorkerManager
 from ui.widgets.status_badge import StatusBadge
@@ -53,12 +53,6 @@ class MainWindow(QMainWindow):
         self.worker.log.connect(self._enqueue_log)
         self.worker.progress.connect(self._on_progress)
         self.worker.task_status.connect(self._on_task_status)
-        self.status_worker = WorkerManager(self)
-        self.status_worker.log.connect(self._enqueue_log)
-        self._status_poll_failures = 0
-        self.status_poll_timer = QTimer(self)
-        self.status_poll_timer.setInterval(1000)
-        self.status_poll_timer.timeout.connect(self._poll_status)
 
         # Log file
         self._log_path: Optional[Path] = None
@@ -186,10 +180,7 @@ class MainWindow(QMainWindow):
         # Parse EXEC_DONE
         m = RX_EXEC_DONE_RE.search(message)
         if m:
-            self._mark_execution_complete(
-                int(m.group(2)),
-                f"执行完成: lines={m.group(2)} x={m.group(3)} y={m.group(4)}",
-            )
+            self._mark_execution_complete()
 
     def _parse_rx_line(self, message: str) -> None:
         status = parse_rx_status(message)
@@ -202,47 +193,22 @@ class MainWindow(QMainWindow):
         self.state.rx_received = status.received_size
         self.state.rx_job_total = status.job_total
         self.state.rx_cache_free = status.cache_free
-        self.state.executed_lines = 0 if status.state in (1, 2) else status.executed_lines
-
-        if status.state == 3:
-            self.state.execution_expected = True
-            self.state.execution_complete = False
-            self._set_status_poll_interval(300)
-        else:
-            self._set_status_poll_interval(1000)
 
         returned_to_idle = previous_state == 3 and status.state == 0
-        fast_job_finished = self.state.execution_expected and status.state == 0
-        all_lines_finished = (
-            self.state.total_lines > 0
-            and status.executed_lines >= self.state.total_lines
-        )
-        if (
-            (returned_to_idle or fast_job_finished)
-            and all_lines_finished
-            and not self.state.termination_requested
-        ):
-            self._mark_execution_complete(status.executed_lines)
+        if returned_to_idle and not self.state.termination_requested:
+            self._mark_execution_complete()
             return
         self._update_monitor()
 
-    def _set_status_poll_interval(self, interval_ms: int) -> None:
-        if self.status_poll_timer.interval() != interval_ms:
-            self.status_poll_timer.setInterval(interval_ms)
-
-    def _mark_execution_complete(self, executed_lines: int, detail: str = "") -> None:
+    def _mark_execution_complete(self) -> None:
         already_complete = self.state.execution_complete
-        self.state.executed_lines = max(executed_lines, self.state.total_lines)
         self.state.rx_state_code = 0
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = True
-        self._set_status_poll_interval(1000)
         self._update_monitor()
-        if not already_complete or detail:
-            self.page_job.set_task_status(
-                detail or f"执行完成: lines={self.state.executed_lines}", 100
-            )
+        if not already_complete:
+            self.page_job.set_task_status("执行完成", -1)
 
     def _update_status_badges(self) -> None:
         s = self.state
@@ -280,8 +246,6 @@ class MainWindow(QMainWindow):
             received=s.rx_received,
             total=s.rx_job_total,
             cache_free=s.rx_cache_free,
-            executed_lines=s.executed_lines,
-            total_lines=s.total_lines,
             focus="ON" if s.focus_active else "OFF",
             tx_link=s.tx_state.value,
             rx_link=s.rx_state.value,
@@ -298,12 +262,10 @@ class MainWindow(QMainWindow):
             self.state.execution_expected = True
             self.state.termination_requested = False
             self.state.execution_complete = False
-            self._set_status_poll_interval(300)
         elif text in ("已停止", "已放弃"):
             self.state.execution_expected = False
             self.state.termination_requested = True
             self.state.execution_complete = False
-            self._set_status_poll_interval(1000)
         elif text in ("停止命令失败", "放弃命令失败"):
             self.state.termination_requested = False
         if text.startswith("上传完成"):
@@ -332,7 +294,6 @@ class MainWindow(QMainWindow):
             self.state.tx_state = LinkState.CONNECTED
             self.page_conn.set_connected(True)
             self._start_log_file()
-            self.status_poll_timer.start()
             self._update_status_badges()
             self._update_monitor()
         except Exception as exc:
@@ -348,7 +309,6 @@ class MainWindow(QMainWindow):
         if not self._focus_off_before_disconnect():
             return
         self.client.close()
-        self.status_poll_timer.stop()
         self.state.tx_state = LinkState.DISCONNECTED
         self.page_conn.set_connected(False)
         self._update_status_badges()
@@ -516,15 +476,12 @@ class MainWindow(QMainWindow):
         self.state.rx_job_id = job_id
         self.state.rx_received = 0
         self.state.rx_job_total = len(gcode)
-        self.state.executed_lines = 0
-        self.state.total_lines = count_rx_job_lines(gcode)
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = False
-        self._set_status_poll_interval(1000)
         self._update_monitor()
         self._enqueue_log(
-            "status", f"任务进度基线: total_lines={self.state.total_lines} total_bytes={len(gcode)}"
+            "status", f"任务上传基线: total_bytes={len(gcode)}"
         )
 
     def _on_exec_start(self) -> None:
@@ -613,23 +570,6 @@ class MainWindow(QMainWindow):
             self.status_line_received.emit(result.line)
         self._run_job_worker(_work)
 
-    def _poll_status(self) -> None:
-        if (not self.client.is_open() or self.worker.is_busy()
-                or self.status_worker.is_busy()):
-            return
-        self.status_worker.run(self._status_poll_worker)
-
-    def _status_poll_worker(self) -> None:
-        try:
-            result = self.client.transact_status(2.0)
-        except Exception as exc:
-            self._status_poll_failures += 1
-            if self._status_poll_failures == 1 or self._status_poll_failures % 10 == 0:
-                self.status_worker.log.emit("error", f"自动状态查询失败: {exc}")
-            return
-        self._status_poll_failures = 0
-        self.status_line_received.emit(result.line)
-
     def _apply_focus_state(self, active: bool) -> None:
         self.state.focus_active = active
         self.page_job.set_focus_state(active)
@@ -660,9 +600,7 @@ class MainWindow(QMainWindow):
         if not self._focus_off_before_disconnect():
             event.ignore()
             return
-        self.status_poll_timer.stop()
         self.client.close()
-        self.status_worker.wait_for_idle(2500)
         self.tx_monitor.close()
         self.rx_monitor.close()
         if self._log_file:

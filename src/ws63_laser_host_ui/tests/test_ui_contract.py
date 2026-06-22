@@ -140,9 +140,43 @@ class UiContractTests(unittest.TestCase):
 
         self.assertTrue(emitted)
         self.assertEqual(emitted[-1][0], "outline.vector.generated.gcode")
-        self.assertIn(b"M3 S1000", emitted[-1][1])
+        self.assertIn(b"M3 S0", emitted[-1][1])
+        self.assertIn(b"S1000", emitted[-1][1])
         self.assertIn("轮廓矢量", page.image_status.text())
         self.assertIn("路径", page.image_status.text())
+
+    def test_image_conversion_uses_selected_mark_power(self) -> None:
+        page = GcodePage()
+        image = QImage(4, 2, QImage.Format.Format_RGB32)
+        image.fill(QColor("white"))
+        image.setPixelColor(0, 0, QColor("black"))
+        emitted: list[tuple[str, bytes]] = []
+        page.gcode_loaded.connect(lambda path, data: emitted.append((path, data)))
+
+        page.power_spin.setValue(350)
+        page.set_image("power.png", image)
+        page.btn_convert.click()
+
+        self.assertIn(b"S350", emitted[-1][1])
+        self.assertNotIn(b"S1000", emitted[-1][1])
+        self.assertIn("S350", page.image_status.text())
+
+    def test_command_port_uses_single_stateful_connect_button(self) -> None:
+        page = ConnectionPage()
+
+        self.assertFalse(hasattr(page, "btn_disconnect"))
+        self.assertEqual(page.btn_connect.text(), "连接")
+        self.assertEqual(page.btn_connect.objectName(), "btnPrimary")
+
+        page.set_connected(True)
+        self.assertEqual(page.btn_connect.text(), "断开连接")
+        self.assertEqual(page.btn_connect.objectName(), "btnDanger")
+        self.assertFalse(page.cmd_combo.isEnabled())
+
+        page.set_connected(False)
+        self.assertEqual(page.btn_connect.text(), "连接")
+        self.assertEqual(page.btn_connect.objectName(), "btnPrimary")
+        self.assertTrue(page.cmd_combo.isEnabled())
 
     def test_marking_range_is_limited_to_60mm_square(self) -> None:
         page = GcodePage()
@@ -235,16 +269,13 @@ class UiContractTests(unittest.TestCase):
         window._on_upload()
 
         self.assertEqual(captured[1:], [b"M30\n", 23, 12.5])
-        self.assertEqual(window.state.total_lines, 1)
-        self.assertEqual(window.state.executed_lines, 0)
 
-    def test_progress_ring_switches_from_download_to_execution_lines(self) -> None:
+    def test_monitor_shows_upload_progress_but_not_execution_line_progress(self) -> None:
         page = JobPage()
 
         page.update_state(
             rx_state="数据传输中", rx_state_code=1, job_id=1,
             received=50, total=100, cache_free=1000,
-            executed_lines=0, total_lines=10,
             focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
         )
         self.assertEqual(page.arc._value, 50)
@@ -254,50 +285,45 @@ class UiContractTests(unittest.TestCase):
         page.update_state(
             rx_state="正在执行", rx_state_code=3, job_id=1,
             received=100, total=100, cache_free=1000,
-            executed_lines=3, total_lines=10,
             focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
         )
-        self.assertEqual(page.arc._value, 30)
-        self.assertEqual(page.arc._caption, "打标进度")
-        self.assertIn("3/10", page.lbl_substate.text())
-        self.assertEqual(page.cards["执行行数"].text(), "3/10")
+        self.assertEqual(page.arc._value, 0)
+        self.assertEqual(page.arc._caption, "正在执行")
+        self.assertEqual(page.lbl_substate.text(), "任务正在执行")
+        self.assertNotIn("执行行数", page.cards)
 
-    def test_status_parser_updates_execution_progress_state(self) -> None:
+    def test_status_parser_does_not_track_execution_line_progress(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.state.total_lines = 20
 
         window._parse_rx_line(
             "@STATUS state=2 status=0 job=9 rx=1000 total=1000 free=500 lines=99"
         )
-        self.assertEqual(window.state.executed_lines, 0)
+        self.assertEqual(window.state.rx_state_code, 2)
 
         window._parse_rx_line(
             "@STATUS state=3 status=0 job=9 rx=500 total=1000 free=500 lines=7"
         )
 
-        self.assertEqual(window.state.executed_lines, 7)
-        self.assertEqual(window.page_job.arc._value, 35)
-        self.assertEqual(window.page_job.arc._caption, "打标进度")
-        self.assertEqual(window.status_poll_timer.interval(), 300)
+        self.assertEqual(window.state.rx_state_code, 3)
+        self.assertEqual(window.page_job.arc._value, 0)
+        self.assertEqual(window.page_job.arc._caption, "正在执行")
 
     def test_status_is_parsed_regardless_of_log_channel(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.state.total_lines = 10
 
         window._on_log_message(
             "tx",
             "@STATUS state=3 status=0 job=9 rx=1000 total=1000 free=500 lines=4",
         )
 
-        self.assertEqual(window.state.executed_lines, 4)
-        self.assertEqual(window.page_job.arc._value, 40)
+        self.assertEqual(window.state.rx_state_code, 3)
+        self.assertEqual(window.page_job.arc._caption, "正在执行")
 
     def test_status_transition_completes_without_rx_log_port(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.state.total_lines = 10
 
         window._parse_rx_line(
             "@STATUS state=3 status=0 job=9 rx=1000 total=1000 free=500 lines=8"
@@ -308,28 +334,19 @@ class UiContractTests(unittest.TestCase):
 
         self.assertTrue(window.state.execution_complete)
         self.assertFalse(window.state.execution_expected)
-        self.assertEqual(window.page_job.arc._value, 100)
         self.assertIn("执行完成", window.page_job.lbl_task.text())
-        self.assertEqual(window.status_poll_timer.interval(), 1000)
 
-    def test_fast_job_can_complete_between_two_status_polls(self) -> None:
+    def test_main_window_does_not_create_auto_status_polling(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.state.total_lines = 2
-        window.state.rx_state_code = 2
-        window._on_task_status("执行已启动，等待 RX 状态完成", -1)
 
-        window._parse_rx_line(
-            "@STATUS state=0 status=0 job=9 rx=20 total=20 free=500 lines=2"
-        )
-
-        self.assertTrue(window.state.execution_complete)
-        self.assertEqual(window.state.executed_lines, 2)
+        self.assertFalse(hasattr(window, "status_poll_timer"))
+        self.assertFalse(hasattr(window, "status_worker"))
+        self.assertFalse(hasattr(window, "_status_poll_worker"))
 
     def test_abort_return_to_idle_is_not_reported_as_success(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.state.total_lines = 10
         window.state.rx_state_code = 3
         window.state.execution_expected = True
         window._on_task_status("已放弃", -1)
@@ -341,27 +358,6 @@ class UiContractTests(unittest.TestCase):
         self.assertFalse(window.state.execution_complete)
         self.assertTrue(window.state.termination_requested)
         self.assertEqual(window.page_job.lbl_task.text(), "已放弃")
-
-    def test_auto_status_poll_uses_independent_worker(self) -> None:
-        window = MainWindow()
-        self.addCleanup(window.close)
-        scheduled: list[object] = []
-
-        class FakeClient:
-            def is_open(self) -> bool:
-                return True
-
-            def close(self) -> None:
-                pass
-
-        window.client = FakeClient()
-        window.worker.is_busy = lambda: False
-        window.status_worker.is_busy = lambda: False
-        window.status_worker.run = lambda fn: scheduled.append(fn)
-
-        window._poll_status()
-
-        self.assertEqual(scheduled, [window._status_poll_worker])
 
     def test_upload_only_explicitly_disables_preroll_execution(self) -> None:
         window = MainWindow()
