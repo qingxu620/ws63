@@ -54,7 +54,6 @@ static const char *state_name(sle_job_state_t state)
         case SLE_JOB_STATE_RECEIVING_JOB: return "RECEIVING_JOB";
         case SLE_JOB_STATE_JOB_READY: return "JOB_READY";
         case SLE_JOB_STATE_EXECUTING: return "EXECUTING";
-        case SLE_JOB_STATE_PAUSED: return "PAUSED";
         case SLE_JOB_STATE_ABORTED: return "ABORTED";
         case SLE_JOB_STATE_ERROR: return "ERROR";
         default: return "UNKNOWN";

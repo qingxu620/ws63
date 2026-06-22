@@ -228,7 +228,7 @@ For `src/ws63_laser_rx_unified/`:
 26. R5A must remain read-only. Do not add fallback, mode commands, route control packets, route switching, dual Grbl frontends, or owner behavior as part of R5A work.
 27. `src/ws63_screen_panel_lvgl/` is a separate untracked screen workspace. Do not modify, stage, or commit it during unified RX work unless the user explicitly changes its scope.
 28. Do not describe R5B as timeout fallback or as the final UART/WiFi dual-frontend Grbl Stream implementation. R5B starts no Grbl route: Legacy UART/WiFi remain compiled but stopped while SLE advertises persistently. Safe manual switching and the shared Grbl execution core remain R5C/R5D work.
-29. Current SLE stop controls are not a hardware-level emergency stop. `@EXEC_STOP` / `PKT_EXEC_STOP` is a software safe stop, and `@ABORT` / `PKT_JOB_ABORT` aborts the job and clears cache. Do not call the current Host stop button a hard emergency stop. A product-grade emergency path should add a dedicated `PKT_EMERGENCY_STOP` and an `ESTOP_LATCHED` state.
+29. Current SLE stop controls are not a hardware-level emergency stop. `@EXEC_STOP` / `PKT_EXEC_STOP` is a software safe stop, and `@ABORT` / `PKT_JOB_ABORT` aborts the job and clears cache. Do not call the current Host stop button a hard emergency stop. Product-grade emergency shutdown should be implemented as a hardware laser power cut.
 
 ## Development Environment
 

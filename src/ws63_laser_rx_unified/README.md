@@ -846,10 +846,9 @@ For demo wording, the Host UI should present these as:
 - "停止执行": software safe stop of the current execution.
 - "急停 / 放弃任务": abort current job, clear cache, and force the laser OFF.
 
-There is not yet a separate high-priority hard emergency-stop packet or
-latched emergency state. Productization should add a dedicated
-`PKT_EMERGENCY_STOP` path and an `ESTOP_LATCHED` state if true emergency-stop
-behavior is required.
+There is not yet a hardware emergency-stop input in this firmware path.
+Productization should implement emergency shutdown as a hardware laser power
+cut, independent of SLE packet scheduling or job-cache state.
 
 Expected R5D logs:
 

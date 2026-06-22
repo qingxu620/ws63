@@ -1,0 +1,2186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WS63 激光主控终端</title>
+    <!-- Importing modern typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #f8fafc;
+            --bg-sidebar: #f1f5f9;
+            --bg-card: #ffffff;
+            --bg-card-hover: #ffffff;
+            --border-color: #e2e8f0;
+            --border-glow: rgba(2, 132, 199, 0.08);
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            
+            /* Theme Accent Colors */
+            --accent-cyan: #0284c7;
+            --accent-cyan-glow: rgba(2, 132, 199, 0.2);
+            --accent-green: #10b981;
+            --accent-green-glow: rgba(16, 185, 129, 0.25);
+            --accent-blue: #2563eb;
+            --accent-blue-glow: rgba(37, 99, 235, 0.2);
+            --accent-orange: #d97706;
+            --accent-orange-glow: rgba(217, 119, 6, 0.2);
+            --accent-red: #ef4444;
+            --accent-red-glow: rgba(239, 68, 68, 0.25);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Status Strip at the top */
+        #status-strip {
+            height: 56px;
+            background: linear-gradient(90deg, #ffffff 0%, #f8fafc 100%);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        .status-badge {
+            display: flex;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            font-size: 12px;
+            height: 28px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .status-badge:hover {
+            border-color: rgba(0,0,0,0.15);
+            box-shadow: 0 3px 6px rgba(0,0,0,0.08);
+        }
+
+        .badge-label {
+            background-color: #f1f5f9;
+            color: var(--text-secondary);
+            padding: 0 10px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            letter-spacing: 0.5px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .badge-value {
+            padding: 0 12px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            text-transform: uppercase;
+        }
+
+        /* Badge themes */
+        .badge-mode .badge-value { background-color: rgba(37, 99, 235, 0.05); color: var(--accent-blue); }
+        .badge-tx .badge-value.connected { background-color: rgba(16, 185, 129, 0.08); color: #047857; }
+        .badge-tx .badge-value.disconnected { background-color: rgba(239, 68, 68, 0.08); color: #b91c1c; }
+        .badge-rx .badge-value.connected { background-color: rgba(16, 185, 129, 0.08); color: #047857; }
+        .badge-rx .badge-value.disconnected { background-color: rgba(239, 68, 68, 0.08); color: #b91c1c; }
+        .badge-laser .badge-value.off { background-color: #f1f5f9; color: var(--text-secondary); }
+        .badge-laser .badge-value.on { background-color: rgba(239, 68, 68, 0.1); color: var(--accent-red); animation: pulse 1.5s infinite alternate; }
+        .badge-focus .badge-value.off { background-color: #f1f5f9; color: var(--text-secondary); }
+        .badge-focus .badge-value.on { background-color: rgba(217, 119, 6, 0.1); color: var(--accent-orange); }
+
+        @keyframes pulse {
+            from { opacity: 0.7; }
+            to { opacity: 1; }
+        }
+
+        #strip-spacer {
+            flex-grow: 1;
+        }
+
+        #device-model {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-cyan);
+            background: rgba(2, 132, 199, 0.06);
+            border: 1px solid rgba(2, 132, 199, 0.15);
+            padding: 4px 12px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+        }
+
+        #device-model::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+        }
+
+        /* App Body Layout */
+        #app-body {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 56px);
+            position: relative;
+        }
+
+        /* Sidebar Navigation */
+        #sidebar {
+            width: 220px;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 12px;
+            gap: 6px;
+            justify-content: space-between;
+        }
+
+        .sidebar-menu {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .sidebar-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 13.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .sidebar-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+            opacity: 0.7;
+            transition: transform 0.2s;
+        }
+
+        .sidebar-btn:hover {
+            background-color: rgba(0, 0, 0, 0.03);
+            color: var(--text-primary);
+        }
+
+        .sidebar-btn:hover svg {
+            opacity: 1;
+            transform: translateX(2px);
+        }
+
+        .sidebar-btn.active {
+            background: linear-gradient(90deg, rgba(2, 132, 199, 0.08) 0%, rgba(2, 132, 199, 0.01) 100%);
+            color: var(--accent-cyan);
+            border-left: 3px solid var(--accent-cyan);
+            padding-left: 13px; /* Subtract 3px for border */
+            font-weight: 700;
+        }
+
+        .sidebar-btn.active svg {
+            opacity: 1;
+        }
+
+        .sidebar-footer {
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+            padding-top: 16px;
+            text-align: center;
+        }
+
+        .brand-logo {
+            font-size: 11.5px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-blue) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: inline-block;
+        }
+
+        /* Main Content panels */
+        #content-area {
+            flex: 1;
+            position: relative;
+            background-color: var(--bg-base);
+            padding: 32px;
+            overflow-y: auto;
+        }
+
+        .page-panel {
+            display: none;
+            flex-direction: column;
+            gap: 24px;
+            max-width: 1100px;
+            margin: 0 auto;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .page-panel.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Page Headers */
+        .page-header {
+            margin-bottom: 8px;
+        }
+
+        .page-title {
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+            margin-bottom: 4px;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        /* Visual Layout Elements: Cards & Groups */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 960px;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02), 0 4px 12px rgba(0, 0, 0, 0.03);
+        }
+
+        .card:hover {
+            border-color: rgba(2, 132, 199, 0.25);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05), 0 0 10px var(--border-glow);
+            transform: translateY(-2px);
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-left: 3px solid var(--accent-cyan);
+            padding-left: 10px;
+        }
+
+        /* UI Forms & Fields */
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .form-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .form-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 140px;
+            flex-shrink: 0;
+        }
+
+        .input-group {
+            display: flex;
+            flex: 1;
+            gap: 8px;
+        }
+
+        input[type="text"], select {
+            flex: 1;
+            background-color: #ffffff;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.2s;
+            outline: none;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02);
+        }
+
+        input[type="text"]:focus, select:focus {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
+        }
+
+        /* Buttons styling */
+        .btn {
+            background-color: #ffffff;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .btn:hover {
+            background-color: #f8fafc;
+            border-color: #cbd5e1;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+            border: 1px solid #0284c7;
+            color: #ffffff;
+            box-shadow: 0 2px 4px rgba(2, 132, 199, 0.15);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
+            border-color: #0369a1;
+            box-shadow: 0 4px 8px rgba(2, 132, 199, 0.25);
+        }
+
+        .btn-accent {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border: 1px solid #10b981;
+            color: #ffffff;
+            box-shadow: 0 2px 4px rgba(16, 185, 129, 0.15);
+        }
+
+        .btn-accent:hover {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            border-color: #059669;
+            box-shadow: 0 4px 8px rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-warn {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            border: 1px solid #f59e0b;
+            color: #ffffff;
+        }
+
+        .btn-warn:hover {
+            background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+            border-color: #d97706;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            border: 1px solid #ef4444;
+            color: #ffffff;
+            box-shadow: 0 2px 4px rgba(239, 68, 68, 0.15);
+        }
+
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            border-color: #dc2626;
+            box-shadow: 0 4px 8px rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-estop {
+            padding: 16px 32px;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            background: radial-gradient(circle, #ef4444 0%, #dc2626 100%);
+            border: 2px solid #f87171;
+            color: #ffffff;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.25);
+            animation: pulse-red 2s infinite;
+        }
+
+        .btn-estop:hover {
+            background: radial-gradient(circle, #f87171 0%, #ef4444 100%);
+            border-color: #fca5a5;
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+        }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+            50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.5); }
+            100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+        }
+
+        /* Progress Card styles */
+        .progress-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+
+        .progress-label {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .progress-pct {
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+
+        .progress-bar-wrapper {
+            height: 10px;
+            background-color: #f1f5f9;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-cyan) 0%, var(--accent-green) 100%);
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            box-shadow: 0 0 5px rgba(2, 132, 199, 0.2);
+        }
+
+        /* Gcode Panel styling */
+        .gcode-layout {
+            display: none; /* Toggleable */
+            flex-direction: column;
+            gap: 20px;
+            height: calc(100vh - 240px);
+        }
+
+        .gcode-layout.active {
+            display: flex;
+        }
+
+        .gcode-tab-nav {
+            display: flex;
+            gap: 8px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 8px;
+        }
+
+        .gcode-tab-btn {
+            background-color: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .gcode-tab-btn:hover {
+            background-color: #f1f5f9;
+            color: var(--text-primary);
+        }
+
+        .gcode-tab-btn.active {
+            background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+            color: #ffffff;
+            border-color: #0284c7;
+        }
+
+        .gcode-ai-layout {
+            display: none; /* Toggleable */
+            gap: 24px;
+            height: calc(100vh - 240px);
+        }
+
+        .gcode-ai-layout.active {
+            display: flex;
+        }
+
+        .ai-left-panel {
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            flex-shrink: 0;
+        }
+
+        .ai-right-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* AI Image Preview Container */
+        .ai-preview-container {
+            flex: 1;
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            background-color: #ffffff;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+
+        .ai-preview-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 24px;
+        }
+
+        .ai-preview-placeholder svg {
+            width: 48px;
+            height: 48px;
+            stroke: currentColor;
+            opacity: 0.5;
+        }
+
+        .ai-preview-image {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+            display: none;
+            padding: 16px;
+        }
+
+        /* Loading / Processing Overlay */
+        .ai-loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.93);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            z-index: 5;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(2, 132, 199, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--accent-cyan);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .loading-subtext {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: -8px;
+        }
+
+        /* SVG Line Art Styling inside Preview */
+        .line-art-svg {
+            width: 90%;
+            height: 90%;
+            display: none;
+        }
+
+        /* Parameter Sliders styling */
+        .slider-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .slider-val {
+            color: var(--accent-cyan);
+            font-weight: 700;
+        }
+
+        .slider-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .slider-control input[type="range"] {
+            flex: 1;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider-control input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+            transition: transform 0.1s;
+        }
+
+        .slider-control input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .slider-num-input {
+            width: 65px;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 12px;
+            text-align: center;
+            font-weight: 600;
+            outline: none;
+            background-color: #ffffff;
+        }
+
+        .gcode-toolbar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            background: #ffffff;
+            padding: 12px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+
+        .gcode-file-name {
+            font-size: 13px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .gcode-file-size {
+            font-size: 12px;
+            color: var(--accent-cyan);
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        .editor-container {
+            flex: 1;
+            position: relative;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            background-color: #ffffff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+
+        .editor-header {
+            background-color: #f8fafc;
+            border-bottom: 1px solid var(--border-color);
+            padding: 8px 16px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            font-weight: 700;
+        }
+
+        .gcode-editor {
+            flex: 1;
+            background-color: transparent;
+            color: #334155;
+            border: none;
+            padding: 16px;
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+            overflow-y: auto;
+        }
+
+        /* Monitor Panel Specifics */
+        .monitor-layout {
+            display: flex;
+            gap: 32px;
+            align-items: flex-start;
+        }
+
+        .monitor-gauge-card {
+            width: 280px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 32px 24px;
+            gap: 20px;
+            flex-shrink: 0;
+            background: linear-gradient(180deg, var(--bg-card) 0%, #f8fafc 100%);
+        }
+
+        .gauge-svg-container {
+            position: relative;
+            width: 180px;
+            height: 180px;
+        }
+
+        .gauge-bg-circle {
+            fill: none;
+            stroke: #f1f5f9;
+            stroke-width: 12px;
+        }
+
+        .gauge-fill-circle {
+            fill: none;
+            stroke: var(--accent-cyan);
+            stroke-width: 12px;
+            stroke-linecap: round;
+            stroke-dasharray: 471.2;
+            stroke-dashoffset: 471.2;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+            transition: stroke-dashoffset 0.5s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.5s;
+        }
+
+        .gauge-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .gauge-pct-val {
+            font-size: 32px;
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+
+        .gauge-pct-unit {
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .monitor-state-block {
+            text-align: center;
+        }
+
+        .monitor-state-label {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--accent-cyan);
+            letter-spacing: -0.5px;
+            margin-bottom: 2px;
+        }
+
+        .monitor-substate-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .monitor-cards-grid {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .info-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            transition: all 0.2s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+
+        .info-card:hover {
+            border-color: rgba(0, 0, 0, 0.08);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .info-card-name {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .info-card-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .info-card-value.highlight-green { color: #047857; }
+        .info-card-value.highlight-red { color: #b91c1c; }
+        .info-card-value.highlight-blue { color: #0369a1; }
+
+        /* Logs Panel Specifics */
+        .logs-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: calc(100vh - 180px);
+        }
+
+        .logs-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: #ffffff;
+            padding: 12px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .checkbox-container input {
+            display: none;
+        }
+
+        .checkmark {
+            width: 16px;
+            height: 16px;
+            border: 1px solid var(--border-color);
+            background-color: #ffffff;
+            border-radius: 4px;
+            display: inline-block;
+            position: relative;
+            transition: all 0.2s;
+        }
+
+        .checkbox-container:hover .checkmark {
+            border-color: var(--accent-cyan);
+        }
+
+        .checkbox-container input:checked + .checkmark {
+            background-color: var(--accent-cyan);
+            border-color: var(--accent-cyan);
+        }
+
+        .checkbox-container input:checked + .checkmark::after {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 2px;
+            width: 4px;
+            height: 8px;
+            border: solid #ffffff;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
+        .logs-terminal-wrapper {
+            flex: 1;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            background-color: #ffffff;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+
+        .logs-terminal {
+            flex: 1;
+            padding: 16px;
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: #334155;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-line {
+            margin-bottom: 4px;
+        }
+
+        .log-line:last-child {
+            margin-bottom: 0;
+        }
+
+        .log-time { color: #64748b; margin-right: 8px; }
+        .log-chan { color: var(--accent-blue); display: inline-block; width: 68px; font-weight: 600; }
+        .log-chan.chan-host { color: var(--accent-blue); }
+        .log-chan.chan-tx { color: var(--accent-cyan); }
+        .log-chan.chan-rx { color: #059669; }
+        .log-chan.chan-err { color: #ef4444; font-weight: 700; }
+        .log-chan.chan-status { color: var(--accent-orange); }
+        .log-msg { color: #1e293b; }
+
+        /* Scrollbar customizing */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.08);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 0, 0, 0.15);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Status Strip -->
+    <div id="status-strip">
+        <div class="status-badge badge-mode">
+            <div class="badge-label">模式</div>
+            <div class="badge-value">SLE</div>
+        </div>
+        <div class="status-badge badge-tx">
+            <div class="badge-label">发送</div>
+            <div class="badge-value connected" id="badge-tx-val">已连接</div>
+        </div>
+        <div class="status-badge badge-rx">
+            <div class="badge-label">接收</div>
+            <div class="badge-value connected" id="badge-rx-val">已连接</div>
+        </div>
+        <div class="status-badge badge-laser">
+            <div class="badge-label">激光</div>
+            <div class="badge-value off" id="badge-laser-val">关闭</div>
+        </div>
+        <div class="status-badge badge-focus">
+            <div class="badge-label">调焦</div>
+            <div class="badge-value off" id="badge-focus-val">关闭</div>
+        </div>
+
+        <div id="strip-spacer"></div>
+
+        <div id="device-model">WS63 激光主控终端 V2</div>
+    </div>
+
+    <!-- App Body -->
+    <div id="app-body">
+        
+        <!-- Sidebar Navigation -->
+        <div id="sidebar">
+            <div class="sidebar-menu">
+                <button class="sidebar-btn active" onclick="switchTab(0, this)">
+                    <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.44-.17.47-.41l.36-2.54c-.59-.24-1.13-.56 1.62-.94l2.39.96c-.22.08-.47 0-.59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                    连接与设置
+                </button>
+                <button class="sidebar-btn" onclick="switchTab(1, this)">
+                    <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+                    代码编辑
+                </button>
+                <button class="sidebar-btn" onclick="switchTab(2, this)">
+                    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+                    任务控制
+                </button>
+                <button class="sidebar-btn" onclick="switchTab(3, this)">
+                    <svg viewBox="0 0 24 24"><path d="M13 3H6v18h12V8l-5-5zM9 18H7v-2h2v2zm0-4H7v-2h2v2zm0-4H7V8h2v2zm3 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V8h2v2zm5 8h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>
+                    运行日志
+                </button>
+            </div>
+            <div class="sidebar-footer">
+                <span class="brand-logo">WS63 激光主控 V2</span>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div id="content-area">
+            
+            <!-- Connection & Settings Panel -->
+            <div class="page-panel active" id="panel-connection">
+                <div class="page-header">
+                    <h1 class="page-title">连接与设置</h1>
+                    <p class="page-subtitle">配置串口通道参数及系统的默认运行预设值。</p>
+                </div>
+
+                <div class="dashboard-grid">
+                    <!-- TX Command Port Card -->
+                    <div class="card">
+                        <h2 class="card-title">命令发送端口 (TX)</h2>
+                        <div class="form-row">
+                            <span class="form-label">选择端口</span>
+                            <div class="input-group">
+                                <select id="conn-port-select">
+                                    <option value="COM8">COM8 (Silicon Labs CP210x)</option>
+                                    <option value="COM24">COM24 (USB Serial Port)</option>
+                                    <option value="COM26">COM26 (USB Serial Port)</option>
+                                </select>
+                                <button class="btn" onclick="refreshPorts()">刷新</button>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">波特率</span>
+                            <input type="text" id="conn-baud" value="115200">
+                        </div>
+                        <div class="form-row" style="margin-top: 24px;">
+                            <span class="form-label"></span>
+                            <div style="display: flex; gap: 12px; flex: 1;">
+                                <button class="btn btn-primary" style="flex: 1;" id="btn-connect" onclick="toggleConnect(true)">连接</button>
+                                <button class="btn btn-danger" style="flex: 1;" id="btn-disconnect" disabled onclick="toggleConnect(false)">断开连接</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Debug Log Monitors -->
+                    <div class="card">
+                        <h2 class="card-title">调试日志监控</h2>
+                        <div class="form-row">
+                            <span class="form-label">发送端日志 (TX)</span>
+                            <div class="input-group">
+                                <select id="tx-log-select">
+                                    <option value="COM24">COM24 (USB Serial Port)</option>
+                                    <option value="COM8">COM8 (Silicon Labs CP210x)</option>
+                                    <option value="COM26">COM26 (USB Serial Port)</option>
+                                </select>
+                                <button class="btn btn-primary" id="btn-tx-monitor" onclick="toggleMonitor('tx')">监听</button>
+                            </div>
+                        </div>
+                        <div class="form-row" style="margin-top: 20px;">
+                            <span class="form-label">接收端日志 (RX)</span>
+                            <div class="input-group">
+                                <select id="rx-log-select">
+                                    <option value="COM26">COM26 (USB Serial Port)</option>
+                                    <option value="COM8">COM8 (Silicon Labs CP210x)</option>
+                                    <option value="COM24">COM24 (USB Serial Port)</option>
+                                </select>
+                                <button class="btn btn-primary" id="btn-rx-monitor" onclick="toggleMonitor('rx')">监听</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connection Defaults -->
+                    <div class="card">
+                        <h2 class="card-title">串口连接默认值</h2>
+                        <div class="form-row">
+                            <span class="form-label">默认命令发送端口 (TX)</span>
+                            <input type="text" id="cfg-tx-cmd" value="COM8">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">默认发送端日志端口</span>
+                            <input type="text" id="cfg-tx-log" value="COM24">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">默认接收端日志端口</span>
+                            <input type="text" id="cfg-rx-log" value="COM26">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">物理波特率</span>
+                            <input type="text" id="cfg-baud" value="115200">
+                        </div>
+                    </div>
+
+                    <!-- Job Defaults -->
+                    <div class="card">
+                        <h2 class="card-title">任务控制默认值</h2>
+                        <div class="form-row">
+                            <span class="form-label">指令响应超时 (秒)</span>
+                            <input type="text" id="cfg-timeout" value="20">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">预读缓冲区大小 (字节)</span>
+                            <input type="text" id="cfg-preroll" value="4096">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">默认上传任务 ID</span>
+                            <input type="text" id="cfg-job-id" value="1">
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label">红光聚焦预设功率</span>
+                            <input type="text" id="cfg-focus-power" value="10">
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 16px; margin-top: 20px;">
+                    <button class="btn btn-primary" onclick="saveSettings()">保存系统设置</button>
+                    <span id="save-status-msg" style="font-size: 13px; font-weight: 600; transition: opacity 0.3s; opacity: 0;"></span>
+                </div>
+            </div>
+
+            <!-- G-code Panel -->
+            <div class="page-panel" id="panel-gcode">
+                <div class="page-header">
+                    <h1 class="page-title">代码编辑</h1>
+                    <p class="page-subtitle">利用 AI 生图、导入本地图片并转换为矢量 G-code 代码，或进行手工编辑与校验。</p>
+                </div>
+
+                <!-- Tab navigation -->
+                <div class="gcode-tab-nav">
+                    <button class="gcode-tab-btn active" id="btn-tab-ai" onclick="switchGcodeTab('ai')">AI 生图与矢量化</button>
+                    <button class="gcode-tab-btn" id="btn-tab-editor" onclick="switchGcodeTab('editor')">G-code 编辑器</button>
+                </div>
+
+                <!-- AI Generate and Vectorize layout -->
+                <div class="gcode-ai-layout active" id="gcode-tab-ai-content">
+                    <!-- Left Panel: Prompt & Parameters -->
+                    <div class="ai-left-panel">
+                        <!-- AI Prompt Card -->
+                        <div class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+                            <h3 class="card-title" style="margin-bottom: 12px; font-size: 14px;">提示词输入</h3>
+                            <textarea id="ai-prompt-input" placeholder="例如：极简线条狼头，逼真黑色几何线条，白底简笔画..." style="width: 100%; min-height: 80px; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; line-height: 1.5; resize: none; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--accent-cyan)'" onblur="this.style.borderColor='var(--border-color)'">极简线条狼头，黑白简笔矢量风格</textarea>
+                            
+                            <div style="display: flex; gap: 10px;">
+                                <button class="btn btn-primary" style="flex: 1;" onclick="generateAIImage()" id="btn-ai-generate">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:2px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+                                    生成图像
+                                </button>
+                                <button class="btn" style="flex: 1;" onclick="importLocalImage()">
+                                    导入图片
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Vectorization parameters card -->
+                        <div class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+                            <h3 class="card-title" style="margin-bottom: 12px; font-size: 14px;">矢量化参数设置</h3>
+                            
+                            <!-- Threshold Slider -->
+                            <div class="slider-row">
+                                <div class="slider-header">
+                                    <span>提取阈值 (0-255)</span>
+                                    <span class="slider-val" id="val-threshold">128</span>
+                                </div>
+                                <div class="slider-control">
+                                    <input type="range" id="slider-threshold" min="0" max="255" value="128" oninput="updateSliderVal('threshold', this.value)">
+                                    <input type="number" class="slider-num-input" id="num-threshold" min="0" max="255" value="128" oninput="updateSliderVal('threshold', this.value)">
+                                </div>
+                            </div>
+
+                            <!-- Target Size Slider -->
+                            <div class="slider-row">
+                                <div class="slider-header">
+                                    <span>目标尺寸 (mm)</span>
+                                    <span class="slider-val" id="val-size">100</span>
+                                </div>
+                                <div class="slider-control">
+                                    <input type="range" id="slider-size" min="10" max="500" value="100" oninput="updateSliderVal('size', this.value)">
+                                    <input type="number" class="slider-num-input" id="num-size" min="10" max="500" value="100" oninput="updateSliderVal('size', this.value)">
+                                </div>
+                            </div>
+
+                            <!-- Working Speed Slider -->
+                            <div class="slider-row">
+                                <div class="slider-header">
+                                    <span>工件雕刻速度 (mm/min)</span>
+                                    <span class="slider-val" id="val-speed">3000</span>
+                                </div>
+                                <div class="slider-control">
+                                    <input type="range" id="slider-speed" min="500" max="8000" value="3000" step="100" oninput="updateSliderVal('speed', this.value)">
+                                    <input type="number" class="slider-num-input" id="num-speed" min="500" max="8000" value="3000" step="100" oninput="updateSliderVal('speed', this.value)">
+                                </div>
+                            </div>
+
+                            <button class="btn btn-accent" style="width: 100%; margin-top: 10px; height: 40px; font-size: 14px;" onclick="convertToGcode()" id="btn-convert-gcode">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:2px;"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                                转换为 G-code
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Image Preview -->
+                    <div class="ai-right-panel">
+                        <div class="ai-preview-container" id="ai-preview-box">
+                            <!-- Placeholder -->
+                            <div class="ai-preview-placeholder" id="ai-placeholder">
+                                <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width: 48px; height: 48px; stroke: var(--text-muted); opacity: 0.6; margin-bottom: 8px;">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"></path>
+                                </svg>
+                                <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">未加载图像预览</span>
+                                <span style="font-size: 12px; color: var(--text-muted); max-width: 240px; line-height: 1.4;">请在左侧输入提示词生成图像，或者从本地选择图片导入</span>
+                            </div>
+
+                            <!-- SVG Wolf Head Line-Art -->
+                            <svg class="line-art-svg" id="ai-wolf-svg" viewBox="0 0 1000 1000">
+                                <g transform="translate(0, 50)">
+                                    <!-- Wolf Head Main Paths -->
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 500,75 C 503,75 510,77 515,82 C 540,110 590,180 620,250 C 630,270 650,290 670,300 C 720,330 790,380 820,440 C 850,500 870,550 850,600 C 830,650 790,700 760,730 C 740,750 720,770 700,790 C 670,820 630,850 590,880 C 550,910 510,930 500,930 C 490,930 450,910 410,880 C 370,850 330,820 300,790 C 280,770 260,750 240,730 C 210,700 170,650 150,600 C 130,550 150,500 180,440 C 210,380 280,330 330,300 C 350,290 370,270 380,250 C 410,180 460,110 485,82 C 490,77 497,75 500,75 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 320,110 C 322,110 325,115 328,122 C 345,160 380,250 395,300 C 390,310 385,320 380,330 C 360,370 330,420 312,450 C 300,430 285,410 270,390 C 250,360 210,320 185,300 C 180,295 185,290 195,285 C 220,270 270,220 290,160 C 298,130 310,112 320,110 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 680,110 C 690,112 702,130 710,160 C 730,220 780,270 805,285 C 815,290 820,295 815,300 C 790,320 750,360 730,390 C 715,410 700,430 688,450 C 670,420 640,370 620,330 C 615,320 610,310 605,300 C 620,250 655,160 672,122 C 675,115 678,110 680,110 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 500,160 C 495,160 480,180 470,200 C 450,240 430,300 425,340 C 430,350 440,360 450,365 C 470,375 500,380 500,380 C 500,380 530,375 550,365 C 560,360 570,350 575,340 C 570,300 550,240 530,200 C 520,180 505,160 500,160 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 430,400 C 440,395 470,390 500,390 C 530,390 560,395 570,400 C 585,410 600,430 610,460 C 620,490 600,520 580,530 C 570,535 560,540 550,540 C 530,540 515,530 500,530 C 485,530 470,540 450,540 C 440,540 430,535 420,530 C 400,520 380,490 390,460 C 400,430 415,410 430,400 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 460,450 C 455,450 440,460 440,470 C 440,480 455,490 460,490 C 465,490 480,480 480,470 C 480,460 465,450 460,450 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 540,450 C 535,450 520,460 520,470 C 520,480 535,490 540,490 C 545,490 560,480 560,470 C 560,460 545,450 540,450 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 470,550 C 480,545 490,540 500,540 C 510,540 520,545 530,550 C 540,560 550,570 540,580 C 530,590 515,595 500,595 C 485,595 470,590 460,580 C 450,570 460,560 470,550 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 430,620 L 450,650 C 470,680 500,690 500,690 C 500,690 530,680 550,650 L 570,620 C 580,630 590,650 590,670 C 590,700 560,750 520,780 C 510,790 505,795 500,795 C 495,795 490,790 480,780 C 440,750 410,700 410,670 C 410,650 420,630 430,620 Z"/>
+                                    <path fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M 500,795 L 500,930"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 460,800 C 440,810 400,830 370,840"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 540,800 C 560,810 600,830 630,840"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 380,750 C 350,770 300,800 270,810"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 620,750 C 650,770 700,800 730,810"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 340,650 C 300,680 250,710 210,720"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 660,650 C 700,680 750,710 790,720"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 350,550 C 310,570 260,600 220,610"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 650,550 C 690,570 740,600 780,610"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 370,480 C 330,490 280,510 240,520"/>
+                                    <path fill="none" stroke="#475569" stroke-width="5" d="M 630,480 C 670,490 720,510 760,520"/>
+                                </g>
+                            </svg>
+
+                            <!-- Loading overlay -->
+                            <div class="ai-loading-overlay" id="ai-loader">
+                                <div class="spinner"></div>
+                                <div class="loading-text" id="ai-loader-text">AI 正在绘制中...</div>
+                                <div class="loading-subtext" id="ai-loader-subtext">预计需要几秒钟</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Editor layout -->
+                <div class="gcode-layout" id="gcode-tab-editor-content">
+                    <div class="gcode-toolbar">
+                        <button class="btn btn-primary" onclick="simulateOpenFile()">打开文件</button>
+                        <button class="btn" onclick="clearGcode()">清空</button>
+                        <span class="gcode-file-name" id="gcode-file-path">未加载文件</span>
+                        <span class="gcode-file-size" id="gcode-file-size"></span>
+                    </div>
+
+                    <div class="editor-container">
+                        <div class="editor-header">代码编辑器 (纯文本形式)</div>
+                        <textarea class="gcode-editor" id="gcode-editor-area" placeholder="在此粘贴 G-code 或点击打开文件..." oninput="updateGcodeSize()"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Job Control Panel -->
+            <div class="page-panel" id="panel-job">
+                <div class="page-header">
+                    <h1 class="page-title">任务控制</h1>
+                    <p class="page-subtitle">上传并执行 G-code 雕刻任务，实时监控接收端状态与缓存占用，调整激光焦点。</p>
+                </div>
+
+                <div class="monitor-layout">
+                    <!-- Left Column: Circular gauge and status grid -->
+                    <div style="display: flex; flex-direction: column; gap: 20px; width: 280px; flex-shrink: 0;">
+                        <!-- Circular Gauge Card -->
+                        <div class="card monitor-gauge-card" style="width: 100%; margin: 0;">
+                            <div class="gauge-svg-container">
+                                <svg width="180" height="180" viewBox="0 0 180 180">
+                                    <circle class="gauge-bg-circle" cx="90" cy="90" r="75"></circle>
+                                    <circle class="gauge-fill-circle" id="monitor-circle" cx="90" cy="90" r="75"></circle>
+                                </svg>
+                                <div class="gauge-text">
+                                    <span class="gauge-pct-val" id="monitor-pct-text">0%</span>
+                                    <span class="gauge-pct-unit">缓存占用</span>
+                                </div>
+                            </div>
+                            <div class="monitor-state-block">
+                                <div class="monitor-state-label" id="monitor-state-label">空闲</div>
+                                <div class="monitor-substate-label" id="monitor-substate-label">待机</div>
+                            </div>
+                        </div>
+
+                        <!-- Readback grid -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">接收端状态</span>
+                                <span class="info-card-value" id="mon-card-rx-state" style="font-size: 16px;">空闲</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">当前任务 ID</span>
+                                <span class="info-card-value" id="mon-card-job-id" style="font-size: 16px;">--</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">剩余缓存</span>
+                                <span class="info-card-value" id="mon-card-free-cache" style="font-size: 16px;">--</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">缓存总量</span>
+                                <span class="info-card-value" id="mon-card-total-cache" style="font-size: 16px;">--</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">激光管状态</span>
+                                <span class="info-card-value" id="mon-card-laser" style="font-size: 16px; color: var(--text-secondary);">关闭</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">调焦指示</span>
+                                <span class="info-card-value" id="mon-card-focus" style="font-size: 16px; color: var(--text-secondary);">关闭</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">发送链路</span>
+                                <span class="info-card-value highlight-green" id="mon-card-tx-link" style="font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">已连接</span>
+                            </div>
+                            <div class="info-card" style="padding: 12px; min-width: 0;">
+                                <span class="info-card-name" style="font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">接收链路</span>
+                                <span class="info-card-value highlight-green" id="mon-card-rx-link" style="font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">已连接</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Control Cards -->
+                    <div style="flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                        <!-- Parameters & Upload Card -->
+                        <div class="card" style="margin: 0;">
+                            <h2 class="card-title">任务参数与上传</h2>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px;">
+                                <div>
+                                    <span class="form-label" style="display:block; margin-bottom:6px;">任务 ID</span>
+                                    <input type="text" id="job-id-input" value="1" style="width:100%;">
+                                </div>
+                                <div>
+                                    <span class="form-label" style="display:block; margin-bottom:6px;">超时时长 (s)</span>
+                                    <input type="text" id="job-timeout-input" value="20" style="width:100%;">
+                                </div>
+                            </div>
+                            <div style="margin-bottom: 24px;">
+                                <span class="form-label" style="display:block; margin-bottom:6px;">预载字节大小</span>
+                                <input type="text" id="job-preroll-input" value="4096" style="width:100%;">
+                            </div>
+                            <div style="display: flex; gap: 12px;">
+                                <button class="btn btn-primary" style="flex:1;" onclick="startUpload(false)">仅上传任务</button>
+                                <button class="btn btn-accent" style="flex:1;" onclick="startUpload(true)">上传并执行</button>
+                            </div>
+                        </div>
+
+                        <!-- Task Progress Card -->
+                        <div class="card" style="margin: 0;">
+                            <h2 class="card-title">状态与进度</h2>
+                            <div class="progress-container" style="margin-top: 15px;">
+                                <div class="progress-meta">
+                                    <span class="progress-label" id="task-status-label">空闲</span>
+                                    <span class="progress-pct" id="task-progress-pct">0%</span>
+                                </div>
+                                <div class="progress-bar-wrapper">
+                                    <div class="progress-bar-fill" id="task-progress-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 24px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                                <strong>串口任务输出摘要:</strong>
+                                <div id="job-progress-log" style="font-family:'Fira Code',monospace; color:var(--accent-cyan); font-size:12px; margin-top:4px; font-weight: 600;">暂无正在进行的任务</div>
+                            </div>
+                        </div>
+
+                        <!-- Execution Control Card -->
+                        <div class="card" style="margin: 0;">
+                            <h2 class="card-title">执行控制</h2>
+                            <div style="display: flex; flex-direction: column; gap: 12px; height: 100%; justify-content: center;">
+                                <button class="btn btn-accent" style="height: 44px; font-size: 14px;" onclick="sendControlCmd('EXEC_START')">开始执行</button>
+                                <button class="btn btn-warn" style="height: 44px; font-size: 14px;" onclick="sendControlCmd('STOP')">停止执行</button>
+                                <button class="btn btn-danger" style="height: 44px; font-size: 14px;" onclick="sendControlCmd('ABORT')">放弃队列</button>
+                            </div>
+                        </div>
+
+                        <!-- Safety & Manual Focus Card -->
+                        <div class="card" style="margin: 0;">
+                            <h2 class="card-title">安全应急与调焦</h2>
+                            <div style="display: flex; flex-direction: column; gap: 16px;">
+                                <div style="display: flex; gap: 12px;">
+                                    <button class="btn btn-estop" style="flex:2;" onclick="sendControlCmd('ESTOP')">紧急停止</button>
+                                    <div style="display: flex; flex-direction: column; gap: 8px; flex: 1;">
+                                        <button class="btn" style="padding: 8px 12px; font-size: 12px;" onclick="sendControlCmd('ESTOP_CLEAR')">解除急停</button>
+                                        <button class="btn" style="padding: 8px 12px; font-size: 12px;" onclick="sendControlCmd('STATUS')">查询状态</button>
+                                    </div>
+                                </div>
+                                <div style="border-top: 1px solid var(--border-color); padding-top: 16px;">
+                                    <div class="form-row">
+                                        <span class="form-label" style="width: 100px;">弱光功率 (0-100)</span>
+                                        <input type="text" id="focus-power-input" value="10" style="max-width: 80px; text-align: center;">
+                                        <button class="btn btn-accent" id="btn-focus-toggle" onclick="toggleFocus()" style="flex: 1;">开启调焦</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Route Switch Card -->
+                        <div class="card" style="margin: 0; grid-column: span 2;">
+                            <h2 class="card-title">路由切换</h2>
+                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                                将接收板的指令通信路由切换至 Wi-Fi / GRBL 无线控制旁路。
+                            </p>
+                            <button class="btn btn-primary" style="width: 100%;" onclick="sendControlCmd('ROUTE_WIFI')">切换至 Wi-Fi / GRBL 控制</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Panel -->
+            <div class="page-panel" id="panel-logs">
+                <div class="page-header">
+                    <h1 class="page-title">运行日志</h1>
+                    <p class="page-subtitle">记录和追踪串口物理报文、接收校验回执以及系统的状态输出流。</p>
+                </div>
+
+                <div class="logs-layout">
+                    <div class="logs-toolbar">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="chk-show-diag" onchange="toggleDiagFilter(this.checked)">
+                            <span class="checkmark"></span>
+                            显示诊断日志
+                        </label>
+
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="chk-pause-logs" onchange="togglePauseLogs(this.checked)">
+                            <span class="checkmark"></span>
+                            暂停滚动
+                        </label>
+
+                        <button class="btn btn-primary" style="margin-left: auto;" onclick="exportLogs()">导出日志</button>
+                        <button class="btn" onclick="clearLogs()">清空日志</button>
+                    </div>
+
+                    <div class="logs-terminal-wrapper">
+                        <div class="editor-header">实时串口日志控制台</div>
+                        <div class="logs-terminal" id="logs-term-area"></div>
+                    </div>
+                </div>
+            </div>
+
+
+
+        </div>
+    </div>
+
+    <!-- UI Mockup Logic -->
+    <script>
+        // Simple client router tabs
+        const panels = [
+            document.getElementById('panel-connection'),
+            document.getElementById('panel-gcode'),
+            document.getElementById('panel-job'),
+            document.getElementById('panel-logs')
+        ];
+
+        function switchTab(index, btnEl) {
+            panels.forEach((p, idx) => {
+                if(idx === index) {
+                    p.classList.add('active');
+                } else {
+                    p.classList.remove('active');
+                }
+            });
+
+            // Update sidebar buttons active state
+            const buttons = document.querySelectorAll('.sidebar-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            btnEl.classList.add('active');
+        }
+
+        // Dual tab router for G-code page
+        function switchGcodeTab(tabName) {
+            const btnAi = document.getElementById('btn-tab-ai');
+            const btnEditor = document.getElementById('btn-tab-editor');
+            const contentAi = document.getElementById('gcode-tab-ai-content');
+            const contentEditor = document.getElementById('gcode-tab-editor-content');
+
+            if (tabName === 'ai') {
+                btnAi.classList.add('active');
+                btnEditor.classList.remove('active');
+                contentAi.classList.add('active');
+                contentEditor.classList.remove('active');
+            } else {
+                btnAi.classList.remove('active');
+                btnEditor.classList.add('active');
+                contentAi.classList.remove('active');
+                contentEditor.classList.add('active');
+            }
+        }
+
+        // Live parameter update slider values
+        function updateSliderVal(type, val) {
+            const slider = document.getElementById(`slider-${type}`);
+            const num = document.getElementById(`num-${type}`);
+            const display = document.getElementById(`val-${type}`);
+            
+            slider.value = val;
+            num.value = val;
+            display.innerText = val;
+        }
+
+        // AI Image Generation simulation
+        let hasImageLoaded = false;
+        let generatedPrompt = "";
+
+        function generateAIImage() {
+            const prompt = document.getElementById('ai-prompt-input').value.trim();
+            if (!prompt) {
+                alert("请输入提示词！");
+                return;
+            }
+
+            const loader = document.getElementById('ai-loader');
+            const loaderText = document.getElementById('ai-loader-text');
+            const loaderSubtext = document.getElementById('ai-loader-subtext');
+            const placeholder = document.getElementById('ai-placeholder');
+            const wolfSvg = document.getElementById('ai-wolf-svg');
+
+            loaderText.innerText = "AI 正在绘制中...";
+            loaderSubtext.innerText = "正在根据提示词生成白底矢量线稿...";
+            loader.style.display = 'flex';
+            wolfSvg.style.display = 'none';
+            placeholder.style.display = 'none';
+
+            appendLog("HOST", `发起 AI 生图请求，提示词: "${prompt}"`);
+
+            setTimeout(() => {
+                loader.style.display = 'none';
+                wolfSvg.style.display = 'block';
+                hasImageLoaded = true;
+                generatedPrompt = prompt;
+                appendLog("RX", `@AI_GEN image_completed size=512x512`);
+                appendLog("HOST", "AI 生图完成，线条图像已成功加载");
+            }, 1500);
+        }
+
+        // Local Image Import simulation
+        function importLocalImage() {
+            const loader = document.getElementById('ai-loader');
+            const loaderText = document.getElementById('ai-loader-text');
+            const loaderSubtext = document.getElementById('ai-loader-subtext');
+            const placeholder = document.getElementById('ai-placeholder');
+            const wolfSvg = document.getElementById('ai-wolf-svg');
+
+            loaderText.innerText = "正在加载图片...";
+            loaderSubtext.innerText = "正在载入本地文件并转换边缘轮廓...";
+            loader.style.display = 'flex';
+            wolfSvg.style.display = 'none';
+            placeholder.style.display = 'none';
+
+            setTimeout(() => {
+                loader.style.display = 'none';
+                wolfSvg.style.display = 'block';
+                hasImageLoaded = true;
+                generatedPrompt = "本地导入图像";
+                appendLog("HOST", "导入本地图片: wolf_lineart.png 成功，图像已成功加载");
+            }, 800);
+        }
+
+        // Vectorization and conversion simulation
+        function convertToGcode() {
+            if (!hasImageLoaded) {
+                alert("当前预览窗格为空！请先生成图像或导入图片。");
+                return;
+            }
+
+            const loader = document.getElementById('ai-loader');
+            const loaderText = document.getElementById('ai-loader-text');
+            const loaderSubtext = document.getElementById('ai-loader-subtext');
+            
+            const threshold = document.getElementById('slider-threshold').value;
+            const size = document.getElementById('slider-size').value;
+            const speed = document.getElementById('slider-speed').value;
+
+            loader.style.display = 'flex';
+            loaderText.innerText = "正在提取图像轮廓...";
+            loaderSubtext.innerText = `提取阈值 = ${threshold}`;
+
+            appendLog("HOST", `开始执行图像矢量化运算... 提取阈值: ${threshold}, 目标尺寸: ${size}mm, 速度: ${speed}mm/min`);
+
+            setTimeout(() => {
+                loaderText.innerText = "正在进行边缘多边形拟合...";
+                loaderSubtext.innerText = "拟合公差: 0.15mm";
+            }, 600);
+
+            setTimeout(() => {
+                loaderText.innerText = "正在生成激光打标 G-code 路径...";
+                loaderSubtext.innerText = "计算连续线段与起刀跳转点";
+            }, 1200);
+
+            setTimeout(() => {
+                loader.style.display = 'none';
+                
+                // Generate a mockup Gcode string representing the wolf head
+                const dateStr = new Date().toLocaleString();
+                const mockGcode = `; AI Generated G-code from: "${generatedPrompt}"
+; Generated at: ${dateStr}
+; Vectorization Parameters: Threshold=${threshold}, TargetSize=${size}mm, Feedrate=${speed}
+G21 ; Set units to millimeters
+G90 ; Absolute positioning
+M3 S100 ; Turn laser on for laser carving
+F${speed} ; Set feedrate to ${speed}mm/min
+
+; --- Begin Head Outline Path ---
+G0 X10.5 Y12.2
+G1 X10.8 Y12.5
+G1 X11.2 Y13.1
+G1 X12.0 Y14.5
+G1 X12.5 Y15.2
+G1 X13.4 Y15.8
+G1 X14.2 Y16.2
+G1 X15.0 Y15.9
+G1 X15.8 Y14.8
+G1 X16.5 Y13.2
+G0 Z5 ; Lift head/turn off beam
+G0 X25.4 Y30.2
+G1 X26.0 Y31.0
+G1 X27.5 Y32.5
+G1 X29.0 Y33.8
+G1 X500 Y930
+G0 X0 Y0 ; Return to origin
+M5 ; Turn laser off
+M30 ; Program end`;
+
+                document.getElementById('gcode-editor-area').value = mockGcode;
+                document.getElementById('gcode-file-path').innerText = "AI_Generated_Wolf.gcode";
+                updateGcodeSize();
+
+                appendLog("RX", `@OK vectorization_completed path_count=48 segments=2512`);
+                appendLog("HOST", `G-code 生成成功！已自动加载至编辑器。目标雕刻区域: ${size}x${size} mm`);
+
+                // Auto switch to Editor tab
+                switchGcodeTab('editor');
+            }, 1800);
+        }
+
+        // Mock state variables
+        let isConnected = true;
+        let isTxLogMonitoring = false;
+        let isRxLogMonitoring = false;
+        let isFocusOn = false;
+        let showDiag = false;
+        let pauseLogs = false;
+        let uploadTimer = null;
+        let cacheTotal = 16384;
+        let cacheFree = 16384;
+        let currentRxState = "待机";
+        let currentJobId = "--";
+
+        // Generate mock lines on Logs load
+        const logArea = document.getElementById('logs-term-area');
+
+        // Add padding helper for mockup rendering since text formatting is raw
+        String.prototype.padEnd = String.prototype.padEnd || function(l, c) {
+            let s = this;
+            while(s.length < l) s += (c || ' ');
+            return s;
+        };
+
+        function appendLog(chan, msg) {
+            if (pauseLogs) return;
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+            
+            const row = document.createElement('div');
+            row.className = 'log-line';
+            
+            let chanClass = 'chan-tx';
+            let chanText = chan;
+            if (chan === 'HOST' || chan === 'host') {
+                chanClass = 'chan-host';
+                chanText = '主机';
+            } else if (chan === 'TX' || chan === 'TX_LOG' || chan === 'tx' || chan === 'tx_log') {
+                chanClass = 'chan-tx';
+                chanText = '发送';
+            } else if (chan === 'RX' || chan === 'RX_LOG' || chan === 'rx' || chan === 'rx_log') {
+                chanClass = 'chan-rx';
+                chanText = '接收';
+            } else if (chan === 'ERROR' || chan === 'ERR' || chan === 'error' || chan === 'err') {
+                chanClass = 'chan-err';
+                chanText = '错误';
+            } else if (chan === 'STATUS' || chan === 'status') {
+                chanClass = 'chan-status';
+                chanText = '状态';
+            }
+
+            row.innerHTML = `<span class="log-time">[${timeStr}]</span><span class="log-chan ${chanClass}">${chanText}</span><span class="log-msg">${msg}</span>`;
+            logArea.appendChild(row);
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        // Initialize log panel with some start events
+        setTimeout(() => {
+            appendLog("HOST", "WS63 激光主控终端 V2 已准备就绪");
+            appendLog("HOST", "成功从 store.json 载入配置文件");
+            appendLog("TX", "正在以波特率 115200 打开 COM8 端口...");
+            appendLog("TX", "COM8 串口连接成功");
+            appendLog("STATUS", "正在向发送板广播握手包握手请求");
+            appendLog("RX", "@OK 成功建立握手连接");
+        }, 100);
+
+        // Simulation loops
+        setInterval(() => {
+            if(isConnected) {
+                // Periodically simulate a status check or report
+                if(Math.random() > 0.8) {
+                    appendLog("TX", "@STATUS");
+                    
+                    const rxStates = ["待机", "数据传输中", "G代码就绪", "正在雕刻", "已暂停"];
+                    let chosenState = currentRxState;
+                    if(uploadTimer) {
+                        chosenState = "数据传输中";
+                    } else if(currentRxState === "正在雕刻" && Math.random() > 0.9) {
+                        chosenState = "正在雕刻";
+                    }
+                    
+                    if(chosenState === "数据传输中") {
+                        cacheFree = Math.max(2048, cacheFree - 1024);
+                    } else if(chosenState === "正在雕刻") {
+                        cacheFree = Math.min(cacheTotal, cacheFree + 512);
+                    } else {
+                        cacheFree = cacheTotal;
+                    }
+
+                    const stateCode = chosenState === "待机" ? 1 : 
+                                      chosenState === "数据传输中" ? 2 : 
+                                      chosenState === "G代码就绪" ? 3 : 
+                                      chosenState === "正在雕刻" ? 4 : 5;
+
+                    const rxStatusLine = `@STATUS state=${stateCode} error=0 job_id=${currentJobId === '--' ? 0 : currentJobId} exec_line=124 cache_free=${cacheFree} cache_total=${cacheTotal}`;
+                    appendLog("RX", rxStatusLine);
+
+                    // Update UI elements
+                    document.getElementById('mon-card-rx-state').innerText = chosenState;
+                    document.getElementById('mon-card-free-cache').innerText = cacheFree + " B";
+                    document.getElementById('mon-card-total-cache').innerText = cacheTotal + " B";
+                    document.getElementById('monitor-state-label').innerText = chosenState;
+                    
+                    // Update Circle
+                    const circle = document.getElementById('monitor-circle');
+                    const text = document.getElementById('monitor-pct-text');
+                    const pct = Math.round(((cacheTotal - cacheFree) / cacheTotal) * 100);
+                    
+                    const radius = 75;
+                    const circumference = 2 * Math.PI * radius; // ~471.2
+                    const offset = circumference - (pct / 100) * circumference;
+                    
+                    circle.style.strokeDashoffset = offset;
+                    text.innerText = pct + "%";
+
+                    // Handle coloring monitor State label
+                    const label = document.getElementById('monitor-state-label');
+                    const subLabel = document.getElementById('monitor-substate-label');
+                    
+                    if(chosenState === "数据传输中") {
+                        label.style.color = "var(--accent-cyan)";
+                        circle.style.stroke = "var(--accent-cyan)";
+                        subLabel.innerText = "正在下载任务数据到内存";
+                    } else if(chosenState === "正在雕刻") {
+                        label.style.color = "var(--accent-red)";
+                        circle.style.stroke = "var(--accent-red)";
+                        subLabel.innerText = "激光器高速打标中";
+                    } else if(chosenState === "G代码就绪") {
+                        label.style.color = "var(--accent-green)";
+                        circle.style.stroke = "var(--accent-green)";
+                        subLabel.innerText = "代码已被成功读取且校验通过";
+                    } else {
+                        label.style.color = "var(--text-primary)";
+                        circle.style.stroke = "var(--accent-cyan)";
+                        subLabel.innerText = "待机模式";
+                    }
+                }
+
+                // Simulate diagnostic noise
+                if(showDiag && Math.random() > 0.6) {
+                    appendLog("RX_LOG", "[诊断] RSSI=-62dBm 物理链路状态=OK 接收板电压=100%");
+                }
+            }
+        }, 1500);
+
+        // Actions
+        function refreshPorts() {
+            appendLog("HOST", "正在扫描系统可用串口通信设备...");
+            setTimeout(() => {
+                appendLog("HOST", "扫描完毕，发现端口: COM8, COM24, COM26");
+            }, 300);
+        }
+
+        function toggleConnect(conn) {
+            isConnected = conn;
+            const btnConnect = document.getElementById('btn-connect');
+            const btnDisconnect = document.getElementById('btn-disconnect');
+            const txVal = document.getElementById('badge-tx-val');
+            const rxVal = document.getElementById('badge-rx-val');
+            const monTx = document.getElementById('mon-card-tx-link');
+            const monRx = document.getElementById('mon-card-rx-link');
+
+            if(conn) {
+                btnConnect.disabled = true;
+                btnDisconnect.disabled = false;
+                txVal.innerText = "已连接";
+                txVal.className = "badge-value connected";
+                rxVal.innerText = "已连接";
+                rxVal.className = "badge-value connected";
+                monTx.innerText = "已连接";
+                monTx.className = "info-card-value highlight-green";
+                monRx.innerText = "已连接";
+                monRx.className = "info-card-value highlight-green";
+                appendLog("HOST", "控制命令串口已连接 (COM8)");
+            } else {
+                btnConnect.disabled = false;
+                btnDisconnect.disabled = true;
+                txVal.innerText = "关闭";
+                txVal.className = "badge-value disconnected";
+                rxVal.innerText = "关闭";
+                rxVal.className = "badge-value disconnected";
+                monTx.innerText = "未连接";
+                monTx.className = "info-card-value highlight-red";
+                monRx.innerText = "未连接";
+                monRx.className = "info-card-value highlight-red";
+                appendLog("HOST", "物理连接断开，监听线程已优雅退出");
+            }
+        }
+
+        function toggleMonitor(chan) {
+            const btn = document.getElementById(`btn-${chan}-monitor`);
+            const isMonitoring = btn.innerText.startsWith("停止");
+            
+            if(isMonitoring) {
+                btn.innerText = "监听";
+                btn.className = "btn btn-primary";
+                appendLog("HOST", `已停止接收 ${chan.toUpperCase()} 物理链路的调试日志`);
+            } else {
+                btn.innerText = `停止监听`;
+                btn.className = "btn btn-danger";
+                appendLog("HOST", `已在端口上开启 ${chan.toUpperCase()} 日志的拦截监控侦听...`);
+            }
+        }
+
+        function simulateOpenFile() {
+            const mockGcode = `; Made by WS63 Laser Tool\nG21\nG90\nM3 S100\nG1 X0 Y0 F3000\nG1 X50 Y0 F1000\nG1 X50 Y50\nG1 X0 Y50\nG1 X0 Y0\nM5\nM30`;
+            document.getElementById('gcode-editor-area').value = mockGcode;
+            document.getElementById('gcode-file-path').innerText = "C:/Users/LaserUser/Desktop/square_engrave.gcode";
+            updateGcodeSize();
+            appendLog("HOST", "载入完毕: square_engrave.gcode (大小为 124 字节)");
+        }
+
+        function clearGcode() {
+            document.getElementById('gcode-editor-area').value = "";
+            document.getElementById('gcode-file-path').innerText = "未加载文件";
+            document.getElementById('gcode-file-size').innerText = "";
+            appendLog("HOST", "已清空代码工作区");
+        }
+
+        function updateGcodeSize() {
+            const txt = document.getElementById('gcode-editor-area').value;
+            const size = new Blob([txt]).size;
+            document.getElementById('gcode-file-size').innerText = size ? size + " 字节" : "";
+        }
+
+        function startUpload(andExec) {
+            if(!isConnected) {
+                alert("请先连接到主控制命令串口！");
+                return;
+            }
+            const jid = document.getElementById('job-id-input').value;
+            currentJobId = jid;
+            document.getElementById('mon-card-job-id').innerText = jid;
+
+            appendLog("HOST", `正在初始化数据上传通道... 目标任务 ID = ${jid}`);
+            
+            let progress = 0;
+            const bar = document.getElementById('task-progress-bar');
+            const pct = document.getElementById('task-progress-pct');
+            const label = document.getElementById('task-status-label');
+            const progLog = document.getElementById('job-progress-log');
+            
+            label.innerText = "数据传输中...";
+            progLog.innerText = `正在下发数据帧 0...`;
+            currentRxState = "数据传输中";
+
+            clearInterval(uploadTimer);
+            uploadTimer = setInterval(() => {
+                progress += 5;
+                if(progress > 100) {
+                    clearInterval(uploadTimer);
+                    uploadTimer = null;
+                    bar.style.width = "100%";
+                    pct.innerText = "100%";
+                    
+                    if(andExec) {
+                        label.innerText = "正在雕刻中...";
+                        progLog.innerText = `数据已接收完毕，正在下发指令开始打标...`;
+                        appendLog("TX", `@EXEC_START ${jid}`);
+                        appendLog("RX", `@ACK type=16`);
+                        currentRxState = "正在雕刻";
+                        document.getElementById('badge-laser-val').innerText = "开启";
+                        document.getElementById('badge-laser-val').className = "badge-value on";
+                        document.getElementById('mon-card-laser').innerText = "开启";
+                        document.getElementById('mon-card-laser').className = "info-card-value highlight-red";
+                    } else {
+                        label.innerText = "任务上传完毕";
+                        progLog.innerText = `文件成功校验并保存到接收板闪存设备`;
+                        appendLog("HOST", `任务 ${jid} 上传完成！`);
+                        currentRxState = "G代码就绪";
+                    }
+                } else {
+                    bar.style.width = progress + "%";
+                    pct.innerText = progress + "%";
+                    progLog.innerText = `正在传输数据包: ${progress}% (已下载 ${Math.round(progress*1.6)}/160 区块)`;
+                    if(Math.random() > 0.5) {
+                        appendLog("TX", `[DATA] chunk offset=${progress*16}`);
+                        appendLog("RX", `[ACK] block_received`);
+                    }
+                }
+            }, 100);
+        }
+
+        function sendControlCmd(cmd) {
+            if(!isConnected) {
+                alert("请先连接串口设备！");
+                return;
+            }
+            
+            const jid = document.getElementById('job-id-input').value;
+            const laserBadge = document.getElementById('badge-laser-val');
+            const monLaser = document.getElementById('mon-card-laser');
+
+            switch(cmd) {
+                case 'EXEC_START':
+                    appendLog("TX", `@EXEC_START ${jid}`);
+                    appendLog("RX", `@ACK type=16`);
+                    currentRxState = "正在雕刻";
+                    laserBadge.innerText = "开启";
+                    laserBadge.className = "badge-value on";
+                    monLaser.innerText = "开启";
+                    monLaser.className = "info-card-value highlight-red";
+                    break;
+                case 'PAUSE':
+                    appendLog("TX", `@EXEC_PAUSE`);
+                    appendLog("RX", `@ACK type=17`);
+                    currentRxState = "已暂停";
+                    laserBadge.innerText = "关闭";
+                    laserBadge.className = "badge-value off";
+                    monLaser.innerText = "关闭";
+                    monLaser.className = "info-card-value";
+                    break;
+                case 'RESUME':
+                    appendLog("TX", `@EXEC_RESUME`);
+                    appendLog("RX", `@ACK type=18`);
+                    currentRxState = "正在雕刻";
+                    laserBadge.innerText = "开启";
+                    laserBadge.className = "badge-value on";
+                    monLaser.innerText = "开启";
+                    monLaser.className = "info-card-value highlight-red";
+                    break;
+                case 'STOP':
+                    appendLog("TX", `@EXEC_STOP`);
+                    appendLog("RX", `@ACK type=19`);
+                    currentRxState = "待机";
+                    laserBadge.innerText = "关闭";
+                    laserBadge.className = "badge-value off";
+                    monLaser.innerText = "关闭";
+                    monLaser.className = "info-card-value";
+                    break;
+                case 'ABORT':
+                    appendLog("TX", `@ABORT`);
+                    appendLog("RX", `@ACK type=4`);
+                    currentRxState = "待机";
+                    laserBadge.innerText = "关闭";
+                    laserBadge.className = "badge-value off";
+                    monLaser.innerText = "关闭";
+                    monLaser.className = "info-card-value";
+                    break;
+                case 'ESTOP':
+                    appendLog("TX", `@ESTOP`);
+                    appendLog("RX", `@ACK estop_triggered`);
+                    currentRxState = "急停锁死";
+                    laserBadge.innerText = "关闭";
+                    laserBadge.className = "badge-value off";
+                    monLaser.innerText = "关闭";
+                    monLaser.className = "info-card-value";
+                    
+                    // Trigger red status text
+                    document.getElementById('monitor-state-label').innerText = "急停锁死";
+                    document.getElementById('monitor-state-label').style.color = "var(--accent-red)";
+                    break;
+                case 'ESTOP_CLEAR':
+                    appendLog("TX", `@ESTOP_CLEAR`);
+                    appendLog("RX", `@ACK type=23`);
+                    currentRxState = "待机";
+                    break;
+                case 'STATUS':
+                    appendLog("TX", `@STATUS`);
+                    break;
+                case 'ROUTE_WIFI':
+                    appendLog("TX", `@RX MODE=GRBL`);
+                    appendLog("RX", `@OK route_switch_accepted`);
+                    appendLog("HOST", "通信路由已成功切换到 Wi-Fi 旁路直连模式");
+                    break;
+            }
+        }
+
+        function toggleFocus() {
+            if(!isConnected) {
+                alert("请先建立物理串口连接！");
+                return;
+            }
+
+            const btn = document.getElementById('btn-focus-toggle');
+            const focusBadge = document.getElementById('badge-focus-val');
+            const monFocus = document.getElementById('mon-card-focus');
+            const power = document.getElementById('focus-power-input').value;
+
+            if(isFocusOn) {
+                appendLog("TX", `@FOCUS_OFF`);
+                appendLog("RX", `@OK focus_off`);
+                btn.innerText = "开启调焦";
+                btn.className = "btn btn-accent";
+                focusBadge.innerText = "关闭";
+                focusBadge.className = "badge-value off";
+                monFocus.innerText = "关闭";
+                monFocus.className = "info-card-value";
+                isFocusOn = false;
+            } else {
+                appendLog("TX", `@FOCUS_ON S${power}`);
+                appendLog("RX", `@OK focus_on`);
+                btn.innerText = "关闭调焦";
+                btn.className = "btn btn-danger";
+                focusBadge.innerText = "开启";
+                focusBadge.className = "badge-value on";
+                monFocus.innerText = "开启 S" + power;
+                monFocus.className = "info-card-value highlight-blue";
+                isFocusOn = true;
+            }
+        }
+
+        function toggleDiagFilter(checked) {
+            showDiag = checked;
+            appendLog("HOST", `诊断日志显示过滤模式已切换至 ${checked}`);
+        }
+
+        // Pause logs
+        function togglePauseLogs(checked) {
+            pauseLogs = checked;
+        }
+
+        function clearLogs() {
+            logArea.innerHTML = "";
+        }
+
+        // Export logs to txt file
+        function exportLogs() {
+            const lines = [];
+            const rows = logArea.querySelectorAll('.log-line');
+            rows.forEach(r => {
+                const time = r.querySelector('.log-time').innerText;
+                const chan = r.querySelector('.log-chan').innerText;
+                const msg = r.querySelector('.log-msg').innerText;
+                lines.push(`${time} ${chan} ${msg}`);
+            });
+            const text = lines.join('\n');
+            const blob = new Blob([text], {type: "text/plain;charset=utf-8"});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "ws63_logs.txt";
+            a.click();
+            URL.revokeObjectURL(url);
+            appendLog("HOST", "运行日志已成功导出为 ws63_logs.txt 文件");
+        }
+
+        function saveSettings() {
+            const txCmd = document.getElementById('cfg-tx-cmd').value;
+            const txLog = document.getElementById('cfg-tx-log').value;
+            const rxLog = document.getElementById('cfg-rx-log').value;
+            const baud = document.getElementById('cfg-baud').value;
+            
+            appendLog("HOST", `配置文件持久化保存成功！属性: cmd=${txCmd}, tx_log=${txLog}, rx_log=${rxLog}, 波特率=${baud}`);
+            
+            const msg = document.getElementById('save-status-msg');
+            msg.innerText = "系统设置保存完毕！";
+            msg.style.color = "var(--accent-green)";
+            msg.style.opacity = 1;
+            setTimeout(() => {
+                msg.style.opacity = 0;
+            }, 2500);
+        }
+    </script>
+</body>
+</html>

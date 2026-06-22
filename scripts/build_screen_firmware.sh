@@ -11,6 +11,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/build_screen_firmware.sh            # default: LVGL
 #   ./scripts/build_screen_firmware.sh --lvgl     # explicit LVGL
+#   ./scripts/build_screen_firmware.sh --panel    # industrial panel UI
 #   ./scripts/build_screen_firmware.sh --selftest  # raw self-test page
 
 ROOT="/root/fbb_ws63"
@@ -28,13 +29,15 @@ SCREEN_VARIANT="lvgl"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --lvgl)     SCREEN_VARIANT="lvgl";     shift ;;
+        --panel)    SCREEN_VARIANT="panel";    shift ;;
         --selftest) SCREEN_VARIANT="selftest"; shift ;;
         -h|--help)
             cat <<EOF
-Usage: $0 [--lvgl|--selftest]
+Usage: $0 [--lvgl|--panel|--selftest]
 
 Options:
   --lvgl      Build LVGL v9.3.0 port (default)
+  --panel     Build industrial panel UI (MSP3223 + LVGL v9.3.0)
   --selftest  Build raw screen self-test page (currently historical ST7796 code)
 
 Output:
@@ -89,6 +92,7 @@ disable_all_samples() {
     set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     set_config_n CONFIG_ENABLE_SCREEN_SAMPLE
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
+    set_config_n CONFIG_ENABLE_LVGL_PANEL
     set_config_n CONFIG_LASER_RX_UNIFIED
 }
 
@@ -101,6 +105,9 @@ switch_config() {
     case "$SCREEN_VARIANT" in
         lvgl)
             set_config_y CONFIG_ENABLE_LVGL_SAMPLE
+            ;;
+        panel)
+            set_config_y CONFIG_ENABLE_LVGL_PANEL
             ;;
         selftest)
             set_config_y CONFIG_ENABLE_SCREEN_SAMPLE
@@ -132,6 +139,12 @@ verify_config() {
                 err "CONFIG_ENABLE_LVGL_SAMPLE=y not set"
             fi
             echo "  Screen config OK: ENABLE_LVGL_SAMPLE=y"
+            ;;
+        panel)
+            if ! grep -q '^CONFIG_ENABLE_LVGL_PANEL=y$' "$CONFIG"; then
+                err "CONFIG_ENABLE_LVGL_PANEL=y not set"
+            fi
+            echo "  Screen config OK: ENABLE_LVGL_PANEL=y"
             ;;
         selftest)
             if ! grep -q '^CONFIG_ENABLE_SCREEN_SAMPLE=y$' "$CONFIG"; then
