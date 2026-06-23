@@ -563,11 +563,11 @@ static void execute_gcode_line(const char *line, int len)
 {
     legacy_wifi_motion_cmd_t cmds[4];
     int cmd_count = 0;
-    bool drain_before_ok = line_contains_mcode(line, 5);
+    bool m5_requested = line_contains_mcode(line, 5);
 
     if (legacy_wifi_gcode_process_line(line, len, cmds, 4, &cmd_count)) {
-        osal_printk("[WIFI_PARSE] id=%lu cmds=%d drain=%d line=\"%s\"\r\n",
-                    g_line_id, cmd_count, drain_before_ok ? 1 : 0, line);
+        osal_printk("[WIFI_PARSE] id=%lu cmds=%d m5=%d line=\"%s\"\r\n",
+                    g_line_id, cmd_count, m5_requested ? 1 : 0, line);
         for (int i = 0; i < cmd_count; i++) {
             if (!enqueue_motion_cmd(&cmds[i])) {
                 return;
@@ -576,9 +576,10 @@ static void execute_gcode_line(const char *line, int len)
         if (cmd_count > 0) {
             wait_motion_queue_watermark();
         }
-        if (drain_before_ok) {
-            wait_motion_idle(LEGACY_WIFI_MOTION_END_DRAIN_TIMEOUT_MS);
-            laser_force_off();
+        if (m5_requested) {
+            osal_printk("[WIFI_M5_ACCEPT] id=%lu queue=%u ack=immediate\r\n",
+                        g_line_id,
+                        (unsigned int)legacy_wifi_motion_executor_queue_depth());
         }
     }
 

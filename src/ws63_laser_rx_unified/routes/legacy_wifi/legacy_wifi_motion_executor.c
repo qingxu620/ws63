@@ -411,8 +411,8 @@ void legacy_wifi_motion_executor_execute(const legacy_wifi_motion_cmd_t *cmd)
             update_activity();
             break;
         case LEGACY_WIFI_CMD_LASER_OFF:
-            laser_enable(false);
-            laser_set_power(0);
+            /* M5 must close PWM and drive the laser pin physically low. */
+            laser_force_off();
             update_activity();
             break;
         case LEGACY_WIFI_CMD_SET_ORIGIN:
