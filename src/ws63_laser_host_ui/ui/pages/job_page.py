@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -22,6 +22,11 @@ class ArcWidget(QWidget):
         self._color = QColor("#0284C7")
         self._track_color = QColor("#E2E8F0")
         self._caption = "等待任务"
+        self._spinning = False
+        self._spin_angle = 0
+        self._spin_timer = QTimer(self)
+        self._spin_timer.setInterval(40)
+        self._spin_timer.timeout.connect(self._advance_spinner)
 
     def set_value(self, v: int) -> None:
         self._value = max(0, min(self._max, v))
@@ -33,6 +38,21 @@ class ArcWidget(QWidget):
 
     def set_caption(self, caption: str) -> None:
         self._caption = caption
+        self.update()
+
+    def set_spinning(self, active: bool) -> None:
+        if self._spinning == active:
+            return
+        self._spinning = active
+        if active:
+            self._spin_timer.start()
+        else:
+            self._spin_timer.stop()
+            self._spin_angle = 0
+        self.update()
+
+    def _advance_spinner(self) -> None:
+        self._spin_angle = (self._spin_angle + 5) % 360
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -47,8 +67,21 @@ class ArcWidget(QWidget):
         p.setPen(pen)
         p.drawArc(rect, 0, 360 * 16)
 
-        # Value arc (spans from top, clockwise)
-        if self._value > 0:
+        # Execution uses a rotating, open ring; upload uses determinate progress.
+        if self._spinning:
+            start = int((90 - self._spin_angle) * 16)
+            span = -int(275 * 16)
+
+            glow_color = QColor(self._color.red(), self._color.green(), self._color.blue(), 35)
+            glow_pen = QPen(glow_color, 15, Qt.SolidLine, Qt.RoundCap)
+            p.setPen(glow_pen)
+            p.drawArc(rect, start, span)
+
+            pen.setColor(self._color)
+            pen.setWidth(10)
+            p.setPen(pen)
+            p.drawArc(rect, start, span)
+        elif self._value > 0:
             span = int(self._value * 360 * 16 / self._max)
             
             # Glow arc (semi-transparent, wider)
@@ -69,7 +102,8 @@ class ArcWidget(QWidget):
         font.setPixelSize(27)
         font.setBold(True)
         p.setFont(font)
-        p.drawText(rect.adjusted(0, -10, 0, 0), Qt.AlignCenter, f"{self._value}%")
+        center_text = "执行中" if self._spinning else f"{self._value}%"
+        p.drawText(rect.adjusted(0, -10, 0, 0), Qt.AlignCenter, center_text)
 
         # Center subtitle
         p.setPen(QColor("#475569"))
@@ -97,6 +131,7 @@ class JobPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._focus_active = False
+        self._execution_active = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -347,7 +382,8 @@ class JobPage(QWidget):
         focus_layout.addWidget(self.focus_power)
         
         self.btn_focus = QPushButton("开启调焦")
-        self.btn_focus.setObjectName("btnAccent")
+        self.btn_focus.setObjectName("btnFocus")
+        self.btn_focus.setProperty("active", False)
         self.btn_focus.setCursor(self.cursor())
         self.btn_focus.setMinimumHeight(30)
         self.btn_focus.clicked.connect(self._on_focus)
@@ -418,6 +454,27 @@ class JobPage(QWidget):
     def set_focus_state(self, active: bool) -> None:
         self._focus_active = active
         self.btn_focus.setText("关闭调焦" if active else "开启调焦")
+        self.btn_focus.setProperty("active", active)
+        self.btn_focus.style().unpolish(self.btn_focus)
+        self.btn_focus.style().polish(self.btn_focus)
+        self.btn_focus.update()
+
+    def set_execution_state(self, active: bool, *, completed: bool = False) -> None:
+        self._execution_active = active
+        self.arc.set_spinning(active)
+        if active:
+            self.arc.set_color("#EF4444")
+            self.arc.set_caption("等待 RX 完成")
+            self.lbl_state.setText("正在执行")
+            self.lbl_state.setStyleSheet("color: #EF4444; font-size: 24px; font-weight: 800;")
+            self.lbl_substate.setText("激光器高速打标中")
+        elif completed:
+            self.arc.set_value(100)
+            self.arc.set_color("#10B981")
+            self.arc.set_caption("执行完成")
+            self.lbl_state.setText("执行完成")
+            self.lbl_state.setStyleSheet("color: #10B981; font-size: 24px; font-weight: 800;")
+            self.lbl_substate.setText("任务已完成，控制已释放")
 
     def _on_focus(self) -> None:
         if self._focus_active:

@@ -253,6 +253,14 @@ class UiContractTests(unittest.TestCase):
         self.assertIsNotNone(terminal_header)
         self.assertEqual(terminal_header.text(), "实时串口日志控制台")
 
+    def test_logs_page_prunes_old_lines_with_pyside6_cursor_enums(self) -> None:
+        page = LogsPage()
+        page._line_count = 4000
+
+        page._append("test line")
+
+        self.assertEqual(page._line_count, 3501)
+
     def test_upload_captures_ui_values_before_worker_starts(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -307,7 +315,8 @@ class UiContractTests(unittest.TestCase):
 
         self.assertEqual(window.state.rx_state_code, 3)
         self.assertEqual(window.page_job.arc._value, 0)
-        self.assertEqual(window.page_job.arc._caption, "正在执行")
+        self.assertEqual(window.page_job.arc._caption, "等待 RX 完成")
+        self.assertTrue(window.page_job.arc._spinning)
 
     def test_status_is_parsed_regardless_of_log_channel(self) -> None:
         window = MainWindow()
@@ -319,7 +328,8 @@ class UiContractTests(unittest.TestCase):
         )
 
         self.assertEqual(window.state.rx_state_code, 3)
-        self.assertEqual(window.page_job.arc._caption, "正在执行")
+        self.assertEqual(window.page_job.arc._caption, "等待 RX 完成")
+        self.assertTrue(window.page_job.arc._spinning)
 
     def test_status_transition_completes_without_rx_log_port(self) -> None:
         window = MainWindow()
@@ -334,7 +344,78 @@ class UiContractTests(unittest.TestCase):
 
         self.assertTrue(window.state.execution_complete)
         self.assertFalse(window.state.execution_expected)
+        self.assertFalse(window.page_job.arc._spinning)
+        self.assertEqual(window.page_job.arc._caption, "执行完成")
         self.assertIn("执行完成", window.page_job.lbl_task.text())
+
+    def test_idle_status_completes_even_if_executing_status_was_missed(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_state_code = 1
+        window.state.rx_job_id = 9
+        window.state.execution_expected = True
+        window.page_job.set_execution_state(True)
+
+        window._parse_rx_line(
+            "@STATUS state=0 status=0 job=9 rx=1000 total=1000 free=500 lines=10"
+        )
+
+        self.assertTrue(window.state.execution_complete)
+        self.assertFalse(window.page_job.arc._spinning)
+
+    def test_log_view_failure_cannot_block_exec_done(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_job_id = 9
+        window.state.execution_expected = True
+        window.page_job.set_execution_state(True)
+
+        def fail_log_view(channel, message) -> None:
+            raise AttributeError("log renderer failed")
+
+        window.page_logs.append_log = fail_log_view
+        window._on_log_message(
+            "rx_log", "[JOB_EXEC] done job=9 lines=10 x_um=0 y_um=0"
+        )
+
+        self.assertTrue(window.state.execution_complete)
+        self.assertFalse(window.page_job.arc._spinning)
+
+    def test_stale_execution_status_cannot_restart_completed_spinner(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_job_id = 9
+        window._mark_execution_complete()
+
+        window._on_task_status("执行中，等待 RX 完成", -1)
+
+        self.assertTrue(window.state.execution_complete)
+        self.assertFalse(window.page_job.arc._spinning)
+        self.assertEqual(window.page_job.arc._caption, "执行完成")
+
+    def test_focus_button_turns_red_when_focus_is_active(self) -> None:
+        page = JobPage()
+
+        page.set_focus_state(True)
+        self.assertEqual(page.btn_focus.text(), "关闭调焦")
+        self.assertTrue(page.btn_focus.property("active"))
+
+        page.set_focus_state(False)
+        self.assertEqual(page.btn_focus.text(), "开启调焦")
+        self.assertFalse(page.btn_focus.property("active"))
+
+    def test_execution_spinner_starts_and_stops_on_completion(self) -> None:
+        page = JobPage()
+
+        page.set_execution_state(True)
+        self.assertTrue(page.arc._spinning)
+        self.assertTrue(page.arc._spin_timer.isActive())
+
+        page.set_execution_state(False, completed=True)
+        self.assertFalse(page.arc._spinning)
+        self.assertFalse(page.arc._spin_timer.isActive())
+        self.assertEqual(page.arc._value, 100)
+        self.assertEqual(page.arc._caption, "执行完成")
 
     def test_main_window_does_not_create_auto_status_polling(self) -> None:
         window = MainWindow()
@@ -375,6 +456,7 @@ class UiContractTests(unittest.TestCase):
         window._upload_worker(b"M5\n", 5, 20.0)
 
         self.assertEqual(len(calls), 1)
+        self.assertNotIn("wait_ready", calls[0][1])
         self.assertEqual(calls[0][1]["preroll_bytes"], 0)
         self.assertFalse(calls[0][1]["start_on_preroll"])
 
@@ -395,15 +477,42 @@ class UiContractTests(unittest.TestCase):
                 pass
 
         window.client = FakeClient()
-        window._upload_exec_worker(b"M5\n", 6, 20.0, 4096)
+        large_job = b"G1 X1\n" * 700
+        window._upload_exec_worker(large_job, 6, 20.0, 4096)
         self.assertEqual(uploads[-1]["preroll_bytes"], 4096)
         self.assertTrue(uploads[-1]["start_on_preroll"])
+        self.assertNotIn("wait_ready", uploads[-1])
         self.assertEqual(controls, [])
+        self.assertTrue(window.state.execution_expected)
+        self.assertTrue(window.page_job.arc._spinning)
 
         window._upload_exec_worker(b"M5\n", 7, 20.0, 0)
         self.assertEqual(uploads[-1]["preroll_bytes"], 0)
         self.assertFalse(uploads[-1]["start_on_preroll"])
         self.assertEqual(controls, ["@EXEC_START 7"])
+
+    def test_upload_execute_worker_releases_after_exec_start_ack(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+
+        class FakeClient:
+            def upload_job(self, *args, **kwargs) -> None:
+                pass
+
+            def send_control(self, command, expect, timeout) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        window.client = FakeClient()
+        window._run_job_worker(window._upload_exec_worker, b"M5\n", 3, 8.0, 0)
+
+        self.assertTrue(window.worker.wait_for_idle(1000))
+        self.app.processEvents()
+        self.assertFalse(window.worker.is_busy())
+        self.assertTrue(window.state.execution_expected)
+        self.assertTrue(window.page_job.arc._spinning)
 
     def test_rx_monitor_updates_shared_link_state(self) -> None:
         window = MainWindow()

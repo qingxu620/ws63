@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from app.config_store import ConfigStore, HostConfig
 from app.event_bus import EventBus
+from app.gcode_validator import prepare_gcode_for_upload, format_diagnostic
 from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, available_ports, crc16_ccitt,
@@ -58,6 +59,7 @@ class MainWindow(QMainWindow):
         self._log_path: Optional[Path] = None
         self._log_file: Optional[TextIO] = None
         self._log_pending = 0
+        self._log_view_error_reported = False
 
         # UI
         self._build_ui()
@@ -159,6 +161,9 @@ class MainWindow(QMainWindow):
         self.event_bus.emit_log(channel, message)
 
     def _on_log_message(self, channel: str, message: str) -> None:
+        # Protocol state is safety-critical and must not depend on log rendering.
+        self._process_protocol_message(message)
+
         # Write to file
         if self._log_file:
             stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -171,15 +176,37 @@ class MainWindow(QMainWindow):
                 self._log_file.flush()
                 self._log_pending = 0
 
-        # Route to logs page
-        self.page_logs.append_log(channel, message)
+        # Presentation failures must never block RX state convergence.
+        try:
+            self.page_logs.append_log(channel, message)
+        except Exception as exc:
+            if not self._log_view_error_reported:
+                self._log_view_error_reported = True
+                print(f"[HOST_LOG_VIEW_ERROR] {type(exc).__name__}: {exc}")
+                if self._log_file:
+                    self._log_file.write(
+                        f"[HOST_LOG_VIEW_ERROR] {type(exc).__name__}: {exc}\n"
+                    )
+                    self._log_file.flush()
 
+    def _process_protocol_message(self, message: str) -> None:
         # @STATUS may arrive on the TX command port or either optional log port.
         self._parse_rx_line(message)
 
-        # Parse EXEC_DONE
         m = RX_EXEC_DONE_RE.search(message)
         if m:
+            done_job = int(m.group(1))
+            tracked_job = self.state.rx_job_id
+            if tracked_job > 0 and done_job != tracked_job:
+                self._enqueue_log(
+                    "status",
+                    f"[EXEC_TRACK] ignore_done done_job={done_job} tracked_job={tracked_job}",
+                )
+                return
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] evidence=JOB_EXEC_DONE job={done_job} expected={int(self.state.execution_expected)}",
+            )
             self._mark_execution_complete()
 
     def _parse_rx_line(self, message: str) -> None:
@@ -187,6 +214,7 @@ class MainWindow(QMainWindow):
         if status is None:
             return
         previous_state = self.state.rx_state_code
+        tracked_job = self.state.rx_job_id
         self.state.prev_rx_state_code = previous_state
         self.state.rx_state_code = status.state
         self.state.rx_job_id = status.job_id
@@ -194,19 +222,52 @@ class MainWindow(QMainWindow):
         self.state.rx_job_total = status.job_total
         self.state.rx_cache_free = status.cache_free
 
-        returned_to_idle = previous_state == 3 and status.state == 0
-        if returned_to_idle and not self.state.termination_requested:
+        # Log state transitions
+        if previous_state != status.state:
+            self._enqueue_log("status", f"[RX_STATE] {previous_state} -> {status.state} job={status.job_id} rx={status.received_size}/{status.job_total}")
+
+        if self.state.execution_expected:
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] evidence=STATUS prev={previous_state} state={status.state} "
+                f"job={status.job_id} tracked_job={tracked_job} term={int(self.state.termination_requested)}",
+            )
+
+        same_job = tracked_job <= 0 or status.job_id in (0, tracked_job)
+        completed_by_idle = (
+            self.state.execution_expected
+            and status.state == 0
+            and same_job
+            and not self.state.termination_requested
+        )
+        if completed_by_idle:
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] evidence=STATUS_IDLE job={status.job_id} previous={previous_state}",
+            )
             self._mark_execution_complete()
             return
         self._update_monitor()
+        if status.state == 3:
+            self.state.execution_expected = True
+            self.state.execution_complete = False
+            self.page_job.set_execution_state(True)
+        elif status.state in (5, 6):
+            self.state.execution_expected = False
+            self.page_job.set_execution_state(False)
 
     def _mark_execution_complete(self) -> None:
         already_complete = self.state.execution_complete
+        self._enqueue_log(
+            "status",
+            f"[EXEC_TRACK] complete job={self.state.rx_job_id} already={int(already_complete)}",
+        )
         self.state.rx_state_code = 0
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = True
         self._update_monitor()
+        self.page_job.set_execution_state(False, completed=True)
         if not already_complete:
             self.page_job.set_task_status("执行完成", -1)
 
@@ -255,19 +316,42 @@ class MainWindow(QMainWindow):
         self.page_job.set_progress_text(text)
 
     def _on_task_status(self, text: str, pct: float) -> None:
-        self.page_job.set_task_status(text, pct)
-        if text.startswith(
+        execution_start = text.startswith(
             ("执行中", "执行已启动", "预缓冲执行中", "预缓冲完成，启动执行")
-        ):
+        )
+        if execution_start and self.state.execution_complete:
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] ignore_stale_start job={self.state.rx_job_id} text={text}",
+            )
+            self.page_job.set_task_status("执行完成", 100)
+            self.page_job.set_execution_state(False, completed=True)
+            return
+
+        self.page_job.set_task_status(text, pct)
+        if execution_start:
+            was_expected = self.state.execution_expected
             self.state.execution_expected = True
             self.state.termination_requested = False
             self.state.execution_complete = False
+            self._update_monitor()
+            self.page_job.set_execution_state(True)
+            if not was_expected:
+                self._enqueue_log(
+                    "status",
+                    f"[EXEC_TRACK] start job={self.state.rx_job_id} text={text}",
+                )
         elif text in ("已停止", "已放弃"):
             self.state.execution_expected = False
             self.state.termination_requested = True
             self.state.execution_complete = False
+            self.page_job.set_execution_state(False)
         elif text in ("停止命令失败", "放弃命令失败"):
             self.state.termination_requested = False
+        elif text == "执行失败":
+            self.state.execution_expected = False
+            self.state.execution_complete = False
+            self.page_job.set_execution_state(False)
         if text.startswith("上传完成"):
             self.state.rx_state_code = 2
             self.state.rx_received = self.state.rx_job_total
@@ -421,7 +505,6 @@ class MainWindow(QMainWindow):
         self.worker.task_status.emit("上传中...", 0)
         self.client.upload_job(
             job_id, gcode, timeout,
-            wait_ready=True,
             progress_cb=lambda t: self.worker.progress.emit(t),
             status_cb=lambda t, p: self.worker.task_status.emit(t, p),
             preroll_bytes=0,
@@ -434,22 +517,52 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._focus_off_before_job()
         crc = crc16_ccitt(gcode)
-        self.worker.log.emit("status", f"开始上传并执行 job={job_id} size={len(gcode)} crc=0x{crc:04x}")
-        self.worker.task_status.emit("上传中...", 0)
-        self.client.upload_job(
-            job_id, gcode, timeout,
-            wait_ready=True if preroll == 0 else False,
-            progress_cb=lambda t: self.worker.progress.emit(t),
-            status_cb=lambda t, p: self.worker.task_status.emit(t, p),
-            preroll_bytes=preroll,
-            start_on_preroll=preroll > 0,
-        )
-        if preroll == 0:
-            self.worker.task_status.emit("执行中...", -1)
-            self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", timeout)
-            self.worker.task_status.emit("执行已启动，等待 RX 状态完成", -1)
-        else:
-            self.worker.task_status.emit("预缓冲执行中，等待 RX 状态完成", -1)
+        total = len(gcode)
+        self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传并执行 job={job_id} size={total} crc=0x{crc:04x} preroll={preroll}")
+
+        # Determine small-file vs large-file path
+        use_preroll = preroll > 0 and total > preroll
+        if preroll > 0 and total <= preroll:
+            self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 ({total} <= {preroll}), 使用 normal upload 路径")
+        self.worker.log.emit("status", f"[EXEC_FLOW] use_preroll={use_preroll} path={'preroll' if use_preroll else 'normal'}")
+
+        # Reset execution state. Completion is received asynchronously from RX.
+        self.state.execution_complete = False
+        self.state.execution_expected = False
+        self.state.termination_requested = False
+
+        try:
+            # Upload phase
+            self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传阶段")
+            self.worker.task_status.emit("上传中...", 0)
+            self.client.upload_job(
+                job_id, gcode, timeout,
+                progress_cb=lambda t: self.worker.progress.emit(t),
+                status_cb=lambda t, p: self.worker.task_status.emit(t, p),
+                preroll_bytes=preroll if use_preroll else 0,
+                start_on_preroll=use_preroll,
+            )
+            self.worker.log.emit("status", f"[EXEC_FLOW] 上传阶段完成")
+
+            # Execution phase
+            if use_preroll:
+                # Large file: preroll path already started execution during upload
+                self.worker.log.emit("status", f"[EXEC_FLOW] 大文件 preroll 路径，执行已在上传中启动")
+                self.worker.task_status.emit("预缓冲执行中，等待 RX 完成", -1)
+            else:
+                # Small file: send EXEC_START after upload complete
+                self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 normal 路径，发送 EXEC_START")
+                self.worker.task_status.emit("执行中...", -1)
+                self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", timeout)
+                self.worker.log.emit("status", f"[EXEC_FLOW] EXEC_START 已发送，等待 RX 完成")
+                self.worker.task_status.emit("执行已启动，等待 RX 完成", -1)
+
+            self.worker.task_status.emit("执行中，等待 RX 完成", -1)
+            self.worker.log.emit("status", "[EXEC_FLOW] 执行已启动，串口控制 worker 已释放")
+        except Exception as exc:
+            self.worker.log.emit("error", f"[EXEC_FLOW] 异常: {exc}")
+            self.worker.task_status.emit("执行失败", -1)
+            raise
 
     def _get_gcode(self) -> bytes:
         gcode = self.page_gcode.get_gcode_bytes()
@@ -457,18 +570,17 @@ class MainWindow(QMainWindow):
             self.worker.log.emit("error", "G-code 内容为空")
             return b""
         try:
-            prepared, removed_g21 = prepare_gcode_for_rx(gcode)
+            payload, diag = prepare_gcode_for_upload(
+                gcode.decode("utf-8", errors="replace"),
+                source=self.state.gcode_path or "editor",
+                preroll_bytes=4096,
+            )
+            # Log diagnostic
+            self.worker.log.emit("status", format_diagnostic(diag))
+            return payload
         except RuntimeError as exc:
             self.worker.log.emit("error", str(exc))
             return b""
-        if not prepared.strip():
-            self.worker.log.emit("error", "G-code 兼容处理后没有可上传内容")
-            return b""
-        if removed_g21:
-            self.worker.log.emit(
-                "status", f"已移除 {removed_g21} 行 G21；RX 固定使用毫米单位"
-            )
-        return prepared
 
     def _begin_job_tracking(self, gcode: bytes, job_id: int) -> None:
         self.state.prev_rx_state_code = self.state.rx_state_code
@@ -479,6 +591,7 @@ class MainWindow(QMainWindow):
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = False
+        self.page_job.set_execution_state(False)
         self._update_monitor()
         self._enqueue_log(
             "status", f"任务上传基线: total_bytes={len(gcode)}"
@@ -487,10 +600,12 @@ class MainWindow(QMainWindow):
     def _on_exec_start(self) -> None:
         job_id = self.page_job.get_job_id()
         timeout = self.page_job.get_timeout()
+        self.state.execution_complete = False
+        self.state.termination_requested = False
 
         def _work():
             self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", timeout)
-            self.worker.task_status.emit("执行中", -1)
+            self.worker.task_status.emit("执行中，等待 RX 完成", -1)
         self._run_job_worker(_work)
 
     def _on_exec_stop(self) -> None:

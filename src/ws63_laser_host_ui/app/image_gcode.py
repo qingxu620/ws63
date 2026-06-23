@@ -245,13 +245,18 @@ def vector_contours_to_gcode(
     for contour in ordered:
         start_x = contour[0][0] * step
         start_y = contour[0][1] * step
-        lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} S0")
+        lines.append(f"M5")  # Ensure laser off before rapid move
+        lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f}")
         first_mark = True
         for x, y in contour[1:]:
-            suffix = f" S{mark_power}" if first_mark else ""
-            lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}{suffix}")
-            first_mark = False
-        lines.append(f"G0 X{contour[-1][0] * step:.3f} Y{contour[-1][1] * step:.3f} S0")
+            if first_mark:
+                lines.append(f"M3 S{mark_power}")
+                lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
+                first_mark = False
+            else:
+                lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
+        lines.append(f"M5")  # Turn off laser after contour
+        lines.append(f"G0 X{contour[-1][0] * step:.3f} Y{contour[-1][1] * step:.3f}")
     lines.extend(("M5", "M30"))
     return "\n".join(lines) + "\n"
 
@@ -291,11 +296,9 @@ def raster_rows_to_gcode(
             else:
                 x0, x1 = (end + 1) * x_step, start * x_step
             y_mm = y * y_step
-            lines.extend(
-                (
-                    f"G0 X{x0:.3f} Y{y_mm:.3f} S0",
-                    f"G1 X{x1:.3f} Y{y_mm:.3f} S{mark_power}",
-                )
-            )
+            lines.append(f"M5")  # Ensure laser off before rapid move
+            lines.append(f"G0 X{x0:.3f} Y{y_mm:.3f}")
+            lines.append(f"M3 S{mark_power}")
+            lines.append(f"G1 X{x1:.3f} Y{y_mm:.3f}")
     lines.extend(("M5", "M30"))
     return "\n".join(lines) + "\n"

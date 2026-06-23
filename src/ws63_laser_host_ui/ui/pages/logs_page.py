@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit,
     QVBoxLayout, QWidget, QFileDialog,
@@ -162,8 +163,12 @@ class LogsPage(QWidget):
         self._line_count += 1
         if self._line_count > 4000:
             cursor = self.log_text.textCursor()
-            cursor.movePosition(cursor.Start)
-            cursor.movePosition(cursor.Down, cursor.KeepAnchor, 500)
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.Down,
+                QTextCursor.MoveMode.KeepAnchor,
+                500,
+            )
             cursor.removeSelectedText()
             self._line_count -= 500
         if not self._paused:

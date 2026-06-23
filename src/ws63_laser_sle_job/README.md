@@ -44,6 +44,9 @@ python3 build.py -c ws63-liteos-app menuconfig
 ## Host UART Commands
 
 All commands are ASCII lines except the raw G-code payload after `@BEGIN`.
+ASCII CAN (`0x18`) is reserved as an out-of-band transaction resync byte and is
+recognized in every TX UART parser mode. TX responds with
+`@OK resync rx=aborted` only after `PKT_JOB_ABORT` is acknowledged by RX.
 
 ```text
 @BEGIN <job_id> <total_size> <crc16_hex>\n

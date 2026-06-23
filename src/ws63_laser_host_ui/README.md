@@ -49,6 +49,7 @@ main.py  →  MainWindow
 - Host 不做自动 `@STATUS` 轮询；“查询状态”按钮只在用户手动点击时发送一次。
 - 上传阶段按已接收字节显示下载进度。
 - 执行阶段只显示任务处于执行中或完成，不显示执行行数进度。
+- `EXEC_START` 确认后立即释放串口命令 worker；执行期间仍可查询状态、软件停止或放弃任务。
 - 正常完成优先由 RX 日志中的 `EXEC_DONE` 被动确认；停止或放弃不会误报为完成。
 
 ## Protocol
@@ -59,6 +60,12 @@ PC Host  →  USB UART  →  TX Board  →  SLE  →  RX Board  →  Laser
 
 Commands: `@BEGIN`, `@DATA_READY`, `@EXEC_START`, `@EXEC_STOP`, `@ABORT`,
 `@STATUS`, `@FOCUS_ON/OFF`, and `@RX MODE=GRBL`.
+
+Before every upload, Host sends the reserved ASCII CAN byte (`0x18`). TX
+recognizes it outside both command and raw-data parsing, aborts any prior RX job,
+clears its local upload transaction, and returns `@OK resync rx=aborted`. Host
+does not send `@BEGIN` until that acknowledgement arrives. The G-code validator
+rejects `0x18` so it cannot be confused with payload data.
 
 `@EXEC_STOP` and `@ABORT` are software safety controls. They are not a
 hardware emergency power cut.

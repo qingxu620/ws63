@@ -224,15 +224,21 @@ static bool execute_line(const char *line)
     bool drain_and_off = line_contains_mcode(line, 5);
 
     if (!sle_job_gcode_process_line(line, (int)strlen(line), cmds, 4, &cmd_count)) {
-        osal_printk("[JOB_EXEC] parse fail line=%u text=\"%s\"\r\n",
+        osal_printk("[RX_GCODE_ERR] line=%u reason=parse_failed raw=\"%.80s\"\r\n",
                     (unsigned int)(g_executed_lines + 1U), line);
         return false;
+    }
+    if (cmd_count > 0) {
+        osal_printk("[JOB_EXEC] line=%u cmd_count=%d cmd0=%d\r\n",
+                    (unsigned int)(g_executed_lines + 1U), cmd_count, cmds[0].cmd);
     }
     for (int i = 0; i < cmd_count; i++) {
         while (sle_job_motion_executor_queue_depth() >= SLE_JOB_MOTION_QUEUE_OK_WATERMARK && !g_abort_requested) {
             osal_msleep(1);
         }
         if (g_abort_requested) {
+            osal_printk("[JOB_EXEC] abort requested during enqueue line=%u\r\n",
+                        (unsigned int)(g_executed_lines + 1U));
             return false;
         }
         if (!sle_job_motion_executor_enqueue(&cmds[i])) {
@@ -242,6 +248,7 @@ static bool execute_line(const char *line)
         }
     }
     if (drain_and_off) {
+        osal_printk("[JOB_EXEC] M5 detected, draining motion queue\r\n");
         wait_motion_idle(SLE_JOB_MOTION_END_DRAIN_TIMEOUT_MS);
         laser_force_off();
     }
@@ -283,25 +290,36 @@ static int job_exec_task(void *arg)
         return 0;
     }
 
-    osal_printk("[JOB_EXEC] start job=%u size=%u\r\n",
-                (unsigned int)sle_job_cache_job_id(), (unsigned int)sle_job_cache_total_size());
+    osal_printk("[JOB_EXEC] start job=%u size=%u cache_available=%u all_received=%d\r\n",
+                (unsigned int)sle_job_cache_job_id(), (unsigned int)sle_job_cache_total_size(),
+                (unsigned int)sle_job_cache_available(), (int)sle_job_cache_is_all_received());
     g_executed_lines = 0;
     uint32_t wait_start_ms = 0;
+    bool first_byte_logged = false;
 
     while (!g_abort_requested) {
         int ch = sle_job_cache_read_byte();
         if (ch < 0) {
             if (sle_job_cache_is_all_received()) {
+                osal_printk("[JOB_EXEC] cache exhausted, all_received=1, exiting loop\r\n");
                 break;
+            }
+            if (!first_byte_logged) {
+                osal_printk("[JOB_EXEC] waiting for first byte, cache_available=%u all_received=%d\r\n",
+                            (unsigned int)sle_job_cache_available(), (int)sle_job_cache_is_all_received());
+                first_byte_logged = true;
             }
             if (wait_start_ms == 0) {
                 wait_start_ms = (uint32_t)uapi_systick_get_ms();
             }
             uint32_t wait_elapsed = (uint32_t)uapi_systick_get_ms() - wait_start_ms;
             if (wait_elapsed >= SLE_JOB_EXEC_WAIT_DATA_TIMEOUT_MS) {
-                osal_printk("[JOB_EXEC_WAIT_TIMEOUT] job=%u wait_ms=%u avail=%u all_received=%d\r\n",
-                            (unsigned int)sle_job_cache_job_id(), (unsigned int)wait_elapsed,
-                            (unsigned int)sle_job_cache_available(), (int)sle_job_cache_is_all_received());
+                osal_printk("[RX_WAIT_TIMEOUT] consumed=%u available=%u total=%u all_received=%d state=%s\r\n",
+                            (unsigned int)sle_job_cache_received(),
+                            (unsigned int)sle_job_cache_available(),
+                            (unsigned int)sle_job_cache_total_size(),
+                            (int)sle_job_cache_is_all_received(),
+                            state_name(g_state));
                 sle_job_manager_safe_stop("exec-wait-timeout");
                 g_exec_active = false;
                 return 0;
@@ -534,11 +552,16 @@ static void handle_exec_start(const sle_job_packet_view_t *pkt)
 {
     focus_force_off();
     if (pkt->len != sizeof(sle_job_exec_start_payload_t)) {
+        osal_printk("[EXEC_START] bad pkt_len=%u need=%u\r\n",
+                    (unsigned int)pkt->len, (unsigned int)sizeof(sle_job_exec_start_payload_t));
         send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB);
         return;
     }
     sle_job_exec_start_payload_t start;
     memcpy(&start, pkt->payload, sizeof(start));
+    osal_printk("[EXEC_START] 收到 EXEC_START job=%u state=%s exec_active=%d cache_rx=%u cache_total=%u\r\n",
+                (unsigned int)start.job_id, state_name(g_state), (int)g_exec_active,
+                (unsigned int)sle_job_cache_received(), (unsigned int)sle_job_cache_total_size());
     sle_job_status_t st = validate_job_execution(start.job_id);
     if (st == SLE_JOB_STATUS_OK) {
         g_exec_active = true;
@@ -554,7 +577,11 @@ static void handle_exec_start(const sle_job_packet_view_t *pkt)
         if (launch_st != SLE_JOB_STATUS_OK) {
             osal_printk("[EXEC_START] launch failed st=%u\r\n", launch_st);
             sle_job_manager_safe_stop("exec-launch-fail");
+        } else {
+            osal_printk("[EXEC_START] launch success, job_exec_task started\r\n");
         }
+    } else {
+        osal_printk("[EXEC_START] validate failed st=%u\r\n", st);
     }
 }
 

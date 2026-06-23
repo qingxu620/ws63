@@ -59,6 +59,21 @@ static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
 static char g_line[TX_LINE_MAX];
 static uint16_t g_line_len = 0;
 
+static void clear_local_job_state(void)
+{
+    g_job_id = 0;
+    g_job_total = 0;
+    g_job_offset = 0;
+    g_job_crc = 0;
+    g_data_mode = false;
+    g_preroll_bytes = 0;
+    g_preroll_signaled = false;
+    g_job_chunk_len = 0;
+    g_data_log_next = TX_DATA_RX_LOG_STEP;
+    g_diag_data_count = 0;
+    g_line_len = 0;
+}
+
 static uint16_t next_seq(void)
 {
     uint16_t seq = g_tx_seq++;
@@ -138,7 +153,20 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
 
     for (uint32_t retry = 0; retry <= JOB_TX_RETRY_MAX; retry++) {
         uint32_t reconnect_wait = 0;
+        uint32_t reconnect_start = (uint32_t)uapi_systick_get_ms();
         while (!sle_job_client_is_connected()) {
+            uint32_t reconnect_elapsed =
+                (uint32_t)uapi_systick_get_ms() - reconnect_start;
+            if (reconnect_elapsed >= JOB_TX_CONNECT_WAIT_MS) {
+                osal_printk("[JOB_TX_WAIT_CONN_TIMEOUT] type=0x%02x seq=%u waited=%u status=%s\r\n",
+                            type, seq, (unsigned int)reconnect_elapsed,
+                            sle_job_client_get_status());
+                g_wait_active = false;
+                g_wait_ack_seq = 0;
+                host_sendf("@NACK type=%u seq=%u status=%u reason=no_link\r\n",
+                           type, seq, JOB_STATUS_NOT_READY);
+                return ERRCODE_FAIL;
+            }
             if ((reconnect_wait % 50U) == 0U) {
                 osal_printk("[JOB_TX_WAIT_CONN] type=0x%02x seq=%u retry=%u waited=%u status=%s\r\n",
                             type, seq, (unsigned int)retry, (unsigned int)reconnect_wait,
@@ -196,6 +224,39 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     g_wait_ack_seq = 0;
     host_sendf("@NACK type=%u seq=%u status=%u\r\n", type, seq, g_wait_status);
     return ERRCODE_FAIL;
+}
+
+static errcode_t abort_rx_and_clear_transaction(const char *reason)
+{
+    uint32_t old_job = g_job_id;
+    uint32_t old_offset = g_job_offset;
+    uint32_t old_total = g_job_total;
+    bool was_data_mode = g_data_mode;
+
+    /* Stop accepting bytes for the stale transaction before waiting on SLE. */
+    clear_local_job_state();
+    osal_printk("[JOB_TX_RESYNC] reason=%s old_job=%u off=%u/%u data_mode=%d connected=%d\r\n",
+                (reason != NULL) ? reason : "unknown", (unsigned int)old_job,
+                (unsigned int)old_offset, (unsigned int)old_total,
+                (int)was_data_mode, (int)sle_job_client_is_connected());
+
+    if (!sle_job_client_is_connected()) {
+        osal_printk("[JOB_TX_RESYNC] RX abort not confirmed: SLE disconnected\r\n");
+        return ERRCODE_FAIL;
+    }
+
+    errcode_t ret = send_packet_wait_ack(PKT_JOB_ABORT, NULL, 0);
+    osal_printk("[JOB_TX_RESYNC] RX abort result=0x%x\r\n", ret);
+    return ret;
+}
+
+static void handle_uart_resync(void)
+{
+    if (abort_rx_and_clear_transaction("uart-can") == ERRCODE_SUCC) {
+        host_sendf("@OK resync rx=aborted\r\n");
+    } else {
+        host_sendf("@ERR resync_failed rx=unconfirmed\r\n");
+    }
 }
 
 static void response_cb(const uint8_t *data, uint16_t length)
@@ -337,9 +398,7 @@ static void handle_data_byte(uint8_t ch)
     if (g_job_chunk_len >= JOB_TX_DATA_CHUNK_MAX || g_job_offset >= g_job_total) {
         if (flush_job_chunk() != ERRCODE_SUCC) {
             osal_printk("[JOB_TX] chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
-            g_data_mode = false;
-            g_job_chunk_len = 0;
-            send_packet_wait_ack(PKT_JOB_ABORT, NULL, 0);
+            (void)abort_rx_and_clear_transaction("chunk-send-fail");
             host_sendf("@ERR chunk_send_fail_abort\r\n");
             return;
         }
@@ -385,6 +444,9 @@ static void handle_data_byte(uint8_t ch)
             osal_printk("[JOB_TX] job upload complete job=%u size=%u crc=0x%04x\r\n",
                         (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
             host_sendf("@JOB_READY job=%u size=%u\r\n", (unsigned int)g_job_id, (unsigned int)g_job_total);
+        } else {
+            (void)abort_rx_and_clear_transaction("job-end-fail");
+            host_sendf("@ERR job_end_failed_abort\r\n");
         }
     }
 }
@@ -438,6 +500,7 @@ static void handle_command_line(char *line)
             return;
         }
         if (send_job_begin((uint32_t)job_id, (uint32_t)total, (uint16_t)crc) != ERRCODE_SUCC) {
+            (void)abort_rx_and_clear_transaction("job-begin-fail");
             host_sendf("@ERR begin_failed\r\n");
             return;
         }
@@ -488,23 +551,19 @@ static void handle_command_line(char *line)
         return;
     }
     if (strcmp(line, "@ABORT") == 0) {
-        send_simple_control(PKT_JOB_ABORT);
+        if (abort_rx_and_clear_transaction("host-abort") == ERRCODE_SUCC) {
+            host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)PKT_JOB_ABORT);
+        } else {
+            host_sendf("@ERR abort_failed rx=unconfirmed\r\n");
+        }
         return;
     }
     if (strcmp(line, "@RESET") == 0) {
-        g_data_mode = false;
-        g_job_offset = 0;
-        g_line_len = 0;
-        g_wait_active = false;
-        g_wait_got_ack = false;
-        g_wait_ack_seq = 0;
-        g_wait_status = JOB_STATUS_INTERNAL_ERROR;
-        g_preroll_bytes = 0;
-        g_preroll_signaled = false;
-        while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
+        if (abort_rx_and_clear_transaction("host-reset") == ERRCODE_SUCC) {
+            host_sendf("@OK reset rx=aborted\r\n");
+        } else {
+            host_sendf("@ERR reset_failed rx=unconfirmed\r\n");
         }
-        host_sendf("@OK reset\r\n");
-        osal_printk("[JOB_TX] reset by command\r\n");
         return;
     }
     if (strcmp(line, "@STATUS") == 0) {
@@ -595,12 +654,10 @@ static int uart_rx_task(void *arg)
             if (g_data_mode) {
                 data_idle_ticks++;
                 if (data_idle_ticks >= TX_DATA_MODE_TIMEOUT_TICKS) {
-                    osal_printk("[JOB_TX] data mode timeout, resetting\r\n");
-                    g_data_mode = false;
-                    g_job_offset = 0;
-                    g_line_len = 0;
+                    errcode_t reset_ret = abort_rx_and_clear_transaction("data-mode-timeout");
                     data_idle_ticks = 0;
-                    host_sendf("@ERR data_mode_timeout\r\n");
+                    host_sendf("@ERR data_mode_timeout recovery=%s\r\n",
+                               (reset_ret == ERRCODE_SUCC) ? "safe" : "unconfirmed");
                 } else if ((data_idle_ticks % TX_UART_IDLE_LOG_TICKS) == 0U) {
                     osal_printk("[JOB_TX_UART_IDLE] data_mode=1 off=%u/%u status=%s\r\n",
                                 (unsigned int)g_job_offset, (unsigned int)g_job_total,
@@ -620,6 +677,12 @@ static int uart_rx_task(void *arg)
         }
         data_idle_ticks = 0;
         idle_ticks = 0;
+
+        /* ASCII CAN is an out-of-band transaction reset in every parser mode. */
+        if (ch == JOB_TX_UART_RESYNC_BYTE) {
+            handle_uart_resync();
+            continue;
+        }
 
         if (g_data_mode) {
             handle_data_byte(ch);

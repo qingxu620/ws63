@@ -132,6 +132,27 @@ def _apply_global_style(app: QApplication) -> None:
             border-color: #059669;
         }
 
+        QPushButton#btnFocus {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #10b981, stop:1 #059669);
+            border: 1px solid #10b981; color: white;
+        }
+        QPushButton#btnFocus:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #059669, stop:1 #047857);
+            border-color: #059669;
+        }
+        QPushButton#btnFocus[active="true"] {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #ef4444, stop:1 #dc2626);
+            border: 1px solid #ef4444; color: white;
+        }
+        QPushButton#btnFocus[active="true"]:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #dc2626, stop:1 #b91c1c);
+            border-color: #dc2626;
+        }
+
         QPushButton#btnWarn {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #f59e0b, stop:1 #d97706);

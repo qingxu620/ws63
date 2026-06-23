@@ -5,6 +5,7 @@
 #include "sle_job_gcode_processor.h"
 #include "sle_job_config.h"
 #include "sle_job_gcode_parser.h"
+#include "soc_osal.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,8 @@ bool sle_job_gcode_process_line(const char *line, int len, sle_job_motion_cmd_t 
     bool line_processed = false;
 
     if (out_count == NULL || out_cmds == NULL || max_cmds <= 0) {
+        osal_printk("[RX_GCODE_ERR] invalid args out_count=%p out_cmds=%p max_cmds=%d\r\n",
+                    (const void *)out_count, (const void *)out_cmds, max_cmds);
         return false;
     }
     *out_count = 0;
@@ -97,6 +100,7 @@ bool sle_job_gcode_process_line(const char *line, int len, sle_job_motion_cmd_t 
         sle_job_gcode_add_char(&gc, line[i]);
     }
     if (!sle_job_gcode_parse(&gc)) {
+        osal_printk("[RX_GCODE_ERR] parse failed len=%d raw=\"%.80s\"\r\n", len, line);
         return false;
     }
 
@@ -130,6 +134,10 @@ bool sle_job_gcode_process_line(const char *line, int len, sle_job_motion_cmd_t 
         } else if (m_val == 5) {
             g_laser_enabled = false;
             laser_off_requested = true;
+        } else if (m_val == 30) {
+            /* M30: program end — turn off laser, treat as success */
+            g_laser_enabled = false;
+            laser_off_requested = true;
         }
         line_processed = true;
     }
@@ -151,9 +159,13 @@ bool sle_job_gcode_process_line(const char *line, int len, sle_job_motion_cmd_t 
         } else if (g_val == 91) {
             g_absolute_mode = false;
             line_processed = true;
-        } else if (g_val == 0 || g_val == 1 || g_val == 2 || g_val == 3) {
+        } else if (g_val == 0 || g_val == 1) {
             g_motion_mode = g_val;
             line_processed = true;
+        } else if (g_val == 2 || g_val == 3) {
+            /* G2/G3: arc interpolation not implemented — reject */
+            osal_printk("[RX_UNSUPPORTED_CMD] cmd=G%d raw=\"%.80s\"\r\n", g_val, gc.line);
+            return false;
         } else if ((g_val == 28 || g_val == 92) && count < max_cmds) {
             fill_cmd_header(&out_cmds[count], SLE_JOB_CMD_SET_ORIGIN);
             count++;

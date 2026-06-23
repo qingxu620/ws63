@@ -23,8 +23,11 @@ except ImportError:
 BAUD_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 214
 JOB_MAX_SIZE = 131072
-GCODE_LINE_MAX_BYTES = 159
+GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
 DATA_ACK_TIMEOUT_MIN_S = 10.0
+JOB_COMMIT_TIMEOUT_MIN_S = 12.0
+TX_RESYNC_TIMEOUT_MIN_S = 12.0
+TX_UART_RESYNC_BYTE = 0x18
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
 JOB_PREROLL_BYTES = 4096
@@ -272,18 +275,34 @@ class SleJobSerialClient:
             self.send_line(command)
             return self.wait_for(expect, timeout)
 
+    def _resync_tx_locked(self, timeout: float) -> WaitResult:
+        """Abort any prior RX job and reset TX parsing in every UART mode.
+
+        The caller must hold ``_command_lock``. ASCII CAN (0x18) is reserved as
+        an out-of-band byte, so stale raw-data mode cannot consume it as G-code.
+        TX only acknowledges after RX confirms PKT_JOB_ABORT.
+        """
+        self._drain_lines()
+        self._on_log("status", "同步 TX/RX 任务状态")
+        self.write_bytes(bytes((TX_UART_RESYNC_BYTE,)), "<resync 0x18>")
+        result = self.wait_for("@OK resync rx=aborted", timeout)
+        self._on_log("status", f"TX/RX 同步完成 {result.elapsed_ms}ms")
+        return result
+
     def upload_job(self, job_id: int, gcode: bytes, timeout: float, *,
-                   wait_ready: bool = True,
                    progress_cb: Optional[Callable[[str], None]] = None,
                    status_cb: Optional[Callable[[str, float], None]] = None,
                    preroll_bytes: int = 0,
-                   start_on_preroll: bool = False) -> None:
+                   start_on_preroll: bool = False,
+                   recover_tx: bool = True) -> None:
         if not gcode:
             raise RuntimeError("G-code 内容为空")
         if len(gcode) > JOB_MAX_SIZE:
             raise RuntimeError(
                 f"G-code 超过 TX/RX 任务上限: {len(gcode)}/{JOB_MAX_SIZE} bytes"
             )
+        if TX_UART_RESYNC_BYTE in gcode:
+            raise RuntimeError("G-code 包含保留的 UART 同步控制字节 0x18")
         if preroll_bytes > 0 and not start_on_preroll:
             raise RuntimeError("preroll 只能用于上传并执行，不能用于仅上传")
 
@@ -292,26 +311,33 @@ class SleJobSerialClient:
         t_begin = time.perf_counter()
 
         with self._command_lock:
-            self._drain_lines()
-            if status_cb:
-                status_cb("正在建立任务", 0)
-            cmd = f"@BEGIN {job_id} {total} {crc:04x}"
-            if start_on_preroll and preroll_bytes > 0:
-                cmd += f" preroll={preroll_bytes}"
-            self.send_line(cmd)
-            self.wait_for(f"@DATA_READY job={job_id}", timeout)
-            t_ready = time.perf_counter()
-            self._on_log("status", f"DATA_READY {(t_ready-t_begin)*1000:.0f}ms")
-            if status_cb:
-                status_cb("上传中 0/{} bytes".format(total), 0)
+            resync_timeout = max(timeout, TX_RESYNC_TIMEOUT_MIN_S)
+            if recover_tx:
+                self._resync_tx_locked(resync_timeout)
+            else:
+                self._drain_lines()
 
-            offset = 0
-            chunk_count = 0
-            t_data = time.perf_counter()
-            preroll_done = False
-            data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
-
+            transaction_started = False
             try:
+                if status_cb:
+                    status_cb("正在建立任务", 0)
+                cmd = f"@BEGIN {job_id} {total} {crc:04x}"
+                if start_on_preroll and preroll_bytes > 0:
+                    cmd += f" preroll={preroll_bytes}"
+                transaction_started = True
+                self.send_line(cmd)
+                self.wait_for(f"@DATA_READY job={job_id}", timeout)
+                t_ready = time.perf_counter()
+                self._on_log("status", f"DATA_READY {(t_ready-t_begin)*1000:.0f}ms")
+                if status_cb:
+                    status_cb("上传中 0/{} bytes".format(total), 0)
+
+                offset = 0
+                chunk_count = 0
+                t_data = time.perf_counter()
+                preroll_done = False
+                data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
+
                 while offset < total:
                     end = min(offset + JOB_DATA_CHUNK_SIZE, total)
                     chunk = gcode[offset:end]
@@ -343,25 +369,34 @@ class SleJobSerialClient:
                         self._on_log("status", "DATA_RESUME OK")
                         if status_cb:
                             status_cb(f"继续上传 {offset}/{total} bytes", pct)
-            except Exception:
-                if preroll_done:
-                    try:
-                        self.send_line("@ABORT")
-                    except Exception:
-                        pass
-                raise
 
-            data_elapsed = time.perf_counter() - t_data
-            rate = total / data_elapsed if data_elapsed > 0 else 0
-            self._on_log("status", f"DATA_DONE {data_elapsed*1000:.0f}ms rate={rate:.0f}B/s chunks={chunk_count}")
+                data_elapsed = time.perf_counter() - t_data
+                rate = total / data_elapsed if data_elapsed > 0 else 0
+                self._on_log("status", f"DATA_DONE {data_elapsed*1000:.0f}ms rate={rate:.0f}B/s chunks={chunk_count}")
 
-            if wait_ready:
-                self.wait_for(f"@JOB_READY job={job_id}", timeout)
+                # The final DATA ACK only confirms that TX accepted the UART
+                # bytes. JOB_READY is the transaction commit barrier: TX has
+                # sent JOB_END and RX has acknowledged the complete job.
+                commit_timeout = max(timeout, JOB_COMMIT_TIMEOUT_MIN_S)
+                self._on_log(
+                    "status",
+                    f"JOB_COMMIT_WAIT job={job_id} timeout={commit_timeout:.1f}s",
+                )
+                self.wait_for(f"@JOB_READY job={job_id}", commit_timeout)
                 total_elapsed = time.perf_counter() - t_begin
                 total_rate = total / total_elapsed if total_elapsed > 0 else 0
-                self._on_log("status", f"JOB_READY total={total_elapsed*1000:.0f}ms rate={total_rate:.0f}B/s")
-            else:
-                self._on_log("status", "上传完成，跳过 JOB_READY 等待")
+                self._on_log(
+                    "status",
+                    f"JOB_READY commit=confirmed total={total_elapsed*1000:.0f}ms "
+                    f"rate={total_rate:.0f}B/s",
+                )
+            except Exception:
+                if transaction_started:
+                    try:
+                        self._resync_tx_locked(resync_timeout)
+                    except Exception as resync_exc:
+                        self._on_log("error", f"上传失败后的安全同步也失败: {resync_exc}")
+                raise
 
 
 class SerialLogMonitor:
