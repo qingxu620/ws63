@@ -1,4 +1,6 @@
-# WS63 Laser SLE Job Host
+# WS63 Laser SLE Job Host (Deprecated)
+
+**本模块已废弃，活跃开发请见 `src/ws63_laser_host_ui/`。**
 
 这是 `ws63_laser_sle_job` 的 PC 端调试上位机。
 

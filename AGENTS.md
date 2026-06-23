@@ -17,8 +17,8 @@ Do not treat Windows paths under /mnt/c as the active development workspace unle
 The current active development focus is:
 
 - src/ws63_laser_sle_job/
-- src/ws63_laser_sle_job_host/
-- src/ws63_screen_lvgl/
+- src/ws63_laser_host_ui/
+- src/ws63_screen_panel_lvgl/
 - src/ws63_laser_rx_unified/
 - MSP3223/
 
@@ -118,7 +118,7 @@ When modifying SLE transport logic:
 
 ## Host Tool Rules
 
-For src/ws63_laser_sle_job_host/:
+For src/ws63_laser_host_ui/:
 
 1. Keep Python scripts simple and inspectable.
 2. Prefer clear logs over hidden automation.
@@ -161,22 +161,20 @@ For `src/deprecated/ws63_screen_st7796_ft6336/`:
    - Product integration last: status display, parameter setting, and SLE central-control UI.
 7. Avoid full-framebuffer designs unless memory is explicitly budgeted. For MSP3223, a full 240x320 RGB565 framebuffer is 153600 bytes; prefer line buffers, tile buffers, or partial refresh.
 8. When modifying screen code, OpenCode/Codex should compile the screen firmware unless the user explicitly says not to compile.
-9. Screen firmware archive path should sit beside TX/RX outputs:
-   - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_screen_all.fwpkg`
-   - Timestamped copies should use the same `fwstage/<timestamp>/` convention when a script supports it.
+9. Screen firmware archive path and build rules: see **Automation Scripts §3**.
 10. Do not auto-flash the screen board. Burning remains a Win11 manual BurnTool step.
 11. Do not use `src/4.0inch_SPI/` as an active reference. Use `MSP3223/init/ILI9341V_Init.txt`, `MSP3223/docs/driver_ic/ILI9341_Datasheet.pdf`, and the MSP3223 FT6336U documents instead.
 
 ## LVGL Module Rules
 
-For `src/ws63_screen_lvgl/`:
+For `src/ws63_screen_panel_lvgl/`:
 
 1. This module is the LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are temporary deprecated-driver references until the display driver is ported.
 2. Keep it separate from laser modules. Do not integrate SLE/Host logic unless explicitly asked.
-3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y`.
+3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y` (minimal port) or `CONFIG_ENABLE_LVGL_PANEL=y` (industrial panel UI).
 4. `CONFIG_ENABLE_LVGL_SAMPLE` and `CONFIG_ENABLE_SCREEN_SAMPLE` are **mutually exclusive** (shared hardware). Only one can be enabled at a time.
-5. LVGL source lives at `src/ws63_screen_lvgl/src/lvgl/` (v9.3.0). Do not modify LVGL core source unless patching a build warning; prefer port-layer changes.
-6. LVGL config is `src/ws63_screen_lvgl/lv_conf.h`. Key settings:
+5. LVGL source lives at `src/ws63_screen_panel_lvgl/src/lvgl/` (v9.3.0). Do not modify LVGL core source unless patching a build warning; prefer port-layer changes.
+6. LVGL config is `src/ws63_screen_panel_lvgl/lv_conf.h`. Key settings:
    - `LV_COLOR_DEPTH=16`, `LV_COLOR_16_SWAP=1`
    - `LV_MEM_SIZE=40*1024` (40KB heap)
    - `LV_FONT_DEFAULT=&lv_font_montserrat_14`
@@ -200,17 +198,15 @@ For `src/ws63_laser_rx_unified/`:
 3. Current build enable switch is `CONFIG_LASER_RX_UNIFIED=y`.
 4. Current mainline is route-based integration, not the old shared `rx_stream` approach.
 5. `rx_core/rx_stream.c` and `transports/uart_transport.c` are experimental Phase 2A prototype files. Do not use them as the three-mode integration mainline unless explicitly requested.
-6. R4A compile-only boot validation passed. R4B starts only the route-local SLE Job RX, makes `RX_ROUTE_SLE_JOB` active, and reaches SLE server ready; Legacy UART/WiFi remain compiled but their transport tasks must not start. R4B-job TX + Host execution validation has passed repeatedly with the stable TX transmitter, `src/ws63_laser_sle_job_host`, and `preroll=4096`, including `@STATUS`, `@DATA_READY`, `DATA_RESUME`, `JOB_READY`, `EXEC_DONE`, and final laser OFF.
+6. R4A compile-only boot validation passed. R4B starts only the route-local SLE Job RX, makes `RX_ROUTE_SLE_JOB` active, and reaches SLE server ready; Legacy UART/WiFi remain compiled but their transport tasks must not start. R4B-job TX + Host execution validation has passed repeatedly with the stable TX transmitter, `src/ws63_laser_host_ui`, and `preroll=4096`, including `@STATUS`, `@DATA_READY`, `DATA_RESUME`, `JOB_READY`, `EXEC_DONE`, and final laser OFF.
 7. Later routes should reuse mature source behavior first:
    - Legacy UART route: `src/ws63_laser_single/`
    - Legacy WiFi route: `src/ws63_laser_wifi/`
    - SLE Job route: `src/ws63_laser_sle_job/receiver/`
 8. Do not force USART/WiFi Grbl parsing and SLE job packet/cache parsing through one common parser.
-9. LaserGRBL validation settings are route-specific. Do not use one streaming mode to evaluate every route. Legacy UART is not required to use Buffered and should be validated first with Grbl + UsbSerial + Synchronous. Legacy WiFi currently uses Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000` as its fixed acceptance baseline. SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_sle_job_host`.
+9. LaserGRBL validation settings are route-specific. Do not use one streaming mode to evaluate every route. Legacy UART is not required to use Buffered and should be validated first with Grbl + UsbSerial + Synchronous. Legacy WiFi currently uses Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000` as its fixed acceptance baseline. SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_host_ui`.
 10. Internal motion command compatibility headers should not be named `protocol.h`; use names such as `rx_motion_protocol.h` to avoid confusion with SLE `common/protocol.h`.
-11. Unified RX firmware archive path should sit beside TX/RX/screen outputs:
-   - `/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`
-   - Timestamped copies should use the same `fwstage/<timestamp>/` convention.
+11. Unified RX firmware archive path and build rules: see **Automation Scripts §5**.
 12. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
 13. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
 14. The integrated SLE Job route must keep its cache at 131072 bytes and preserve the stable protocol framing, CRC, ACK/NACK, sequence, duplicate, cache, and preroll behavior. Its Host demo preroll baseline remains 4096.
@@ -243,14 +239,14 @@ For `src/ws63_laser_rx_unified/`:
 
    For normal TX/RX firmware builds, prefer `./scripts/build_sle_job_firmwares.sh --both` because it builds and archives TX/RX outputs separately. Use raw `build.py` only for menuconfig or low-level SDK debugging.
 
-   For screen firmware builds, prefer `./scripts/build_screen_firmware.sh` because it switches to the correct config (`CONFIG_ENABLE_LVGL_SAMPLE=y` or `CONFIG_ENABLE_SCREEN_SAMPLE=y`), disables all competing samples, builds, and archives the output. Use raw `build.py` only for menuconfig or low-level SDK debugging.
+   For screen firmware builds, prefer `./scripts/build_screen_firmware.sh` because it switches to the correct config (`CONFIG_ENABLE_LVGL_SAMPLE=y`, `CONFIG_ENABLE_LVGL_PANEL=y`, or `CONFIG_ENABLE_SCREEN_SAMPLE=y`), disables all competing samples, builds, and archives the output. Use raw `build.py` only for menuconfig or low-level SDK debugging.
 
    For unified RX firmware builds, prefer `./scripts/build_rx_unified_firmware.sh`. It switches to `CONFIG_LASER_RX_UNIFIED=y`, builds, and archives the generated package as `src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg`.
 
    The SDK firmware output directory `src/output/ws63/fwpkg/ws63-liteos-app/` is shared and each build overwrites `ws63-liteos-app_all.fwpkg`. When building multiple firmware variants, the correct automated flow is serial: configure one variant, build it, immediately copy the generated package into `src/output/ws63/fwstage/latest/` with a function-specific name, then configure and build the next variant. Never assume multiple variants remain available in the raw `fwpkg/ws63-liteos-app/` output directory.
 
 4. Do NOT move the firmware project to `/mnt/c/...` or Windows Desktop for compilation.
-5. Host tool source (`src/ws63_laser_sle_job_host/`) can be edited in WSL2, but **running and serial debugging happen on Win11**.
+5. Host tool source (`src/ws63_laser_host_ui/`) can be edited in WSL2, but **running and serial debugging happen on Win11**.
 6. Host tool is synchronized to the Win11 Desktop run directory using `scripts/sync_host_to_win.sh`. Manual copy is only a fallback when explicitly requested.
 7. **Win11 COM 口不固定**，可能因 USB 口、拓展坞、线缆、驱动、插入顺序变化。不要假设 COM8/COM24/COM26 或 COM27/COM6/COM24 仍然有效，这些只能作为历史示例。
 8. 每次新的运行/调试会话开始时，必须询问用户当前串口角色映射：
@@ -291,9 +287,9 @@ For `src/ws63_laser_rx_unified/`:
 
 **用途：** 将 WSL2 中的 Host 上位机源码同步到 Win11 桌面运行目录。
 
-**WSL2 源码目录：** `/root/fbb_ws63/src/ws63_laser_sle_job_host/`
+**WSL2 源码目录：** `/root/fbb_ws63/src/ws63_laser_host_ui/`
 
-**Win11 运行目录：** `/mnt/c/Users/ZKX/OneDrive/Desktop/ws63_laser_sle_job_host/`
+**Win11 运行目录：** `/mnt/c/Users/ZKX/OneDrive/Desktop/ws63_laser_host_ui/`
 
 **使用命令：**
 
@@ -305,7 +301,7 @@ cd /root/fbb_ws63
 **Win11 启动命令：**
 
 ```cmd
-cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_sle_job_host
+cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_host_ui
 python main.py
 ```
 
@@ -361,7 +357,7 @@ cd /root/fbb_ws63
 
 **路径：** `/root/fbb_ws63/scripts/build_screen_firmware.sh`
 
-**用途：** 自动切换到屏幕固件配置（LVGL 或自检页），关闭其它 app sample，编译并归档。
+**用途：** 自动切换到屏幕固件配置（LVGL、工业中控面板或自检页），关闭其它 app sample，编译并归档。
 
 **使用命令：**
 
@@ -373,6 +369,9 @@ cd /root/fbb_ws63
 
 # 明确编译 LVGL
 ./scripts/build_screen_firmware.sh --lvgl
+
+# 编译工业中控面板 UI
+./scripts/build_screen_firmware.sh --panel
 
 # 编译原始自检页
 ./scripts/build_screen_firmware.sh --selftest
@@ -388,6 +387,7 @@ cd /root/fbb_ws63
 
 - 脚本会自动关闭所有竞争 sample（`LASER_SLE_JOB_SAMPLE`、`LASER_RX_UNIFIED`、`LVGL_SAMPLE`/`SCREEN_SAMPLE` 互斥）；
 - `--lvgl` 启用 `CONFIG_ENABLE_LVGL_SAMPLE=y`（LVGL v9.3.0 端口）；
+- `--panel` 启用 `CONFIG_ENABLE_LVGL_PANEL=y`（工业中控面板 UI）；
 - `--selftest` 启用 `CONFIG_ENABLE_SCREEN_SAMPLE=y`（当前为历史 ST7796 自检代码，后续需迁移到 MSP3223/ILI9341）；
 - 归档文件名始终为 `ws63-liteos-app_screen_all.fwpkg`，不会因 variant 不同而改名。
 
@@ -432,7 +432,7 @@ cd /root/fbb_ws63
 
 ```bash
 # 1. WSL2 修改 Host 上位机
-vim /root/fbb_ws63/src/ws63_laser_sle_job_host/main.py
+vim /root/fbb_ws63/src/ws63_laser_host_ui/main.py
 
 # 2. WSL2 同步 Host 到 Win11 桌面
 ./scripts/sync_host_to_win.sh
@@ -445,7 +445,7 @@ vim /root/fbb_ws63/src/ws63_laser_sle_job_host/main.py
 #    RX: \\wsl.localhost\Ubuntu\root\fbb_ws63\src\output\ws63\fwstage\latest\ws63-liteos-app_rx_all.fwpkg
 
 # 5. Win11 启动 Host 并测试
-cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_sle_job_host
+cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_host_ui
 python main.py
 ```
 

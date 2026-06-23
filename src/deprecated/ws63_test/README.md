@@ -1,4 +1,6 @@
-# WS63 激光打标双板工程 README
+# WS63 激光打标双板工程 README (Deprecated)
+
+**本模块已废弃，活跃开发请见 `src/ws63_laser_sle_job/` 和 `src/ws63_laser_rx_unified/`。**
 
 `src/ws63_test` 是一套面向 WS63 的多板激光打标样例工程。它把“上位机 G-Code -> 发射板解析 -> SLE 无线下发 -> 接收板插补执行 -> DAC/PWM 输出 -> 状态回传”这条链路完整打通，适合做功能开发、联调验证和项目交付基线。当前发射板除了保留原来的 UART 入口，也新增了参考官方 WiFi 例程实现的 TCP 文本入口，支持 `SoftAP` 直连和 `STA` 入网两种模式，方便后续网页端或自研上位机接入。
 

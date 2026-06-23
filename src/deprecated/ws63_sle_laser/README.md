@@ -1,4 +1,6 @@
-# WS63 SLE Laser Marker (Bidirectional Bridge Design)
+# WS63 SLE Laser Marker (Deprecated)
+
+**本模块已废弃，活跃开发请见 `src/ws63_laser_sle_job/`。**
 
 极简设计：发射板作为**双向无线串口桥**，接收板复用ws63_laser_single逻辑。
 

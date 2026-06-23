@@ -301,7 +301,7 @@ debug_*.txt
 output_*.txt
 
 # Host 上位机本机配置
-src/ws63_laser_sle_job_host/host_config.json
+src/ws63_laser_host_ui/host_config.json
 
 # -----------------------------------------------------------------------------
 # 6. 项目特定忽略项

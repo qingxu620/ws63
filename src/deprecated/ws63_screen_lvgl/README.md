@@ -1,45 +1,14 @@
-# WS63 MSP3223 LVGL Port
+# WS63 MSP3223 LVGL Port (Deprecated)
+
+**本模块已废弃，活跃开发请见 `src/ws63_screen_panel_lvgl/`。**
 
 WS63 MCU (LiteOS) LVGL v9.3.0 screen node firmware for the MSP3223 module. Provides a laser engraver control panel UI with touch input and SLE wireless RX integration (planned).
 
 ## Hardware
 
-| Component | Model | Notes |
-|-----------|-------|-------|
-| MCU | HiSilicon WS63 (RISC-V, LiteOS-M) | |
-| Screen module | MSP3223 3.2" IPS | 18-pin FPC |
-| LCD controller | ILI9341V | 240x320 native, RGB565 |
-| Touch controller | FT6336U | I2C address 0x38, capacitive |
-| Active orientation | Landscape (hardware rotation) | 270° MADCTL, LVGL 320x240 |
+MSP3223 3.2-inch SPI touch display (ILI9341V LCD + FT6336U touch).
 
-## Pin Mapping
-
-### LCD (SPI)
-
-| Function | GPIO | SPI Function |
-|----------|------|-------------|
-| LCD_SCK  | 7    | SPI0_SCK (mode 3) |
-| LCD_MOSI | 9    | SPI0_MOSI (mode 3) |
-| LCD_MISO | 11   | SPI0_MISO (mode 3) |
-| LCD_CS   | 8    | GPIO output |
-| LCD_DC   | 10   | GPIO output |
-| LCD_RST  | 0    | GPIO output |
-| LCD_BL   | 5    | GPIO output (active high) |
-
-### Touch (I2C)
-
-| Function | GPIO | I2C Function |
-|----------|------|-------------|
-| CTP_SCL  | 16   | I2C1_SCL (mode 2) |
-| CTP_SDA  | 15   | I2C1_SDA (mode 2) |
-| CTP_RST  | 12   | GPIO output (active low reset) |
-| CTP_INT  | 13   | GPIO input |
-
-### Reserved
-
-| Function | GPIO | Notes |
-|----------|------|-------|
-| SD_CS    | 14   | Reserved, held high |
+**硬件引脚定义和规格请参见 AGENTS.md Screen Module Rules。**
 
 ## Build
 

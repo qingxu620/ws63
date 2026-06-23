@@ -151,7 +151,7 @@ config ENABLE_LVGL_SAMPLE
         注意：与 ENABLE_SCREEN_SAMPLE 互斥（共用硬件）。
 
 if ENABLE_LVGL_SAMPLE
-source "ws63_screen_lvgl/Kconfig"
+source "ws63_screen_panel_lvgl/Kconfig"
 endif
 
 config ENABLE_LVGL_PANEL

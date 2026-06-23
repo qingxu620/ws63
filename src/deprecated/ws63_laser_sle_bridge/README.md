@@ -1,4 +1,6 @@
-# WS63 Laser SLE Bridge
+# WS63 Laser SLE Bridge (Deprecated)
+
+**本模块已废弃，活跃开发请见 `src/ws63_laser_sle_job/`。**
 
 This directory is the mainline transparent SLE serial bridge design.
 

@@ -243,12 +243,12 @@ WS63 Laser RX Integrated
 Route-based integration R3B
 [RX_INTEGRATED] R3B start legacy_wifi route
 [ROUTE] start LEGACY_WIFI
-[LEGACY_WIFI] legacy_wifi_route_init OK ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=6 hidden_flag=1
+[LEGACY_WIFI] legacy_wifi_route_init OK ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=13 hidden_flag=1
 [LEGACY_WIFI] route started
 [RX_INTEGRATED] active_route=LEGACY_WIFI
 [RX_INTEGRATED] laser=OFF
 [laser wifi] task started
-[laser wifi] softap ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=6 hidden_flag=1
+[laser wifi] softap ssid=WS63_LASER_WIFI ip=192.168.43.1 port=5000 channel=13 hidden_flag=1
 [laser wifi] tcp server listening port=5000
 ```
 
@@ -269,7 +269,7 @@ Validated integrated configuration:
 - Password: `12345678`
 - Controller IP: `192.168.43.1`
 - TCP port: `5000`
-- SoftAP channel: `6`
+- SoftAP channel: `13`
 - SSID mode: hidden (`hidden_flag=1`)
 - LaserGRBL: Grbl + Telnet + Buffered + Fast
 - Soft reset Ctrl-X: enabled
@@ -340,7 +340,7 @@ Validated boot state:
 - Active route remained `LEGACY_WIFI`; Legacy UART was compiled but not
   started.
 - Legacy WiFi started normally with SSID `WS63_LASER_WIFI`, controller IP
-  `192.168.43.1`, TCP port `5000`, channel `6`, and `hidden_flag=1`.
+  `192.168.43.1`, TCP port `5000`, channel `13`, and `hidden_flag=1`.
 - TCP server reported listening on port `5000`.
 - `R4A sle_job compiled but not started` was printed.
 - Final boot laser state was `OFF`.
@@ -399,7 +399,7 @@ Route-based integration R4B
 
 R4B preserves the R4A protocol invariants and the 131072-byte cache. Hardware
 acceptance uses the existing SLE TX firmware and
-`src/ws63_laser_sle_job_host` with `preroll=4096`.
+`src/ws63_laser_host_ui` with `preroll=4096`.
 
 ## R4B Job Execution Validation
 
@@ -409,7 +409,7 @@ Validated combination:
 
 - TX: stable transmitter from `src/ws63_laser_sle_job`
 - RX: integrated R4B firmware with `active_route=SLE_JOB`
-- Host: `src/ws63_laser_sle_job_host`
+- Host: `src/ws63_laser_host_ui`
 - preroll: 4096 bytes
 
 Validated behavior:
@@ -463,7 +463,7 @@ Legacy WiFi route validation baseline:
 SLE Job route validation baseline:
 
 - SLE Job does not use LaserGRBL.
-- Use `src/ws63_laser_sle_job_host` with TX command, TX log, and RX log serial
+- Use `src/ws63_laser_host_ui` with TX command, TX log, and RX log serial
   ports selected for the current Win11 session.
 - Preserve BEGIN/DATA/END/EXEC_START, ACK/NACK, job cache, preroll, and local RX
   execution behavior.
@@ -494,7 +494,7 @@ Independent WiFi connection parameters:
 - Password: `12345678`
 - Controller IP: `192.168.43.1`
 - TCP port: `5000`
-- SoftAP channel: `6`
+- SoftAP channel: `13`
 - Hidden SSID flag: `1`
 - TCP receive buffer: `512`
 - TCP socket buffer: `8192`
@@ -603,7 +603,7 @@ R5 exposes only two upper-level modes:
   frontends to one shared G-code parser, G-code processor, motion executor, and
   laser control path.
 - `RX_MODE_SLE_JOB`: the existing SLE packet, cache, preroll, and local job
-  execution path used by the TX board and `src/ws63_laser_sle_job_host`.
+  execution path used by the TX board and `src/ws63_laser_host_ui`.
 
 ### Grbl Stream Rules
 
@@ -832,23 +832,12 @@ R5D hardware validation passed:
 
 ### SLE Stop and Abort Semantics
 
-The current SLE Host stop controls are software control packets, not a
-hardware-level emergency-stop circuit:
+**详细的停止/中止语义请参见 AGENTS.md Unified RX Module Rules 第29条。**
 
-- `@EXEC_STOP` sends `PKT_EXEC_STOP = 0x13` and RX runs
-  `job_manager_safe_stop("exec-stop")`.
-- `@ABORT` sends `PKT_JOB_ABORT = 0x04`; RX runs
-  `job_manager_safe_stop("job-abort")`, clears the job cache, and returns to
-  IDLE.
-
-For demo wording, the Host UI should present these as:
-
-- "停止执行": software safe stop of the current execution.
-- "急停 / 放弃任务": abort current job, clear cache, and force the laser OFF.
-
-There is not yet a hardware emergency-stop input in this firmware path.
-Productization should implement emergency shutdown as a hardware laser power
-cut, independent of SLE packet scheduling or job-cache state.
+简要说明：
+- `@EXEC_STOP`：软件安全停止
+- `@ABORT`：中止任务并清除缓存
+- 产品级急停应为硬件激光电源切断
 
 Expected R5D logs:
 
