@@ -254,33 +254,43 @@ static void btn_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code != LV_EVENT_CLICKED) return;
 
+    panel_button_permissions_t perms;
+    panel_model_get_button_permissions(&perms);
+
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
     switch (idx) {
     case 0:
-        if (g_model.state != SYS_STATE_READY) {
-            osal_printk("[PANEL_CMD] start rejected: state=%d\r\n", g_model.state);
+        if (!perms.can_start) {
+            osal_printk("[PANEL_CMD] start rejected: owner=%d state=%d\r\n",
+                        g_model.owner, g_model.state);
             break;
         }
-        set_focus_visual_state(false);
-        panel_model_set_state(SYS_STATE_RUNNING);
-        osal_printk("[PANEL_CMD] start accepted by demo UI (backend not connected)\r\n");
+        panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING);
+        osal_printk("[PANEL_CMD] demo start request -> SCREEN_SENDING (backend not connected)\r\n");
         break;
     case 1:
-        set_focus_visual_state(false);
-        osal_printk("[PANEL_CMD] stop clicked, focus visual OFF\r\n");
-        break;
-    case 2:
-        set_focus_visual_state(false);
-        osal_printk("[PANEL_CMD] abort clicked, focus visual OFF\r\n");
-        break;
-    case 3:
-        if (!g_focus_visual_allowed) {
-            osal_printk("[PANEL_CMD] focus rejected by UI state\r\n");
+        if (!perms.can_stop) {
+            osal_printk("[PANEL_CMD] stop rejected: state=%d\r\n", g_model.state);
             break;
         }
-        set_focus_visual_state(!g_focus_visual_on);
-        osal_printk("[PANEL_CMD] focus visual %s (backend not connected)\r\n",
-                    g_focus_visual_on ? "ON" : "OFF");
+        panel_model_request_stop();
+        osal_printk("[PANEL_CMD] stop request queued in fake model\r\n");
+        break;
+    case 2:
+        if (!perms.can_abort) {
+            osal_printk("[PANEL_CMD] abort rejected: state=%d\r\n", g_model.state);
+            break;
+        }
+        panel_model_request_abort();
+        osal_printk("[PANEL_CMD] abort request queued in fake model\r\n");
+        break;
+    case 3:
+        if (!perms.can_focus_off) {
+            osal_printk("[PANEL_CMD] focus_off rejected by UI state\r\n");
+            break;
+        }
+        panel_model_request_focus_off();
+        osal_printk("[PANEL_CMD] focus_off request queued in fake model\r\n");
         break;
     case 4: ui_manager_switch_page(PAGE_SETTINGS); break;
     }
@@ -344,6 +354,8 @@ static void create_action_bar(lv_obj_t *parent)
 
 static void apply_state(void)
 {
+    panel_button_permissions_t perms;
+    panel_model_get_button_permissions(&perms);
     bool start_en = false, stop_en = false, abort_en = false, focus_en = false;
 
     lv_label_set_text(g_lbl_substate, "待机");
@@ -355,17 +367,41 @@ static void apply_state(void)
         lv_obj_set_style_text_color(g_lbl_state_badge, lv_color_white(), 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
-        focus_en = true;
+        break;
+
+    case SYS_STATE_BROWSING:
+        lv_label_set_text(g_lbl_pct, "0%");
+        lv_label_set_text(g_lbl_substate, "暂无任务");
+        lv_label_set_text(g_lbl_state_badge, "暂无任务");
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
+        lv_label_set_text(g_lbl_safety_val, "关闭");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
         break;
 
     case SYS_STATE_RECEIVING:
-        lv_label_set_text(g_lbl_pct, "0%");
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
         lv_label_set_text(g_lbl_substate, "接收中");
         lv_label_set_text(g_lbl_state_badge, "正在接收");
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
-        stop_en = true;
+        break;
+
+    case SYS_STATE_SENDING:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, "任务发送");
+        lv_label_set_text(g_lbl_state_badge, "发送中");
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
+        lv_label_set_text(g_lbl_safety_val, "关闭");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
         break;
 
     case SYS_STATE_READY:
@@ -374,9 +410,6 @@ static void apply_state(void)
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_GREEN, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
-        start_en = true;
-        stop_en = true;
-        abort_en = true;
         break;
 
     case SYS_STATE_RUNNING:
@@ -388,9 +421,10 @@ static void apply_state(void)
         lv_label_set_text(g_lbl_substate, "加工中");
         lv_label_set_text(g_lbl_state_badge, "运行中");
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_RED, 0);
-        lv_label_set_text(g_lbl_safety_val, "开启");
-        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_RED, 0);
-        stop_en = true;
+        lv_label_set_text(g_lbl_safety_val,
+            g_model.laser_output_active ? "激光中" : "关闭");
+        lv_obj_set_style_text_color(g_lbl_safety_val,
+            g_model.laser_output_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
         break;
 
     case SYS_STATE_DONE:
@@ -400,8 +434,45 @@ static void apply_state(void)
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_GREEN, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
-        abort_en = true;
-        focus_en = true;
+        break;
+
+    case SYS_STATE_REQUESTING_STOP:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, "停止中");
+        lv_label_set_text(g_lbl_state_badge, "STOP中");
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
+        lv_label_set_text(g_lbl_safety_val, "待执行");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
+        break;
+
+    case SYS_STATE_REQUESTING_ABORT:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, "中止中");
+        lv_label_set_text(g_lbl_state_badge, "ABORT中");
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
+        lv_label_set_text(g_lbl_safety_val, "待执行");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
+        break;
+
+    case SYS_STATE_REQUESTING_FOCUS_OFF:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, "关光中");
+        lv_label_set_text(g_lbl_state_badge, "关光中");
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
+        lv_label_set_text(g_lbl_safety_val, "待执行");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
         break;
 
     case SYS_STATE_ERROR:
@@ -427,6 +498,11 @@ static void apply_state(void)
         break;
     }
 
+    start_en = perms.can_start;
+    stop_en = perms.can_stop;
+    abort_en = perms.can_abort;
+    focus_en = perms.can_focus_off;
+
     {
         char time_buf[12];
         uint32_t min = g_model.job_seconds / 60;
@@ -441,11 +517,21 @@ static void apply_state(void)
     lv_label_set_text(g_lbl_rx, g_model.rx_connected ? "RX正常" : "RX断开");
     lv_obj_set_style_text_color(g_lbl_sle,
         g_model.sle_connected ? COLOR_LASER_BLUE : COLOR_TEXT_MUTED, 0);
+    lv_label_set_text(g_lbl_sle, panel_model_owner_text(g_model.owner));
 
-    g_focus_visual_allowed = focus_en;
-    if (!focus_en && g_focus_visual_on) {
-        set_focus_visual_state(false);
+    {
+        char speed_buf[12];
+        char power_buf[12];
+        snprintf(speed_buf, sizeof(speed_buf), "%s",
+                 g_model.state == SYS_STATE_RUNNING ? "F1000" : "--");
+        snprintf(power_buf, sizeof(power_buf), "%s",
+                 g_model.laser_output_active ? "S500" : "--");
+        lv_label_set_text(g_lbl_speed, speed_buf);
+        lv_label_set_text(g_lbl_power, power_buf);
     }
+
+    set_focus_visual_state(g_model.focus_active);
+    g_focus_visual_allowed = focus_en;
 
     lv_obj_set_style_bg_opa(g_btn_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
@@ -455,6 +541,17 @@ static void apply_state(void)
     lv_obj_set_style_text_opa(g_lbl_abort, abort_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_bg_opa(g_btn_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
+
+    lv_label_set_text(g_lbl_start, perms.can_start ? "启动" : "启动");
+    lv_label_set_text(g_lbl_stop, perms.requesting_stop ? "停止中" : "停止");
+    lv_label_set_text(g_lbl_abort, perms.requesting_abort ? "中止中" : "中止");
+    if (perms.requesting_focus_off) {
+        lv_label_set_text(g_lbl_focus, "关光中");
+    } else if (g_model.focus_active) {
+        lv_label_set_text(g_lbl_focus, "关调焦");
+    } else {
+        lv_label_set_text(g_lbl_focus, "关光");
+    }
 }
 
 void home_page_create(lv_obj_t *parent)

@@ -22,9 +22,6 @@
 #define LVGL_TASK_PRIORITY   25
 #define LVGL_HANDLER_MS      5
 
-/* Demo state cycle interval (ms) */
-#define DEMO_STATE_INTERVAL_MS 4000
-
 static timer_handle_t g_tick_timer = NULL;
 
 static void lv_tick_timer_cb(uintptr_t data)
@@ -75,23 +72,10 @@ static int panel_task(void *arg)
 
     osal_printk("[PANEL] init done, entering handler loop\r\n");
 
-    /* Demo state machine */
-    static const system_state_t demo_states[] = {
-        SYS_STATE_NO_JOB,
-        SYS_STATE_RECEIVING,
-        SYS_STATE_READY,
-        SYS_STATE_RUNNING,
-        SYS_STATE_DONE,
-        SYS_STATE_NO_JOB,
-        SYS_STATE_ERROR,
-        SYS_STATE_LINK_LOST,
-    };
-    uint32_t demo_idx = 0;
     uint32_t tick_count = 0;
-    uint32_t demo_next_tick = DEMO_STATE_INTERVAL_MS / LVGL_HANDLER_MS;
 
-    /* Set initial state */
-    panel_model_set_state(demo_states[0]);
+    /* Set initial scene */
+    panel_model_set_scene(PANEL_SCENE_IDLE_NONE);
 
     while (1) {
         lv_timer_handler();
@@ -100,10 +84,21 @@ static int panel_task(void *arg)
 
         tick_count++;
 
-        /* Progress simulation for RUNNING state */
-        if (g_model.state == SYS_STATE_RUNNING && (tick_count % 20) == 0) {
+        /* Progress simulation for fake transfer/execution states */
+        if ((g_model.state == SYS_STATE_RECEIVING ||
+             g_model.state == SYS_STATE_SENDING ||
+             g_model.state == SYS_STATE_RUNNING) &&
+            (tick_count % 20) == 0) {
             if (g_model.progress < 100) {
                 panel_model_set_progress(g_model.progress + 1);
+            } else if (g_model.state == SYS_STATE_RECEIVING) {
+                panel_model_set_scene(PANEL_SCENE_HOST_READY);
+            } else if (g_model.state == SYS_STATE_SENDING) {
+                panel_model_set_scene(PANEL_SCENE_SCREEN_RUNNING);
+            } else if (g_model.state == SYS_STATE_RUNNING) {
+                panel_model_set_scene(g_model.owner == PANEL_OWNER_SCREEN ?
+                                      PANEL_SCENE_SCREEN_DONE :
+                                      PANEL_SCENE_HOST_DONE);
             }
         }
 
@@ -112,12 +107,6 @@ static int panel_task(void *arg)
             panel_model_tick();
         }
 
-        /* Demo state cycling */
-        if (tick_count >= demo_next_tick) {
-            demo_next_tick = tick_count + DEMO_STATE_INTERVAL_MS / LVGL_HANDLER_MS;
-            demo_idx = (demo_idx + 1) % (sizeof(demo_states) / sizeof(demo_states[0]));
-            panel_model_set_state(demo_states[demo_idx]);
-        }
     }
 
     return 0;

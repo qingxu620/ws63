@@ -10,6 +10,9 @@
 #include <stdio.h>
 
 static lv_obj_t *g_lbl_job_id;
+static lv_obj_t *g_lbl_title;
+static lv_obj_t *g_lbl_owner;
+static lv_obj_t *g_lbl_mode;
 static lv_obj_t *g_lbl_lines_total;
 static lv_obj_t *g_lbl_lines_exec;
 static lv_obj_t *g_lbl_bytes_rx;
@@ -88,10 +91,10 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "任务监控");
-    lv_obj_set_style_text_font(title, PANEL_FONT_CN, 0);
-    lv_obj_set_style_text_color(title, COLOR_TEXT_BRIGHT, 0);
+    g_lbl_title = lv_label_create(header);
+    lv_label_set_text(g_lbl_title, "任务监控");
+    lv_obj_set_style_text_font(g_lbl_title, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(g_lbl_title, COLOR_TEXT_BRIGHT, 0);
 
     /* Body */
     lv_obj_t *body = lv_obj_create(scr);
@@ -99,7 +102,7 @@ void page_job_monitor_create(lv_obj_t *parent)
 
     /* Job info card */
     lv_obj_t *job_card = lv_obj_create(body);
-    lv_obj_set_size(job_card, 290, 50);
+    lv_obj_set_size(job_card, 290, 74);
     lv_obj_remove_flag(job_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(job_card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(job_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -110,6 +113,35 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_label_set_text(job_title, LV_SYMBOL_FILE " 任务信息");
     lv_obj_set_style_text_font(job_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(job_title, COLOR_LASER_BLUE, 0);
+
+    lv_obj_t *owner_row = lv_obj_create(job_card);
+    lv_obj_set_size(owner_row, 270, 18);
+    lv_obj_remove_flag(owner_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(owner_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(owner_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(owner_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(owner_row, 0, 0);
+    lv_obj_set_style_pad_all(owner_row, 0, 0);
+
+    lv_obj_t *owner_lbl = lv_label_create(owner_row);
+    lv_label_set_text(owner_lbl, "Owner");
+    lv_obj_set_style_text_font(owner_lbl, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(owner_lbl, COLOR_TEXT_MUTED, 0);
+
+    g_lbl_owner = lv_label_create(owner_row);
+    lv_label_set_text(g_lbl_owner, "--");
+    lv_obj_set_style_text_font(g_lbl_owner, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(g_lbl_owner, COLOR_TEXT_LIGHT, 0);
+
+    lv_obj_t *mode_lbl = lv_label_create(owner_row);
+    lv_label_set_text(mode_lbl, "Mode");
+    lv_obj_set_style_text_font(mode_lbl, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(mode_lbl, COLOR_TEXT_MUTED, 0);
+
+    g_lbl_mode = lv_label_create(owner_row);
+    lv_label_set_text(g_lbl_mode, "--");
+    lv_obj_set_style_text_font(g_lbl_mode, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(g_lbl_mode, COLOR_TEXT_LIGHT, 0);
 
     lv_obj_t *job_row = lv_obj_create(job_card);
     lv_obj_set_size(job_row, 270, 18);
@@ -222,17 +254,29 @@ void page_job_monitor_create(lv_obj_t *parent)
 void page_job_monitor_update(void)
 {
     /* Update with demo data from model */
-    char buf[16];
+    char buf[24];
 
+    if (g_model.owner == PANEL_OWNER_HOST) {
+        lv_label_set_text(g_lbl_title, "Online Monitor");
+    } else if (g_model.owner == PANEL_OWNER_SCREEN) {
+        lv_label_set_text(g_lbl_title, "Offline Job Monitor");
+    } else {
+        lv_label_set_text(g_lbl_title, "任务监控");
+    }
+
+    lv_label_set_text(g_lbl_owner, panel_model_owner_text(g_model.owner));
+    lv_label_set_text(g_lbl_mode, panel_model_mode_text(g_model.mode));
     lv_label_set_text(g_lbl_job_id, g_model.job_name);
 
-    snprintf(buf, sizeof(buf), "%d", g_model.progress);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.executed_lines);
     lv_label_set_text(g_lbl_lines_exec, buf);
-    lv_label_set_text(g_lbl_lines_total, "1000");
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.total_lines);
+    lv_label_set_text(g_lbl_lines_total, buf);
 
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)(g_model.progress * 1310));
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.received_size);
     lv_label_set_text(g_lbl_bytes_rx, buf);
-    lv_label_set_text(g_lbl_bytes_total, "131072");
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.total_size);
+    lv_label_set_text(g_lbl_bytes_total, buf);
 
     snprintf(buf, sizeof(buf), "%.1f", g_model.progress * 0.7f);
     lv_label_set_text(g_lbl_pos_x, buf);
@@ -240,8 +284,8 @@ void page_job_monitor_update(void)
     lv_label_set_text(g_lbl_pos_y, buf);
 
     lv_label_set_text(g_lbl_feed, "1000");
-    lv_label_set_text(g_lbl_power, "S500");
+    lv_label_set_text(g_lbl_power, g_model.laser_output_active ? "S500" : "S0");
 
-    snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(128 - g_model.progress));
+    snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
     lv_label_set_text(g_lbl_cache_free, buf);
 }
