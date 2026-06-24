@@ -44,7 +44,7 @@ elseif(DEFINED CONFIG_ENABLE_SCREEN_SAMPLE)
 elseif(DEFINED CONFIG_ENABLE_LVGL_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_panel_lvgl ws63_screen_panel_lvgl)
 elseif(DEFINED CONFIG_ENABLE_LVGL_PANEL)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_panel_lvgl ws63_screen_panel_lvgl)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_panel_lvgl_refactor ws63_screen_panel_lvgl_refactor)
 endif()
 
 

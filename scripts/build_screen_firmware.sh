@@ -87,6 +87,9 @@ set_config_n() {
 
 # Disable ALL competing app samples so only one is active per build.
 disable_all_samples() {
+    set_config_n CONFIG_ENABLE_PERIPHERAL_SAMPLE
+    set_config_n CONFIG_ENABLE_ALL_PERIPHERAL_SAMPLE
+    set_config_n CONFIG_SAMPLE_SUPPORT_PWM
     set_config_n CONFIG_ENABLE_LASER_SINGLE_SAMPLE
     set_config_n CONFIG_ENABLE_LASER_WIFI_SAMPLE
     set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
