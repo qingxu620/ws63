@@ -41,6 +41,12 @@ typedef enum {
 } panel_mode_t;
 
 typedef enum {
+    PANEL_VIEW_ONLINE = 0,
+    PANEL_VIEW_OFFLINE,
+    PANEL_VIEW_COUNT
+} panel_view_mode_t;
+
+typedef enum {
     PANEL_SCENE_IDLE_NONE = 0,
     PANEL_SCENE_HOST_RECEIVING,
     PANEL_SCENE_HOST_READY,
@@ -74,6 +80,7 @@ typedef struct {
     panel_fake_scene_t scene;
     panel_owner_t owner;
     panel_mode_t mode;
+    panel_view_mode_t view_mode;
     int progress;
     uint32_t job_seconds;
     uint32_t seq;
@@ -91,6 +98,7 @@ typedef struct {
     bool sd_mounted;
     bool focus_active;
     bool laser_output_active;
+    bool live_status_active;
     char job_name[32];
     char last_error[32];
 } panel_model_t;
@@ -101,16 +109,23 @@ void panel_model_init(void);
 void panel_model_set_state(system_state_t state);
 void panel_model_set_scene(panel_fake_scene_t scene);
 void panel_model_toggle_primary_mode(void);
-void panel_model_next_scene(void);
 void panel_model_set_progress(int pct);
 void panel_model_tick(void);
 void panel_model_request_stop(void);
 void panel_model_request_abort(void);
 void panel_model_request_focus_off(void);
+void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count);
+void panel_model_start_offline_selected(void);
+void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,
+                                       uint8_t flags, uint32_t seq, uint32_t job_id,
+                                       uint32_t received_size, uint32_t total_size,
+                                       uint32_t executed_lines, uint32_t cache_free,
+                                       uint32_t last_error, uint32_t tick_ms);
 void panel_model_get_button_permissions(panel_button_permissions_t *out);
 const char *panel_model_state_text(system_state_t state);
 const char *panel_model_owner_text(panel_owner_t owner);
 const char *panel_model_mode_text(panel_mode_t mode);
+const char *panel_model_view_mode_text(panel_view_mode_t view_mode);
 const char *panel_model_scene_text(panel_fake_scene_t scene);
 
 #endif

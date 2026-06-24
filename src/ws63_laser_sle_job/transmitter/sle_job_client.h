@@ -17,7 +17,9 @@ typedef void (*sle_job_response_cb_t)(const uint8_t *data, uint16_t length);
 
 errcode_t sle_job_client_init(void);
 errcode_t sle_job_client_send_packet(const void *data, uint16_t len);
+errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len);
 bool sle_job_client_is_connected(void);
+bool sle_job_client_panel_is_connected(void);
 void sle_job_client_poll_connect(void);
 const char *sle_job_client_get_status(void);
 void sle_job_client_set_response_cb(sle_job_response_cb_t cb);

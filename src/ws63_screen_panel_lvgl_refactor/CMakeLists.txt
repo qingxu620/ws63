@@ -18,8 +18,9 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/board/ft6336_touch.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/task_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_model.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_file_manager.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_transport_sle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/panel_theme.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/fonts/lv_font_panel_cn_14.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ui_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/home_page.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_settings.c
@@ -27,7 +28,11 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_diagnostics.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_job_monitor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_control.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_file_browser.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/fonts/lv_font_panel_cn_14.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_screen_panel_lvgl/src/ili9341_lcd.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common/packet.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common/crc16.c
     ${LVGL_SOURCES}
 )
 
@@ -39,6 +44,7 @@ set(PUBLIC_HEADER
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common
     ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_screen_panel_lvgl
     ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_screen_panel_lvgl/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_lvgl/src/lvgl

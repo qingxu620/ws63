@@ -65,6 +65,12 @@ static void sound_btn_cb(lv_event_t *e)
     ui_manager_switch_page(PAGE_ALERT_SOUND);
 }
 
+static void file_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_manager_switch_page(PAGE_FILE_BROWSER);
+}
+
 static lv_obj_t *create_nav_btn(lv_obj_t *parent, const char *symbol,
                                  const char *label, lv_color_t accent,
                                  lv_event_cb_t cb)
@@ -192,6 +198,7 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_slider_brightness, brightness_cb, LV_EVENT_PRESS_LOST, NULL);
 
     /* Sound navigation button */
+    create_nav_btn(body, LV_SYMBOL_DIRECTORY, "TF文件管理", COLOR_LASER_BLUE, file_btn_cb);
     create_nav_btn(body, LV_SYMBOL_VOLUME_MAX, "提示音", COLOR_LASER_GREEN, sound_btn_cb);
 
     /* About card */

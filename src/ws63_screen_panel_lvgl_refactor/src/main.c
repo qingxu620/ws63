@@ -13,14 +13,17 @@
 #include "hal/touch_driver.h"
 #include "service/task_manager.h"
 #include "service/panel_model.h"
+#include "service/panel_transport_sle.h"
 #include "ui/ui_manager.h"
+#include <stdbool.h>
 
 #define LVGL_TIMER_INDEX     1
 #define LVGL_TIMER_PRIORITY  1
 #define LVGL_TICK_MS         1
-#define LVGL_TASK_STACK_SIZE 0x3000
+#define LVGL_TASK_STACK_SIZE 0x6000
 #define LVGL_TASK_PRIORITY   25
 #define LVGL_HANDLER_MS      5
+#define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
 
 static timer_handle_t g_tick_timer = NULL;
 
@@ -73,6 +76,7 @@ static int panel_task(void *arg)
     osal_printk("[PANEL] init done, entering handler loop\r\n");
 
     uint32_t tick_count = 0;
+    bool sle_started = false;
 
     /* Set initial scene */
     panel_model_set_scene(PANEL_SCENE_IDLE_NONE);
@@ -84,8 +88,23 @@ static int panel_task(void *arg)
 
         tick_count++;
 
+        /*
+         * Start the SLE status mirror after the first UI frame has settled.
+         * This keeps LCD/LVGL first-screen allocation and RF/SLE bring-up from
+         * competing during boot, which is important now that the panel uses a
+         * larger Chinese font and more UI pages.
+         */
+        if (!sle_started && tick_count >= PANEL_SLE_START_DELAY_TICKS) {
+            ret = panel_transport_sle_start();
+            if (ret != ERRCODE_SUCC) {
+                osal_printk("[PANEL] SLE observer start failed: 0x%x (continuing fake UI)\r\n", ret);
+            }
+            sle_started = true;
+        }
+
         /* Progress simulation for fake transfer/execution states */
-        if ((g_model.state == SYS_STATE_RECEIVING ||
+        if (!g_model.live_status_active &&
+            (g_model.state == SYS_STATE_RECEIVING ||
              g_model.state == SYS_STATE_SENDING ||
              g_model.state == SYS_STATE_RUNNING) &&
             (tick_count % 20) == 0) {

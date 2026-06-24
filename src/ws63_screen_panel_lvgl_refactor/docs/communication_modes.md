@@ -2,7 +2,7 @@
 
 ## 1. 目标与边界
 
-本文档定义 Screen 在 Host Online Mode 与 Panel Offline Mode 下的最终通信链路、状态广播原则、任务数据归属和 RX owner 模型。
+本文档定义 Screen 在 Host Online Mode 与 Panel Offline Mode 下的最终通信链路、状态镜像原则、任务数据归属和 RX owner 模型。
 
 当前阶段仅做文档设计，不实现真实 UART / SLE / SD / 音频 / 小游戏，不修改 TX/RX/Host 正式工程，不修改冻结目录。
 
@@ -27,26 +27,25 @@ RX 是唯一执行端和状态真相源。
 
 ### 2.1 能力状态与 fallback 路线
 
-`RX -> TX + Screen 状态广播/组播` 是最终推荐目标，不是当前已验证能力。
+已采纳的最终主线不再依赖 `RX -> TX + Screen` 同时直连广播/组播。
 
-是否能实现取决于当前 WS63 SDK 对以下能力的实际支持：
+前期验证结论：
 
-- 多连接。
-- 广播业务。
-- 组播业务。
-- 多接收端 notification。
-- RX 同时服务 TX owner 与 Screen observer 的链路稳定性。
+- 普通 SLE SSAP 的 `ssaps_notify_indicate(conn_id=0xffff)` 语义是“发给所有已连接 peer”，不是无连接空中广播。
+- 当前 RX 作为 SSAP Server 时，实测只能同时连接一个 Central。
+- vendor `sle_one_to_many` 证明的是“一个 Client 同时连接多个 Server”，不是“一个 Server 同时被多个 Client 连接”。
+- CHBA 支持多设备组网，但属于另一套更重的网络模型，不作为当前稳定激光链路主线。
 
-当前阶段不得假设 SDK 已经支持上述能力。设计和 UI 原型应按以下顺序保留 fallback：
+因此 Host Online Mode 采纳 TX 转发状态给 Screen 的路线：
 
-| 路线 | 用途 | 说明 |
+| 路线 | 结论 | 说明 |
 | --- | --- | --- |
-| Preferred | 最终目标 | RX 状态广播/组播给 TX + Screen |
-| Fallback A | Host Online 过渡 | TX 接收 RX 状态后转发给 Screen |
-| Fallback B | Host Online 最低可用 | Screen 只显示 fake/local diagnostics，不显示真实 RX 状态 |
-| Fallback C | 产品路线调整 | 优先实现 Panel Offline 单独连接 RX，Host Online 状态镜像后置 |
+| Adopted | Host Online 主线 | TX 接收 RX 状态后转发给 Screen |
+| Adopted | Panel Offline 主线 | Screen 单独连接 RX，取代 TX 成为离线 owner |
+| Fallback | Host Online 最低可用 | Screen 只显示 fake/local diagnostics，不显示真实 RX 状态 |
+| Research only | 长期实验 | CHBA 或 RX-as-Client 多连接状态镜像实验 |
 
-Fallback 不改变最终职责判断：TX 是电脑模式无线入口，Screen 是设备本体 HMI 和离线任务入口，RX 是唯一执行端和状态真相源。
+该路线不改变最终职责判断：TX 是电脑模式无线入口，Screen 是设备本体 HMI 和离线任务入口，RX 是唯一执行端和状态真相源。
 
 ## 3. Host Online Mode 最终推荐链路
 
@@ -56,13 +55,16 @@ Host Online Mode 的任务数据主链路：
 Host UI -> TX -> RX
 ```
 
-Host Online Mode 的状态链路：
+Host Online Mode 的状态镜像链路：
 
 ```text
-RX -> TX + Screen 状态广播/组播
+RX -> TX -> Screen
 ```
 
-注意：该状态链路是最终推荐目标，不是当前已验证能力。若 WS63 SDK 暂不支持 RX 同时向 TX 和 Screen 广播/组播状态，应先采用 TX 转发或本地 fake diagnostics 的 fallback 路线。
+TX 在 Host Online Mode 下同时承担两个职责：
+
+- 作为 Host/PC 到 RX 的唯一无线任务入口。
+- 作为 RX 状态到 Screen 的镜像转发器。
 
 Screen 在 Host 模式下：
 
@@ -70,12 +72,12 @@ Screen 在 Host 模式下：
 - 不发送 JOB_DATA。
 - 不抢 START。
 - 不作为 job owner。
-- 作为 RX 状态监听器。
+- 通过 TX 镜像读取 RX 状态。
 - 作为本地安全面板。
 - 作为完成提醒器。
 - 作为诊断显示面板。
 
-Screen 在 Host Online Mode 允许请求的命令：
+Screen 在 Host Online Mode 可通过 TX 请求的命令：
 
 ```text
 STATUS
@@ -101,7 +103,7 @@ FOCUS_ON
 - `FOCUS_ON` 会打开激光调焦输出，不应由非 owner 在 Host 任务上下文中触发。
 - `STOP/ABORT/FOCUS_OFF` 属于安全类命令，允许非 owner 请求，但必须由 RX 最终确认。
 
-若 Host Online Mode 下 Screen 未来与 RX 存在直连状态监听链路，该直连权限仍必须收窄为：
+Host Online Mode 下不推荐 Screen 直连 RX。若未来做研究性直连状态监听，权限仍必须收窄为：
 
 允许：
 
@@ -122,7 +124,7 @@ EXEC_START
 FOCUS_ON
 ```
 
-Screen 直连 RX 不能被解释为第二个 Host，也不能消费 Host job 的可靠传输 ACK/NACK。
+Screen 直连 RX 不能被解释为第二个 Host，也不能消费 Host job 的可靠传输 ACK/NACK。当前产品主线不依赖该直连能力。
 
 ## 4. Panel Offline Mode 最终推荐链路
 
@@ -157,13 +159,15 @@ Screen 在 Offline Mode 不应绕过 RX：
 - 不直接访问 DAC。
 - 不绕过 RX 的 FOCUS_ON 安全互锁。
 
-## 5. 广播适合状态，不适合任务数据
+## 5. 状态镜像适合广播/转发，任务数据必须点对点
 
-状态广播/组播适合从 RX 发出，因为状态是只读信息，多个观察者同时接收不会改变执行结果。
+状态是只读信息，多个观察者同时接收不会改变执行结果。因此状态可以被 TX 转发给 Screen，也可以在长期实验中通过广播/组播承载。
 
-### 5.1 RX 可广播/组播的内容
+当前采纳路线是 TX 转发，不要求 RX 同时连接 TX 与 Screen。
 
-RX 可广播或组播：
+### 5.1 可镜像/广播/组播的内容
+
+可镜像、广播或组播：
 
 ```text
 PANEL_STATUS
@@ -181,7 +185,7 @@ ERROR event
 用途：
 
 - Screen 在 Host Online Mode 下实时显示。
-- TX/Host 可选择接收或转发。
+- TX/Host 接收 RX 状态后转发给 Screen。
 - Diagnostics 页面可显示当前 RX 真相状态。
 
 ### 5.2 不应广播的内容
@@ -229,7 +233,8 @@ Host owner 时：
 ```text
 Host UI -> TX -> RX
 RX ACK/NACK -> TX -> Host UI
-Screen 只接收状态广播，不参与 ACK/NACK 推进
+TX -> Screen 状态镜像
+Screen 不参与 ACK/NACK 推进
 ```
 
 Screen owner 时：
@@ -318,7 +323,7 @@ Host STATUS/EXEC_STOP/ABORT/FOCUS_OFF -> allow request
 
 ## 7. PANEL_STATUS 字段建议
 
-RX 广播/组播的 `PANEL_STATUS` 至少应包含：
+TX 镜像给 Screen 的 `PANEL_STATUS` 至少应包含：
 
 ```text
 seq
@@ -408,8 +413,8 @@ Screen 在 Panel Offline Mode 下应遵守：
 ## 10. 与现有设计文档的关系
 
 - `screen_role_and_feature_scope.md` 定义 Screen 的产品角色和功能层级。
-- `screen_tx_integration_plan.md` 定义早期经 TX 接入的保守路线。
-- 本文档修正最终通信判断：Host Online Mode 可使用 RX 状态广播/组播让 Screen 成为实时 HMI；Panel Offline Mode 中 Screen 取代 TX 的生态位成为无线任务入口。
+- `screen_tx_integration_plan.md` 定义 Host Online Mode 下经 TX 接入和状态镜像的主线。
+- 本文档修正最终通信判断：Host Online Mode 使用 `RX -> TX -> Screen` 状态镜像让 Screen 成为实时 HMI；Panel Offline Mode 中 Screen 取代 TX 的生态位成为无线任务入口。
 
 短期仍不实现真实通信。当前 UI 原型应继续使用 fake model 验证信息架构。
 

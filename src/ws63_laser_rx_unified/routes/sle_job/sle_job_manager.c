@@ -29,6 +29,9 @@
 #define SLE_JOB_EXEC_STREAM_THROTTLE_LOG_MS 500U
 #define SLE_JOB_ROUTE_SWITCH_DELAY_MS 200U
 #define SLE_JOB_ROUTE_SWITCH_TASK_STACK_SIZE 0x1000U
+#define SLE_JOB_PANEL_STATUS_PERIOD_MS 500U
+#define SLE_JOB_PANEL_STATUS_TASK_STACK_SIZE 0x1000U
+#define SLE_JOB_PANEL_STATUS_TASK_PRIO 6
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -46,6 +49,8 @@ static uint32_t g_diag_rx_data_count = 0;
 static uint8_t  g_last_ack_type = 0;
 static uint16_t g_last_ack_ack_seq = 0;
 static uint8_t  g_last_ack_status = 0;
+static volatile bool g_panel_status_task_started = false;
+static uint16_t g_panel_status_seq = 1;
 
 static const char *state_name(sle_job_state_t state)
 {
@@ -92,6 +97,100 @@ static errcode_t send_packet(uint8_t type, const void *payload, uint16_t payload
         osal_printk("[JOB_RX] send response fail type=0x%02x ret=0x%x\r\n", type, ret);
     }
     return ret;
+}
+
+static errcode_t broadcast_packet(uint8_t type, const void *payload, uint16_t payload_len)
+{
+    uint8_t buf[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t out_len = 0;
+    if (!sle_job_packet_encode(type, 0, next_resp_seq(), payload, payload_len,
+                           buf, sizeof(buf), &out_len)) {
+        osal_printk("[JOB_RX] encode broadcast fail type=0x%02x\r\n", type);
+        return ERRCODE_SLE_FAIL;
+    }
+    return sle_job_route_server_broadcast_packet(buf, out_len);
+}
+
+static void send_panel_status(void)
+{
+    sle_job_panel_status_payload_t st = {0};
+    st.seq = g_panel_status_seq++;
+    if (g_panel_status_seq == 0) {
+        g_panel_status_seq = 1;
+    }
+
+    st.owner = (sle_job_route_server_get_owner_conn_id() == 0xFFFFU) ?
+        SLE_JOB_PANEL_OWNER_NONE : SLE_JOB_PANEL_OWNER_HOST;
+    if (g_state == SLE_JOB_STATE_ERROR || g_state == SLE_JOB_STATE_ABORTED) {
+        st.mode = SLE_JOB_PANEL_MODE_ERROR;
+    } else if (st.owner == SLE_JOB_PANEL_OWNER_HOST) {
+        st.mode = SLE_JOB_PANEL_MODE_ONLINE;
+    } else {
+        st.mode = SLE_JOB_PANEL_MODE_IDLE;
+    }
+    st.job_state = (uint8_t)g_state;
+    st.flags = 0;
+    if (g_focus_active) {
+        st.flags |= SLE_JOB_PANEL_FLAG_FOCUS_ACTIVE;
+    }
+    if (laser_is_enabled()) {
+        st.flags |= SLE_JOB_PANEL_FLAG_LASER_ACTIVE;
+    }
+    if (sle_job_route_server_get_owner_conn_id() != 0xFFFFU) {
+        st.flags |= SLE_JOB_PANEL_FLAG_OWNER_LINK;
+    }
+    if (sle_job_route_server_get_connection_count() > 0U) {
+        st.flags |= SLE_JOB_PANEL_FLAG_ANY_LINK;
+    }
+    st.job_id = sle_job_cache_job_id();
+    st.received_size = sle_job_cache_received();
+    st.total_size = sle_job_cache_total_size();
+    st.executed_lines = (uint32_t)g_executed_lines;
+    st.cache_free = sle_job_cache_free();
+    st.last_error = (g_state == SLE_JOB_STATE_ERROR) ? 1U : 0U;
+    st.tick_ms = (uint32_t)uapi_systick_get_ms();
+
+    errcode_t ret = broadcast_packet(SLE_JOB_PKT_PANEL_STATUS, &st, sizeof(st));
+    if (ret != ERRCODE_SLE_SUCCESS && sle_job_route_server_get_connection_count() > 0U) {
+        static uint32_t s_panel_bcast_fail_count = 0;
+        if ((s_panel_bcast_fail_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_STATUS] broadcast ret=0x%x conns=%u owner=%u\r\n",
+                        ret, sle_job_route_server_get_connection_count(),
+                        sle_job_route_server_get_owner_conn_id());
+        }
+    }
+}
+
+static int panel_status_task(void *arg)
+{
+    unused(arg);
+    osal_printk("[PANEL_STATUS] task start period=%ums\r\n", SLE_JOB_PANEL_STATUS_PERIOD_MS);
+    while (1) {
+        send_panel_status();
+        osal_msleep(SLE_JOB_PANEL_STATUS_PERIOD_MS);
+    }
+    return 0;
+}
+
+static void start_panel_status_task_once(void)
+{
+    if (g_panel_status_task_started) {
+        return;
+    }
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(panel_status_task, NULL, "panel_stat",
+                                          SLE_JOB_PANEL_STATUS_TASK_STACK_SIZE);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        osal_printk("[PANEL_STATUS] create task failed\r\n");
+        return;
+    }
+    if (osal_kthread_set_priority(task, SLE_JOB_PANEL_STATUS_TASK_PRIO) != OSAL_SUCCESS) {
+        osal_printk("[PANEL_STATUS] set priority failed\r\n");
+    }
+    g_panel_status_task_started = true;
+    osal_kfree(task);
+    osal_kthread_unlock();
 }
 
 static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status, const char *reason)
@@ -704,8 +803,9 @@ static void handle_route_switch(const sle_job_packet_view_t *pkt)
     send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_OK);
 }
 
-void sle_job_manager_on_packet(const uint8_t *data, uint16_t len)
+void sle_job_manager_on_packet(uint16_t conn_id, const uint8_t *data, uint16_t len)
 {
+    unused(conn_id);
     sle_job_packet_view_t pkt;
     if (!sle_job_packet_decode(data, len, &pkt)) {
         osal_printk("[JOB_RX] bad packet len=%u\r\n", len);
@@ -815,5 +915,7 @@ void sle_job_manager_init(void)
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
     g_route_switch_pending = false;
+    g_panel_status_seq = 1;
+    start_panel_status_task_once();
     osal_printk("[JOB_RX] manager init cache=%u sliding-window\r\n", (unsigned int)sle_job_cache_size());
 }

@@ -13,6 +13,7 @@ static lv_obj_t *g_lbl_host;
 static lv_obj_t *g_lbl_tx;
 static lv_obj_t *g_lbl_rx;
 static lv_obj_t *g_lbl_sle;
+static lv_obj_t *g_lbl_view;
 static lv_obj_t *g_lbl_owner;
 static lv_obj_t *g_lbl_mode;
 static lv_obj_t *g_lbl_job_state;
@@ -32,19 +33,12 @@ static void back_btn_cb(lv_event_t *e)
     ui_manager_switch_page(PAGE_HOME);
 }
 
-static void next_scene_cb(lv_event_t *e)
-{
-    (void)e;
-    panel_model_next_scene();
-    osal_printk("[DIAG] manual next scene=%s\r\n",
-                panel_model_scene_text(g_model.scene));
-}
-
 static void mode_toggle_cb(lv_event_t *e)
 {
     (void)e;
     panel_model_toggle_primary_mode();
-    osal_printk("[DIAG] mode toggle scene=%s owner=%s mode=%s\r\n",
+    osal_printk("[DIAG] mode toggle view=%s scene=%s owner=%s rx_mode=%s\r\n",
+                panel_model_view_mode_text(g_model.view_mode),
                 panel_model_scene_text(g_model.scene),
                 panel_model_owner_text(g_model.owner),
                 panel_model_mode_text(g_model.mode));
@@ -140,23 +134,6 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(mode_lbl, COLOR_LASER_GREEN, 0);
     lv_obj_center(mode_lbl);
 
-    lv_obj_t *next_btn = lv_button_create(header);
-    lv_obj_remove_style_all(next_btn);
-    lv_obj_set_size(next_btn, 54, 28);
-    lv_obj_set_style_bg_color(next_btn, COLOR_BG_CARD, 0);
-    lv_obj_set_style_bg_opa(next_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(next_btn, 8, 0);
-    lv_obj_set_style_border_color(next_btn, COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(next_btn, 1, 0);
-    lv_obj_set_ext_click_area(next_btn, 6);
-    lv_obj_add_event_cb(next_btn, next_scene_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *next_lbl = lv_label_create(next_btn);
-    lv_label_set_text(next_lbl, "Next");
-    lv_obj_set_style_text_font(next_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(next_lbl, COLOR_LASER_BLUE, 0);
-    lv_obj_center(next_lbl);
-
     /* Body */
     lv_obj_t *body = lv_obj_create(scr);
     panel_page_body_setup(body, 6);
@@ -182,7 +159,7 @@ void page_diagnostics_create(lv_obj_t *parent)
 
     /* Owner and job section */
     lv_obj_t *sle_card = lv_obj_create(body);
-    lv_obj_set_size(sle_card, 290, 162);
+    lv_obj_set_size(sle_card, 290, 180);
     lv_obj_remove_flag(sle_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(sle_card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sle_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -194,8 +171,9 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(sle_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(sle_title, COLOR_LASER_ORANGE, 0);
 
+    g_lbl_view = create_info_row(sle_card, "Screen视图", "--", COLOR_TEXT_LIGHT);
     g_lbl_owner = create_info_row(sle_card, "Owner", "--", COLOR_TEXT_LIGHT);
-    g_lbl_mode = create_info_row(sle_card, "Mode", "--", COLOR_TEXT_LIGHT);
+    g_lbl_mode = create_info_row(sle_card, "RX Mode", "--", COLOR_TEXT_LIGHT);
     g_lbl_job_state = create_info_row(sle_card, "Job状态", "--", COLOR_TEXT_LIGHT);
     g_lbl_job_id = create_info_row(sle_card, "Job ID", "--", COLOR_TEXT_LIGHT);
     g_lbl_progress = create_info_row(sle_card, "进度", "--", COLOR_TEXT_LIGHT);
@@ -240,6 +218,9 @@ void page_diagnostics_update(void)
     lv_obj_set_style_text_color(g_lbl_sle,
         g_model.sle_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
 
+    lv_label_set_text(g_lbl_view, panel_model_view_mode_text(g_model.view_mode));
+    lv_obj_set_style_text_color(g_lbl_view,
+        g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE : COLOR_LASER_BLUE, 0);
     lv_label_set_text(g_lbl_owner, panel_model_owner_text(g_model.owner));
     lv_label_set_text(g_lbl_mode, panel_model_mode_text(g_model.mode));
     lv_label_set_text(g_lbl_job_state, panel_model_state_text(g_model.state));

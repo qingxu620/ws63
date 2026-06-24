@@ -24,6 +24,10 @@
 #define UUID_LEN_2 2
 #define CONNECT_RETRY_INTERVAL_MS 1000U
 
+#define SLE_LINK_ROLE_NONE 0U
+#define SLE_LINK_ROLE_RX 1U
+#define SLE_LINK_ROLE_PANEL 2U
+
 #ifndef SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME
 #define SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME 0x0B
 #endif
@@ -38,13 +42,17 @@
 
 /* State */
 static uint16_t g_conn_id = SLE_CONN_INVALID;
+static uint16_t g_panel_conn_id = SLE_CONN_INVALID;
 static bool g_sle_enabled = false;
 static bool g_seek_active = false;
 static bool g_connecting = false;
+static uint8_t g_pending_role = SLE_LINK_ROLE_NONE;
 static sle_addr_t g_pending_addr = {0};
 static bool g_handles_ready = false;
+static bool g_panel_handles_ready = false;
 static uint16_t g_data_handle = 0;
 static uint16_t g_resp_handle = 0;
+static uint16_t g_panel_status_handle = 0;
 static sle_job_response_cb_t g_response_cb = NULL;
 static uint32_t g_last_connect_ms = 0;
 static osal_semaphore g_write_cfm_sem;
@@ -143,10 +151,63 @@ static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_resu
     return adv_service_match(seek_result);
 }
 
+static bool adv_panel_service_match(const sle_seek_result_info_t *seek_result)
+{
+    if (seek_result == NULL || seek_result->data == NULL) {
+        return false;
+    }
+
+    uint8_t *data = seek_result->data;
+    uint16_t len = seek_result->data_length;
+    for (uint16_t i = 0; i < len;) {
+        if ((i + 1U) >= len) {
+            break;
+        }
+
+        uint8_t ad_type = data[i];
+        uint8_t ad_len = data[i + 1U];
+        if ((uint16_t)(i + 2U + ad_len) > len) {
+            break;
+        }
+
+        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS && ad_len >= UUID_LEN_2) {
+            for (uint8_t j = 0; (uint8_t)(j + 1U) < ad_len; j = (uint8_t)(j + UUID_LEN_2)) {
+                uint16_t uuid = (uint16_t)data[i + 2U + j] | ((uint16_t)data[i + 3U + j] << 8);
+                if (uuid == SLE_PANEL_SERVICE_UUID) {
+                    return true;
+                }
+            }
+        }
+        i = (uint16_t)(i + 2U + ad_len);
+    }
+
+    return false;
+}
+
+static bool seek_result_matches_panel(const sle_seek_result_info_t *seek_result)
+{
+    if (seek_result == NULL) {
+        return false;
+    }
+    return adv_name_match(seek_result, SLE_PANEL_SERVER_NAME) ||
+           adv_name_match(seek_result, "WS63_PANEL") ||
+           adv_panel_service_match(seek_result);
+}
+
+static bool need_rx_link(void)
+{
+    return g_conn_id == SLE_CONN_INVALID;
+}
+
+static bool need_panel_link(void)
+{
+    return g_panel_conn_id == SLE_CONN_INVALID;
+}
+
 static void start_seek_if_needed(void)
 {
     if (!g_sle_enabled || g_seek_active || g_connecting ||
-        g_conn_id != SLE_CONN_INVALID || g_handles_ready) {
+        (!need_rx_link() && !need_panel_link())) {
         return;
     }
 
@@ -167,7 +228,8 @@ static void start_seek_if_needed(void)
     (void)sle_set_seek_param(&param);
 
     g_last_connect_ms = now;
-    osal_printk("[tx] seeking receiver...\r\n");
+    osal_printk("[tx] seeking rx/panel need_rx=%d need_panel=%d...\r\n",
+                need_rx_link() ? 1 : 0, need_panel_link() ? 1 : 0);
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[tx] start seek fail: 0x%x\r\n", ret);
@@ -186,20 +248,30 @@ static void sle_enable_cbk(errcode_t status)
 
 static void seek_result_cbk(sle_seek_result_info_t *seek_result)
 {
-    if (seek_result == NULL || g_connecting || g_conn_id != SLE_CONN_INVALID || g_handles_ready) {
+    if (seek_result == NULL || g_connecting) {
         return;
     }
 
-    if (!seek_result_matches_receiver(seek_result)) {
+    uint8_t role = SLE_LINK_ROLE_NONE;
+    if (need_rx_link() && seek_result_matches_receiver(seek_result)) {
+        role = SLE_LINK_ROLE_RX;
+    } else if (need_panel_link() && seek_result_matches_panel(seek_result)) {
+        role = SLE_LINK_ROLE_PANEL;
+    }
+
+    if (role == SLE_LINK_ROLE_NONE) {
         return;
     }
 
     memcpy_s(&g_pending_addr, sizeof(g_pending_addr), &seek_result->addr, sizeof(seek_result->addr));
     g_connecting = true;
-    osal_printk("[tx] found receiver, stop seek then connect\r\n");
+    g_pending_role = role;
+    osal_printk("[tx] found %s, stop seek then connect\r\n",
+                (role == SLE_LINK_ROLE_RX) ? "receiver" : "panel");
     errcode_t ret = sle_stop_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_connecting = false;
+        g_pending_role = SLE_LINK_ROLE_NONE;
         osal_printk("[tx] stop seek fail: 0x%x\r\n", ret);
     }
 }
@@ -216,6 +288,7 @@ static void seek_disable_cbk(errcode_t status)
     osal_printk("[tx] seek disable: 0x%x\r\n", status);
     if (status != ERRCODE_SLE_SUCCESS || !g_connecting) {
         g_connecting = false;
+        g_pending_role = SLE_LINK_ROLE_NONE;
         start_seek_if_needed();
         return;
     }
@@ -223,6 +296,7 @@ static void seek_disable_cbk(errcode_t status)
     errcode_t ret = sle_connect_remote_device(&g_pending_addr);
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_connecting = false;
+        g_pending_role = SLE_LINK_ROLE_NONE;
         osal_printk("[tx] connect request submit fail: 0x%x\r\n", ret);
         start_seek_if_needed();
     }
@@ -236,9 +310,19 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        g_conn_id = conn_id;
+        uint8_t role = g_pending_role;
+        if (role == SLE_LINK_ROLE_NONE) {
+            role = need_rx_link() ? SLE_LINK_ROLE_RX : SLE_LINK_ROLE_PANEL;
+        }
+        if (role == SLE_LINK_ROLE_PANEL) {
+            g_panel_conn_id = conn_id;
+        } else {
+            g_conn_id = conn_id;
+        }
         g_connecting = false;
-        osal_printk("[tx] connected! conn_id=%u\r\n", conn_id);
+        g_pending_role = SLE_LINK_ROLE_NONE;
+        osal_printk("[tx] connected %s conn_id=%u\r\n",
+                    (role == SLE_LINK_ROLE_PANEL) ? "panel" : "rx", conn_id);
 
         /* Request fast connection interval immediately */
         sle_connection_param_update_t parame = {0};
@@ -254,14 +338,23 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         ssap_exchange_info_t info = {0};
         info.mtu_size = 512;
         info.version = 1;
-        ssapc_exchange_info_req(SLE_CLIENT_ID, g_conn_id, &info);
+        ssapc_exchange_info_req(SLE_CLIENT_ID, conn_id, &info);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
-        g_conn_id = SLE_CONN_INVALID;
+        if (conn_id == g_panel_conn_id) {
+            g_panel_conn_id = SLE_CONN_INVALID;
+            g_panel_handles_ready = false;
+            g_panel_status_handle = 0;
+            osal_printk("[tx_panel] disconnected\r\n");
+        }
+        if (conn_id == g_conn_id) {
+            g_conn_id = SLE_CONN_INVALID;
+            g_handles_ready = false;
+            g_data_handle = 0;
+            g_resp_handle = 0;
+            osal_printk("[tx] rx disconnected\r\n");
+        }
         g_connecting = false;
-        g_handles_ready = false;
-        g_data_handle = 0;
-        g_resp_handle = 0;
-        osal_printk("[tx] disconnected\r\n");
+        g_pending_role = SLE_LINK_ROLE_NONE;
         start_seek_if_needed();
     }
 }
@@ -286,7 +379,6 @@ static void exchange_info_cbk(uint8_t client_id, uint16_t conn_id,
     ssap_exchange_info_t *param, errcode_t status)
 {
     unused(client_id);
-    unused(conn_id);
     unused(param);
     osal_printk("[tx] mtu exchange: 0x%x\r\n", status);
     /* Discover services */
@@ -294,7 +386,7 @@ static void exchange_info_cbk(uint8_t client_id, uint16_t conn_id,
     find_param.type = SSAP_FIND_TYPE_PRIMARY_SERVICE;
     find_param.start_hdl = 1;
     find_param.end_hdl = 0xFFFF;
-    (void)ssapc_find_structure(SLE_CLIENT_ID, g_conn_id, &find_param);
+    (void)ssapc_find_structure(SLE_CLIENT_ID, conn_id, &find_param);
 }
 
 static void find_structure_cbk(uint8_t client_id, uint16_t conn_id,
@@ -302,9 +394,13 @@ static void find_structure_cbk(uint8_t client_id, uint16_t conn_id,
 {
     unused(client_id);
     if (status != ERRCODE_SLE_SUCCESS || service == NULL) return;
-    if (!uuid16_equals(&service->uuid, SLE_JOB_SERVICE_UUID)) return;
 
-    osal_printk("[tx] found service 0x%x\r\n", SLE_JOB_SERVICE_UUID);
+    bool is_panel_conn = (conn_id == g_panel_conn_id);
+    uint16_t expected_uuid = is_panel_conn ? SLE_PANEL_SERVICE_UUID : SLE_JOB_SERVICE_UUID;
+    if (!uuid16_equals(&service->uuid, expected_uuid)) return;
+
+    osal_printk("[%s] found service 0x%x\r\n",
+                is_panel_conn ? "tx_panel" : "tx", expected_uuid);
     ssapc_find_structure_param_t find_param = {0};
     find_param.type = SSAP_FIND_TYPE_PROPERTY;
     find_param.start_hdl = service->start_hdl;
@@ -316,8 +412,21 @@ static void find_property_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_find_property_result_t *property, errcode_t status)
 {
     unused(client_id);
-    unused(conn_id);
     if (status != ERRCODE_SLE_SUCCESS || property == NULL) return;
+
+    if (conn_id == g_panel_conn_id) {
+        if (uuid16_equals(&property->uuid, SLE_PANEL_STATUS_CHAR_UUID)) {
+            g_panel_status_handle = property->handle;
+            g_panel_handles_ready = true;
+            osal_printk("[tx_panel] status handle=0x%x ready\r\n", g_panel_status_handle);
+            start_seek_if_needed();
+        }
+        return;
+    }
+
+    if (conn_id != g_conn_id) {
+        return;
+    }
 
     if (uuid16_equals(&property->uuid, SLE_JOB_DATA_CHAR_UUID)) {
         g_data_handle = property->handle;
@@ -330,6 +439,7 @@ static void find_property_cbk(uint8_t client_id, uint16_t conn_id,
     g_handles_ready = (g_data_handle != 0) && (g_resp_handle != 0);
     if (g_handles_ready) {
         osal_printk("[tx] ready!\r\n");
+        start_seek_if_needed();
     }
 }
 
@@ -337,8 +447,10 @@ static void write_cfm_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_write_result_t *write_result, errcode_t status)
 {
     unused(client_id);
-    unused(conn_id);
     unused(write_result);
+    if (conn_id != g_conn_id) {
+        return;
+    }
     if (status != ERRCODE_SLE_SUCCESS) {
         osal_printk("[tx] write cfm fail: 0x%x\r\n", status);
     }
@@ -352,13 +464,12 @@ static void notification_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_handle_value_t *data, errcode_t status)
 {
     unused(client_id);
-    unused(conn_id);
 
     if (status != ERRCODE_SLE_SUCCESS || data == NULL || data->data == NULL) {
         return;
     }
 
-    if (data->handle == g_resp_handle && g_response_cb != NULL) {
+    if (conn_id == g_conn_id && data->handle == g_resp_handle && g_response_cb != NULL) {
         g_response_cb(data->data, data->data_len);
     }
 }
@@ -373,13 +484,17 @@ static void indication_cbk(uint8_t client_id, uint16_t conn_id,
 errcode_t sle_job_client_init(void)
 {
     g_conn_id = SLE_CONN_INVALID;
+    g_panel_conn_id = SLE_CONN_INVALID;
     g_sle_enabled = false;
     g_seek_active = false;
     g_connecting = false;
+    g_pending_role = SLE_LINK_ROLE_NONE;
     memset(&g_pending_addr, 0, sizeof(g_pending_addr));
     g_handles_ready = false;
+    g_panel_handles_ready = false;
     g_data_handle = 0;
     g_resp_handle = 0;
+    g_panel_status_handle = 0;
     g_last_connect_ms = 0;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
     if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
@@ -460,6 +575,32 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
 bool sle_job_client_is_connected(void)
 {
     return g_conn_id != SLE_CONN_INVALID && g_handles_ready;
+}
+
+bool sle_job_client_panel_is_connected(void)
+{
+    return g_panel_conn_id != SLE_CONN_INVALID && g_panel_handles_ready;
+}
+
+errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len)
+{
+    if (data == NULL || len == 0 || !sle_job_client_panel_is_connected() ||
+        g_panel_status_handle == 0) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    ssapc_write_param_t param = {0};
+    param.handle = g_panel_status_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.data_len = len;
+    param.data = (uint8_t *)data;
+
+    errcode_t ret = ssapc_write_cmd(SLE_CLIENT_ID, g_panel_conn_id, &param);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[tx_panel] mirror write fail ret=0x%x len=%u\r\n",
+                    ret, (unsigned int)len);
+    }
+    return ret;
 }
 
 void sle_job_client_poll_connect(void)

@@ -92,6 +92,9 @@ switch_to_tx() {
     if ! grep -q '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG"; then
         sed -i '/^# CONFIG_LASER_SLE_JOB_RECEIVER is not set$/a CONFIG_LASER_SLE_JOB_TRANSMITTER=y' "$CONFIG"
     fi
+    if ! grep -q '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG"; then
+        sed -i '/^CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=y$/a CONFIG_LASER_SLE_JOB_TRANSMITTER=y' "$CONFIG"
+    fi
     verify_tx_config
 }
 
@@ -103,6 +106,9 @@ switch_to_rx() {
     sed -i 's/^# CONFIG_LASER_SLE_JOB_RECEIVER is not set$/CONFIG_LASER_SLE_JOB_RECEIVER=y/' "$CONFIG"
     if ! grep -q '^CONFIG_LASER_SLE_JOB_RECEIVER=y$' "$CONFIG"; then
         sed -i '/^# CONFIG_LASER_SLE_JOB_TRANSMITTER is not set$/a CONFIG_LASER_SLE_JOB_RECEIVER=y' "$CONFIG"
+    fi
+    if ! grep -q '^CONFIG_LASER_SLE_JOB_RECEIVER=y$' "$CONFIG"; then
+        sed -i '/^CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=y$/a CONFIG_LASER_SLE_JOB_RECEIVER=y' "$CONFIG"
     fi
     verify_rx_config
 }

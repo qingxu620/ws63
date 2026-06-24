@@ -256,7 +256,9 @@ void page_job_monitor_update(void)
     /* Update with demo data from model */
     char buf[24];
 
-    if (g_model.owner == PANEL_OWNER_HOST) {
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+        lv_label_set_text(g_lbl_title, "Offline View");
+    } else if (g_model.owner == PANEL_OWNER_HOST) {
         lv_label_set_text(g_lbl_title, "Online Monitor");
     } else if (g_model.owner == PANEL_OWNER_SCREEN) {
         lv_label_set_text(g_lbl_title, "Offline Job Monitor");

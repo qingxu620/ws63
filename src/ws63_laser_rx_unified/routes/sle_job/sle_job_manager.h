@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 void sle_job_manager_init(void);
-void sle_job_manager_on_packet(const uint8_t *data, uint16_t len);
+void sle_job_manager_on_packet(uint16_t conn_id, const uint8_t *data, uint16_t len);
 void sle_job_manager_on_disconnect(void);
 void sle_job_manager_safe_stop(const char *reason);
 bool sle_job_manager_is_idle(void);

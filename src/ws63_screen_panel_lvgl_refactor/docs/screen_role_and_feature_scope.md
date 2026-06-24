@@ -41,16 +41,16 @@ Screen 是设备本体 HMI，并在离线模式下升级为无线任务入口；
 RX 是唯一执行端和状态真相源。
 ```
 
-注意：Host Online Mode 下 `RX -> TX + Screen 状态广播/组播` 是最终推荐目标，不是当前已验证能力。它能否实现取决于 WS63 SDK 是否支持多连接、广播业务、组播业务或多接收端 notification。当前阶段不得假设 SDK 已经支持。
+注意：Host Online Mode 下不再采用 `RX -> TX + Screen` 同时直连广播/组播作为产品主线。前期验证表明普通 SLE SSAP Server 当前只能同时连接一个 Central，`conn_id=0xffff` 只能发给已连接 peer，不能解决第二个 observer 连接问题。
 
-Host Online 状态镜像应保留 fallback 路线：
+已采纳的通信主线：
 
-| 路线 | 定位 |
+| 模式 | 链路 | 定位 |
 | --- | --- |
-| Preferred | RX 状态广播/组播给 TX + Screen |
-| Fallback A | TX 转发 RX 状态给 Screen |
-| Fallback B | Screen 只显示 fake/local diagnostics |
-| Fallback C | 优先实现 Panel Offline 单独连接 RX，Host Online 状态镜像后置 |
+| Host Online | `Host / PC -> TX -> RX`，同时 `TX -> Screen` 状态镜像 | TX 是电脑模式无线入口，Screen 是 HMI |
+| Panel Offline | `Screen -> RX` | Screen 取代 TX，成为离线 job owner |
+
+CHBA 或 RX-as-Client 多连接状态镜像只作为长期研究项，不进入当前稳定主线。
 
 ## 3. Host Online Mode：Host 控制时 Screen 的作用
 
@@ -60,27 +60,27 @@ Host Online Mode 的任务数据主链路仍然是：
 Host UI -> TX -> RX
 ```
 
-Host Online Mode 的状态链路最终推荐演进为：
+Host Online Mode 的状态镜像链路最终采用：
 
 ```text
-RX -> TX + Screen 状态广播/组播
+RX -> TX -> Screen
 ```
 
-该链路是最终目标，不是当前已验证能力。若 SDK 或当前协议栈无法支持 RX 同时向 TX 和 Screen 发送状态，应降级为 TX 转发，或在 Host Online 阶段只保留 Screen 本地 diagnostics/fake 状态。
+TX 在 Host Online Mode 下接收 RX 的 `STATUS` / `PANEL_STATUS` / `OK` / `NACK` / `ERR` 等结果，并把 Screen 需要的只读状态镜像给 Screen。Screen 不直接连接 RX，不参与 Host job 的 ACK/NACK 推进。
 
 Screen 在该模式下不是任务主控，不上传 G-code，不抢 START，但必须作为设备本体 HMI 持续提供价值。
 
 该模式下 Screen 的角色是：
 
 ```text
-RX 状态监听器 + 本地安全面板 + 完成提醒器 + 诊断显示面板
+RX 状态镜像显示器 + 本地安全面板 + 完成提醒器 + 诊断显示面板
 ```
 
-RX 状态广播/组播适合承载只读状态，例如 `PANEL_STATUS`、job state、progress、executed lines、focus state、laser state、DONE/ERROR event。DONE/ERROR event 必须带 `seq` 或 `event_id`，避免重复提示或乱序覆盖。
+TX 转发链路适合承载只读状态，例如 `PANEL_STATUS`、job state、progress、executed lines、focus state、laser state、DONE/ERROR event。DONE/ERROR event 必须带 `seq` 或 `event_id`，避免重复提示或乱序覆盖。
 
-RX 状态广播/组播不应用来承载 `JOB_DATA`、ACK/NACK offset 推进、`BEGIN/DATA/END`、`EXEC_START`、`FOCUS_ON` 或 owner claim。
+状态镜像链路不应用来承载 `JOB_DATA`、ACK/NACK offset 推进、`BEGIN/DATA/END`、`EXEC_START`、`FOCUS_ON` 或 owner claim。
 
-Host Online 下，如果 Screen 未来可以直连 RX，它的权限仍必须限制为：
+Host Online 下，Screen 不推荐直连 RX。如果未来做研究性直连监听，它的权限仍必须限制为：
 
 允许：
 
@@ -594,9 +594,9 @@ Diagnostics
 
 `communication_modes.md` 进一步修正最终通信判断：
 
-- Host Online Mode：任务数据仍走 `Host UI -> TX -> RX`，Screen 通过 RX 状态广播/组播成为状态监听器、本地安全面板、完成提醒器和诊断显示面板。
+- Host Online Mode：任务数据仍走 `Host UI -> TX -> RX`，Screen 通过 `TX -> Screen` 状态镜像成为状态显示器、本地安全面板、完成提醒器和诊断显示面板。
 - Panel Offline Mode：Screen 走 `Screen -> SD read -> SLE Job Client -> RX`，TX 可以断电，Screen 取代 TX 的生态位成为离线模式下的 job owner。
-- 状态适合广播/组播，任务数据和 ACK/NACK 推进逻辑不适合广播。
+- 状态适合镜像转发；任务数据和 ACK/NACK 推进逻辑必须点对点归属当前 owner。
 - RX 是唯一执行端和状态真相源，并最终维护或确认 `control_owner = NONE / HOST / SCREEN`。
 
 本文档补充的是产品定位和功能分层：

@@ -1,19 +1,21 @@
-# WS63 Screen 早期 TX 接入设计
+# WS63 Screen Host Online TX 接入设计
 
 ## 1. 目标与边界
 
-本文档定义 `src/ws63_screen_panel_lvgl_refactor` 早期接入当前稳定 Host/TX/RX 链路时的保守路线、fallback 路线、阶段拆分、协议最小集和模块职责边界。
+本文档定义 `src/ws63_screen_panel_lvgl_refactor` 在 Host Online Mode 下接入当前稳定 Host/TX/RX 链路时的主线方案、阶段拆分、协议最小集和模块职责边界。
 
-本文件不是最终通信形态定义，不应再理解为“Screen 永远必须接 TX”。
+本文件当前是 Host Online Mode 的最终采纳路线：Screen 通过 TX 获取 RX 状态镜像，并通过 TX 发起有限安全类请求。
 
-最终推荐架构以 `communication_modes.md` 和 `screen_role_and_feature_scope.md` 中的“RX 状态广播 + Screen 离线 Job Client”为准：
+最终推荐架构以 `communication_modes.md` 和 `screen_role_and_feature_scope.md` 中的双模式划分为准：
 
 ```text
-Host Online Mode：Host UI -> TX -> RX；RX -> TX + Screen 状态广播/组播
+Host Online Mode：Host / PC -> TX -> RX，同时 TX -> Screen 状态镜像
 Panel Offline Mode：Screen -> SD read -> SLE Job Client -> RX
 ```
 
-也就是说，本文档描述的是“先通过 TX 做最小闭环”的早期路线，不是最终形态。最终形态中：
+也就是说，本文档描述的是 Host Online 的 TX 状态转发路线。Panel Offline 仍由 Screen 单独连接 RX，取代 TX 成为离线 owner。
+
+最终形态中：
 
 - TX 是电脑模式的无线入口。
 - Screen 是设备本体 HMI，并在离线模式下升级为无线任务入口。
@@ -21,7 +23,7 @@ Panel Offline Mode：Screen -> SD read -> SLE Job Client -> RX
 
 当前阶段只做设计准备，不实现真实链路。
 
-注意：`RX -> TX + Screen 状态广播/组播` 是最终推荐目标，不是当前已验证能力。是否可行取决于 WS63 SDK 对多连接、广播业务、组播业务或多接收端 notification 的支持。当前阶段不得假设 SDK 已经支持。
+注意：前期验证表明普通 SLE SSAP Server 当前无法稳定支撑 `RX -> TX + Screen` 双 Central 直连。`conn_id=0xffff` 只表示通知所有已连接 peer，不是无连接空中广播。因此 Host Online Mode 采纳 `RX -> TX -> Screen` 状态镜像，不再依赖 RX 同时服务 TX 和 Screen。
 
 硬性边界：
 
@@ -32,20 +34,18 @@ Panel Offline Mode：Screen -> SD read -> SLE Job Client -> RX
 - 不接真实 UART / SLE / SD / 音频 / 小游戏。
 - 不 `git add`，不 commit。
 
-## 2. 早期保守架构
+## 2. Host Online 主线架构
 
-早期保守架构是：Host UI 和 Screen UI 都接入 TX，由 TX 做轻量仲裁，TX 再通过现有 SLE Job Packet 接 RX。
+Host Online 主线架构是：Host UI 和 Screen UI 都接入 TX，由 TX 做轻量仲裁和状态镜像，TX 再通过现有 SLE Job Packet 接 RX。
 
-该方案适合 Phase B1/B2 这类最小闭环验证，原因是它复用当前稳定 TX/RX 链路，不要求 RX 立即支持 Screen 直连 observer、状态广播/组播或离线 owner。
+该方案复用当前稳定 TX/RX 链路，不要求 RX 同时支持 Screen 直连 observer、状态广播/组播或多 Central 连接。
 
-它也对应最终架构无法马上验证时的 fallback：
+Host Online 与 Panel Offline 的边界：
 
-| 路线 | 说明 |
+| 模式 | 链路 | owner |
 | --- | --- |
-| Preferred | RX 状态广播/组播给 TX + Screen |
-| Fallback A | Host Online 阶段由 TX 转发 RX 状态给 Screen |
-| Fallback B | Host Online 阶段 Screen 只显示 fake/local diagnostics |
-| Fallback C | 优先实现 Panel Offline 单独连接 RX，Host Online 状态镜像后置 |
+| Host Online | `Host / PC -> TX -> RX`，`TX -> Screen` 状态镜像 | HOST/TX |
+| Panel Offline | `Screen -> RX` | SCREEN |
 
 ```text
 Host UI
@@ -74,12 +74,11 @@ Motion / DAC / Laser PWM / safety interlock
 核心原则：
 
 - RX 仍然是运动执行、任务状态、激光状态、安全互锁的源头。
-- TX 在早期路线中是 Host 与 Screen 的统一入口仲裁点。
+- TX 在 Host Online Mode 中是 Host 与 Screen 的统一入口仲裁点和状态镜像转发点。
 - Screen 不直接证明真实激光状态，只显示 TX/RX 回包确认后的状态。
 - Screen 不上传 G-code，不解析 G-code，不生成运动轨迹。
-- 最终 Host Online Mode 应演进为 RX 状态广播/组播给 TX + Screen，Screen 作为状态监听器和本地安全面板。
-- 最终 Panel Offline Mode 中 Screen 取代 TX 的生态位，成为离线 job owner 和无线任务入口。
-- 在 SDK 多接收端能力未验证前，本文档的 TX 转发路线只应作为早期保守路线或 fallback，不应固化为最终产品架构。
+- Host Online Mode 不要求 Screen 直连 RX。
+- Panel Offline Mode 中 Screen 取代 TX 的生态位，成为离线 job owner 和无线任务入口。
 
 ## 3. 明确否定的方案
 
@@ -102,7 +101,7 @@ Screen -----> RX  （同时作为第二主控发送任务/START/FOCUS_ON）
 
 注意：这不否定 `communication_modes.md` 定义的最终方案：
 
-- Host Online Mode 下，Screen 可以作为 RX 状态监听器接收状态广播/组播。
+- Host Online Mode 下，Screen 通过 TX 接收 RX 状态镜像，不作为 RX 第二个直连主控。
 - Panel Offline Mode 下，Screen 可以取代 TX 的生态位，作为 owner 与 RX 建立离线任务链路。
 - 关键区别是 owner：任务数据、`EXEC_START`、`FOCUS_ON`、ACK/NACK 推进逻辑必须属于单一 owner。
 
@@ -564,5 +563,5 @@ safe_stop_reason
 2. 早期接入时先让 Screen 通过 TX 查询 `@STATUS`。
 3. Host Online Mode 下优先开放状态显示、`FOCUS_OFF`、`STOP`、`ABORT`。
 4. `FOCUS_ON` 和 `START` 必须等待 owner 规则明确后再开放。
-5. 最终通信判断迁移到 `communication_modes.md`：Host 模式用 RX 状态广播/组播支撑 Screen HMI；离线模式由 Screen 取代 TX 生态位成为 job owner。
+5. 最终通信判断迁移到 `communication_modes.md`：Host 模式用 TX 状态镜像支撑 Screen HMI；离线模式由 Screen 取代 TX 生态位成为 job owner。
 6. 不把 LVGL 并入 RX。

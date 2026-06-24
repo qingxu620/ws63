@@ -42,9 +42,13 @@
 
 #define UUID_LEN_2 2
 #define SLE_CONN_INVALID 0xFFFF
+#define SLE_CONN_BROADCAST 0xFFFF
+#define SLE_JOB_ROUTE_MAX_CONNECTIONS 4U
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static volatile uint16_t g_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
+static volatile bool g_conn_table_ready = false;
 static uint8_t g_server_id = 0;
 static uint16_t g_service_handle = 0;
 static uint16_t g_data_property_handle = 0;
@@ -57,6 +61,68 @@ static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
+static void conn_table_reset(void)
+{
+    for (uint8_t i = 0; i < SLE_JOB_ROUTE_MAX_CONNECTIONS; i++) {
+        g_conn_ids[i] = SLE_CONN_INVALID;
+    }
+    g_owner_conn_id = SLE_CONN_INVALID;
+    g_conn_table_ready = true;
+}
+
+static bool conn_table_contains(uint16_t conn_id)
+{
+    if (conn_id == SLE_CONN_INVALID) {
+        return false;
+    }
+    for (uint8_t i = 0; i < SLE_JOB_ROUTE_MAX_CONNECTIONS; i++) {
+        if (g_conn_ids[i] == conn_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint8_t conn_table_count(void)
+{
+    if (!g_conn_table_ready) {
+        return 0;
+    }
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < SLE_JOB_ROUTE_MAX_CONNECTIONS; i++) {
+        if (g_conn_ids[i] != SLE_CONN_INVALID) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void conn_table_add(uint16_t conn_id)
+{
+    if (conn_id == SLE_CONN_INVALID || conn_table_contains(conn_id)) {
+        return;
+    }
+    for (uint8_t i = 0; i < SLE_JOB_ROUTE_MAX_CONNECTIONS; i++) {
+        if (g_conn_ids[i] == SLE_CONN_INVALID) {
+            g_conn_ids[i] = conn_id;
+            return;
+        }
+    }
+    osal_printk("[job_rx] conn table full, observer conn_id=%u not tracked\r\n", conn_id);
+}
+
+static bool conn_table_remove(uint16_t conn_id)
+{
+    bool removed = false;
+    for (uint8_t i = 0; i < SLE_JOB_ROUTE_MAX_CONNECTIONS; i++) {
+        if (g_conn_ids[i] == conn_id) {
+            g_conn_ids[i] = SLE_CONN_INVALID;
+            removed = true;
+        }
+    }
+    return removed;
+}
 
 static void sle_uuid_set_base(sle_uuid_t *out)
 {
@@ -75,14 +141,24 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     ssaps_req_write_cb_t *write_cb_para, errcode_t status)
 {
     unused(server_id);
-    unused(conn_id);
     if (status != ERRCODE_SLE_SUCCESS || write_cb_para == NULL ||
         write_cb_para->value == NULL || write_cb_para->length == 0) {
         return;
     }
 
+    if (g_owner_conn_id == SLE_CONN_INVALID) {
+        g_owner_conn_id = conn_id;
+        osal_printk("[job_rx] owner claimed by conn_id=%u\r\n", conn_id);
+    }
+
+    if (conn_id != g_owner_conn_id) {
+        osal_printk("[job_rx] drop non-owner write conn_id=%u owner=%u len=%u\r\n",
+                    conn_id, g_owner_conn_id, write_cb_para->length);
+        return;
+    }
+
     if (g_packet_cb != NULL) {
-        g_packet_cb(write_cb_para->value, write_cb_para->length);
+        g_packet_cb(conn_id, write_cb_para->value, write_cb_para->length);
     }
 }
 
@@ -203,16 +279,25 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        g_conn_id = conn_id;
-        osal_printk("[job_rx] SLE connected conn_id=%u\r\n", conn_id);
+        conn_table_add(conn_id);
+        osal_printk("[job_rx] SLE connected conn_id=%u conns=%u owner=%u\r\n",
+                    conn_id, conn_table_count(), g_owner_conn_id);
+        errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        osal_printk("[job_rx] keep advertising for observer ret=0x%x\r\n", adv_ret);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
-        g_conn_id = SLE_CONN_INVALID;
+        bool was_owner = (conn_id == g_owner_conn_id);
+        (void)conn_table_remove(conn_id);
+        if (was_owner) {
+            g_owner_conn_id = SLE_CONN_INVALID;
+        }
         if (g_server_stopping) {
             osal_printk("[job_rx] SLE disconnected during route stop\r\n");
             return;
         }
-        osal_printk("[job_rx] SLE disconnected, force safe stop\r\n");
-        if (g_disconnect_cb != NULL) {
+        osal_printk("[job_rx] SLE disconnected conn_id=%u was_owner=%d conns=%u\r\n",
+                    conn_id, was_owner ? 1 : 0, conn_table_count());
+        if (was_owner && g_disconnect_cb != NULL) {
+            osal_printk("[job_rx] owner disconnected, force safe stop\r\n");
             g_disconnect_cb();
         }
         sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
@@ -355,7 +440,7 @@ static void sle_announce_register_cbks(void)
 
 errcode_t sle_job_route_server_init(void)
 {
-    g_conn_id = SLE_CONN_INVALID;
+    conn_table_reset();
     g_server_stopping = false;
     sle_announce_register_cbks();
     sle_conn_register_cbks();
@@ -370,11 +455,11 @@ errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
     osal_printk("[job_rx] route server stop begin connected=%d\r\n",
-                (g_conn_id != SLE_CONN_INVALID) ? 1 : 0);
-    if (g_conn_id != SLE_CONN_INVALID) {
+                (conn_table_count() > 0U) ? 1 : 0);
+    if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
         osal_printk("[job_rx] disconnect all ret=0x%x\r\n", disc_ret);
-        g_conn_id = SLE_CONN_INVALID;
+        conn_table_reset();
     }
     errcode_t adv_ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
     osal_printk("[job_rx] stop announce ret=0x%x\r\n", adv_ret);
@@ -383,12 +468,12 @@ errcode_t sle_job_route_server_stop(void)
 
 bool sle_job_route_server_is_connected(void)
 {
-    return g_conn_id != SLE_CONN_INVALID;
+    return g_owner_conn_id != SLE_CONN_INVALID;
 }
 
 errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
 {
-    if (data == NULL || len == 0 || g_conn_id == SLE_CONN_INVALID || g_resp_property_handle == 0) {
+    if (data == NULL || len == 0 || g_owner_conn_id == SLE_CONN_INVALID || g_resp_property_handle == 0) {
         return ERRCODE_SLE_FAIL;
     }
 
@@ -397,12 +482,36 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
     param.type = SSAP_PROPERTY_TYPE_VALUE;
     param.value_len = len;
     param.value = (uint8_t *)data;
-    return ssaps_notify_indicate(g_server_id, g_conn_id, &param);
+    return ssaps_notify_indicate(g_server_id, g_owner_conn_id, &param);
+}
+
+errcode_t sle_job_route_server_broadcast_packet(const void *data, uint16_t len)
+{
+    if (data == NULL || len == 0 || conn_table_count() == 0U || g_resp_property_handle == 0) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    ssaps_ntf_ind_t param = {0};
+    param.handle = g_resp_property_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.value_len = len;
+    param.value = (uint8_t *)data;
+    return ssaps_notify_indicate(g_server_id, SLE_CONN_BROADCAST, &param);
+}
+
+uint16_t sle_job_route_server_get_owner_conn_id(void)
+{
+    return g_owner_conn_id;
+}
+
+uint8_t sle_job_route_server_get_connection_count(void)
+{
+    return conn_table_count();
 }
 
 const char *sle_job_route_server_get_status(void)
 {
-    return (g_conn_id != SLE_CONN_INVALID) ? "connected" : "advertising";
+    return (conn_table_count() > 0U) ? "connected" : "advertising";
 }
 
 void sle_job_route_server_set_packet_cb(sle_job_route_packet_rx_cb_t cb)

@@ -122,10 +122,10 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_set_style_text_align(g_lbl_rx, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(g_lbl_rx, "RX正常");
 
-    g_lbl_sle = create_label(caps, &lv_font_montserrat_10, COLOR_LASER_BLUE);
+    g_lbl_sle = create_label(caps, PANEL_FONT_CN, COLOR_LASER_BLUE);
     lv_obj_set_width(g_lbl_sle, 36);
     lv_obj_set_style_text_align(g_lbl_sle, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(g_lbl_sle, "SLE");
+    lv_label_set_text(g_lbl_sle, "联机");
 }
 
 static void create_progress_block(lv_obj_t *parent)
@@ -263,6 +263,19 @@ static void btn_event_cb(lv_event_t *e)
         if (!perms.can_start) {
             osal_printk("[PANEL_CMD] start rejected: owner=%d state=%d\r\n",
                         g_model.owner, g_model.state);
+            break;
+        }
+        if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
+            (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING)) {
+            ui_manager_switch_page(PAGE_FILE_BROWSER);
+            osal_printk("[PANEL_CMD] open TF file browser before offline start\r\n");
+            break;
+        }
+        if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
+            g_model.owner == PANEL_OWNER_SCREEN &&
+            g_model.state == SYS_STATE_READY) {
+            panel_model_start_offline_selected();
+            osal_printk("[PANEL_CMD] offline fake send started (real SLE not connected)\r\n");
             break;
         }
         panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING);
@@ -516,8 +529,10 @@ static void apply_state(void)
         g_model.rx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
     lv_label_set_text(g_lbl_rx, g_model.rx_connected ? "RX正常" : "RX断开");
     lv_obj_set_style_text_color(g_lbl_sle,
-        g_model.sle_connected ? COLOR_LASER_BLUE : COLOR_TEXT_MUTED, 0);
-    lv_label_set_text(g_lbl_sle, panel_model_owner_text(g_model.owner));
+        g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE :
+        (g_model.sle_connected ? COLOR_LASER_BLUE : COLOR_TEXT_MUTED), 0);
+    lv_label_set_text(g_lbl_sle,
+        g_model.view_mode == PANEL_VIEW_OFFLINE ? "离线" : "联机");
 
     {
         char speed_buf[12];

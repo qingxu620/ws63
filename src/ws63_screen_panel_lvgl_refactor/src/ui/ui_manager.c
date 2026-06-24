@@ -10,6 +10,8 @@
 #include "pages/page_diagnostics.h"
 #include "pages/page_job_monitor.h"
 #include "pages/page_control.h"
+#include "pages/page_file_browser.h"
+#include "../service/panel_file_manager.h"
 #include "soc_osal.h"
 
 static page_id_t g_current_page = PAGE_HOME;
@@ -42,6 +44,9 @@ errcode_t ui_manager_init(void)
     register_page(PAGE_DIAGNOSTICS, page_diagnostics_create, page_diagnostics_update);
     register_page(PAGE_JOB_MONITOR, page_job_monitor_create, page_job_monitor_update);
     register_page(PAGE_CONTROL, page_control_create, page_control_update);
+    register_page(PAGE_FILE_BROWSER, page_file_browser_create, page_file_browser_update);
+
+    panel_file_manager_init();
 
     g_pages[PAGE_HOME].screen = lv_scr_act();
     g_pages[PAGE_HOME].create_fn(g_pages[PAGE_HOME].screen);

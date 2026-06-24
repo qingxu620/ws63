@@ -15,6 +15,7 @@ typedef enum {
     PAGE_DIAGNOSTICS,
     PAGE_JOB_MONITOR,
     PAGE_CONTROL,
+    PAGE_FILE_BROWSER,
     PAGE_COUNT
 } page_id_t;
 

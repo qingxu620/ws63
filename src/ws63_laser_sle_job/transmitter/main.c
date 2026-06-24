@@ -302,6 +302,30 @@ static void response_cb(const uint8_t *data, uint16_t length)
                    st.state, st.status, (unsigned int)st.job_id,
                    (unsigned int)st.received_size, (unsigned int)st.total_size,
                    (unsigned int)st.cache_free, (unsigned int)st.executed_lines);
+        if (sle_job_client_panel_is_connected()) {
+            (void)sle_job_client_mirror_panel_packet(data, length);
+        }
+        return;
+    }
+
+    if (pkt.type == PKT_PANEL_STATUS && pkt.len == sizeof(panel_status_payload_t)) {
+        panel_status_payload_t st;
+        memcpy(&st, pkt.payload, sizeof(st));
+        osal_printk("[PANEL_STATUS] seq=%u owner=%u mode=%u state=%u flags=0x%02x job=%u rx=%u/%u lines=%u free=%u err=%u tick=%u\r\n",
+                    (unsigned int)st.seq, st.owner, st.mode, st.job_state, st.flags,
+                    (unsigned int)st.job_id, (unsigned int)st.received_size,
+                    (unsigned int)st.total_size, (unsigned int)st.executed_lines,
+                    (unsigned int)st.cache_free, (unsigned int)st.last_error,
+                    (unsigned int)st.tick_ms);
+        host_sendf("@PANEL_STATUS seq=%u owner=%u mode=%u state=%u flags=%u job=%u rx=%u total=%u lines=%u free=%u err=%u tick=%u\r\n",
+                   (unsigned int)st.seq, st.owner, st.mode, st.job_state, st.flags,
+                   (unsigned int)st.job_id, (unsigned int)st.received_size,
+                   (unsigned int)st.total_size, (unsigned int)st.executed_lines,
+                   (unsigned int)st.cache_free, (unsigned int)st.last_error,
+                   (unsigned int)st.tick_ms);
+        if (sle_job_client_panel_is_connected()) {
+            (void)sle_job_client_mirror_panel_packet(data, length);
+        }
     }
 }
 
