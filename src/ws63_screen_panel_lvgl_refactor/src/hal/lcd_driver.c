@@ -14,7 +14,6 @@
 #define LCD_DEFAULT_BRIGHTNESS_PCT 80U
 
 static uint16_t g_disp_buf[LCD_WIDTH * DISP_BUF_LINES];
-static uint32_t g_flush_count = 0;
 
 static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
@@ -35,13 +34,6 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     uint32_t src_x_offset = (uint32_t)(x0 - area->x1);
     uint32_t src_y_offset = (uint32_t)(y0 - area->y1);
     const uint8_t *src = px_map + ((src_y_offset * (uint32_t)src_w + src_x_offset) * 2U);
-
-    g_flush_count++;
-    if (g_flush_count <= 3) {
-        osal_printk("[LCD] flush area=(%ld,%ld)-(%ld,%ld) w=%lu h=%lu bytes=%lu\r\n",
-                    (long)x0, (long)y0, (long)x1, (long)y1,
-                    (unsigned long)w, (unsigned long)h, (unsigned long)byte_len);
-    }
 
     errcode_t ret = ili9341_set_window((uint16_t)x0, (uint16_t)y0,
                                        (uint16_t)x1, (uint16_t)y1);
@@ -75,8 +67,6 @@ errcode_t lcd_driver_init(void)
         osal_printk("[LCD] ili9341 init failed: 0x%x\r\n", ret);
         return ret;
     }
-    osal_printk("[LCD] ok %ux%u\r\n", ili9341_width(), ili9341_height());
-
     ret = screen_lcd_bl_pwm_init(LCD_DEFAULT_BRIGHTNESS_PCT);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[LCD] brightness control unavailable, using full backlight\r\n");
@@ -90,9 +80,6 @@ errcode_t lcd_driver_init(void)
                            sizeof(g_disp_buf),
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    osal_printk("[LVGL] display=%ux%u buffer=%ux%u bytes=%lu partial\r\n",
-                LCD_WIDTH, LCD_HEIGHT, LCD_WIDTH, DISP_BUF_LINES,
-                (unsigned long)sizeof(g_disp_buf));
     return ERRCODE_SUCC;
 }
 

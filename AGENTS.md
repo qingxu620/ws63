@@ -18,7 +18,6 @@ The current active development focus is:
 
 - src/ws63_laser_sle_job/
 - src/ws63_laser_host_ui/
-- src/ws63_screen_panel_lvgl/
 - src/ws63_laser_rx_unified/
 - MSP3223/
 
@@ -167,14 +166,14 @@ For `src/deprecated/ws63_screen_st7796_ft6336/`:
 
 ## LVGL Module Rules
 
-For `src/ws63_screen_panel_lvgl/`:
+For `src/deprecated/ws63_screen_panel_lvgl/`:
 
-1. This module is the LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are temporary deprecated-driver references until the display driver is ported.
+1. This module is the archived LVGL v9.3.0 minimal port for the WS63 screen node. The target hardware is now MSP3223 (ILI9341V LCD + FT6336U touch); older ST7796 references in the code are temporary deprecated-driver references until the display driver is ported.
 2. Keep it separate from laser modules. Do not integrate SLE/Host logic unless explicitly asked.
 3. Current LVGL build enable switch is `CONFIG_ENABLE_LVGL_SAMPLE=y` (minimal port) or `CONFIG_ENABLE_LVGL_PANEL=y` (industrial panel UI).
 4. `CONFIG_ENABLE_LVGL_SAMPLE` and `CONFIG_ENABLE_SCREEN_SAMPLE` are **mutually exclusive** (shared hardware). Only one can be enabled at a time.
-5. LVGL source lives at `src/ws63_screen_panel_lvgl/src/lvgl/` (v9.3.0). Do not modify LVGL core source unless patching a build warning; prefer port-layer changes.
-6. LVGL config is `src/ws63_screen_panel_lvgl/lv_conf.h`. Key settings:
+5. LVGL source lives at `src/deprecated/ws63_screen_panel_lvgl/src/lvgl/` (v9.3.0). Do not modify LVGL core source unless patching a build warning; prefer port-layer changes.
+6. LVGL config is `src/deprecated/ws63_screen_panel_lvgl/lv_conf.h`. Key settings:
    - `LV_COLOR_DEPTH=16`, `LV_COLOR_16_SWAP=1`
    - `LV_MEM_SIZE=40*1024` (40KB heap)
    - `LV_FONT_DEFAULT=&lv_font_montserrat_14`
@@ -200,8 +199,8 @@ For `src/ws63_laser_rx_unified/`:
 5. `rx_core/rx_stream.c` and `transports/uart_transport.c` are experimental Phase 2A prototype files. Do not use them as the three-mode integration mainline unless explicitly requested.
 6. R4A compile-only boot validation passed. R4B starts only the route-local SLE Job RX, makes `RX_ROUTE_SLE_JOB` active, and reaches SLE server ready; Legacy UART/WiFi remain compiled but their transport tasks must not start. R4B-job TX + Host execution validation has passed repeatedly with the stable TX transmitter, `src/ws63_laser_host_ui`, and `preroll=4096`, including `@STATUS`, `@DATA_READY`, `DATA_RESUME`, `JOB_READY`, `EXEC_DONE`, and final laser OFF.
 7. Later routes should reuse mature source behavior first:
-   - Legacy UART route: `src/ws63_laser_single/`
-   - Legacy WiFi route: `src/ws63_laser_wifi/`
+   - Legacy UART route: `src/deprecated/ws63_laser_single/`
+   - Legacy WiFi route: `src/deprecated/ws63_laser_wifi/`
    - SLE Job route: `src/ws63_laser_sle_job/receiver/`
 8. Do not force USART/WiFi Grbl parsing and SLE job packet/cache parsing through one common parser.
 9. LaserGRBL validation settings are route-specific. Do not use one streaming mode to evaluate every route. Legacy UART is not required to use Buffered and should be validated first with Grbl + UsbSerial + Synchronous. Legacy WiFi currently uses Grbl + Telnet + Buffered + Fast at `192.168.43.1:5000` as its fixed acceptance baseline. SLE Job does not use LaserGRBL and should continue using `src/ws63_laser_host_ui`.
@@ -222,7 +221,7 @@ For `src/ws63_laser_rx_unified/`:
 24. One first-integration attempt produced `@DATA_READY timeout / bad_begin`, then succeeded without code changes and remained non-reproducible across many later runs. Record it as an occasional initial handshake/state synchronization observation; do not change protocol framing, ACK/NACK semantics, TX, RX, or Host behavior unless reproducible evidence identifies a structural defect.
 25. R4B checkpoint commit is `35501db4`. In later development, determine the current communication state from `mode` and `active_route`, not from `compiled_routes`; compiled routes only indicate code included in the firmware and do not imply runtime activation.
 26. R5A must remain read-only. Do not add fallback, mode commands, route control packets, route switching, dual Grbl frontends, or owner behavior as part of R5A work.
-27. `src/ws63_screen_panel_lvgl/` is a separate untracked screen workspace. Do not modify, stage, or commit it during unified RX work unless the user explicitly changes its scope.
+27. `src/deprecated/ws63_screen_panel_lvgl/` is an archived screen workspace. Do not modify, stage, or commit it during unified RX work unless the user explicitly changes its scope.
 28. Do not describe R5B as timeout fallback or as the final UART/WiFi dual-frontend Grbl Stream implementation. R5B starts no Grbl route: Legacy UART/WiFi remain compiled but stopped while SLE advertises persistently. Safe manual switching and the shared Grbl execution core remain R5C/R5D work.
 29. Current SLE stop controls are not a hardware-level emergency stop. `@EXEC_STOP` / `PKT_EXEC_STOP` is a software safe stop, and `@ABORT` / `PKT_JOB_ABORT` aborts the job and clears cache. Do not call the current Host stop button a hard emergency stop. Product-grade emergency shutdown should be implemented as a hardware laser power cut.
 

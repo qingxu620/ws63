@@ -36,11 +36,6 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         if (mapped_y < 0) mapped_y = 0;
         if (mapped_y >= SCREEN_LVGL_HEIGHT) mapped_y = SCREEN_LVGL_HEIGHT - 1;
 
-        if (!g_pressed) {
-            osal_printk("[TOUCH] raw=(%ld,%ld) -> lvgl=(%ld,%ld)\r\n",
-                        (long)raw_x, (long)raw_y,
-                        (long)mapped_x, (long)mapped_y);
-        }
         g_pressed = true;
         g_read_fail_count = 0;
         g_last_x = (int16_t)mapped_x;
@@ -75,7 +70,6 @@ errcode_t touch_driver_init(void)
     lv_indev_set_read_cb(indev, touch_read_cb);
     lv_indev_set_scroll_limit(indev, TOUCH_SCROLL_LIMIT_PX);
     lv_indev_set_scroll_throw(indev, TOUCH_SCROLL_THROW_PERCENT);
-    osal_printk("[LVGL] touch indev registered\r\n");
     return ERRCODE_SUCC;
 }
 

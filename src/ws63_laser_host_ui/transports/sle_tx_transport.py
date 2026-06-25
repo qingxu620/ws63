@@ -22,7 +22,7 @@ except ImportError:
 # ---- Protocol constants (shared with firmware) ----
 BAUD_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 214
-JOB_MAX_SIZE = 131072
+JOB_MAX_SIZE = 65536
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
 DATA_ACK_TIMEOUT_MIN_S = 10.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
@@ -294,12 +294,13 @@ class SleJobSerialClient:
                    status_cb: Optional[Callable[[str, float], None]] = None,
                    preroll_bytes: int = 0,
                    start_on_preroll: bool = False,
+                   enforce_job_size_limit: bool = True,
                    recover_tx: bool = True) -> None:
         if not gcode:
             raise RuntimeError("G-code 内容为空")
-        if len(gcode) > JOB_MAX_SIZE:
+        if enforce_job_size_limit and len(gcode) > JOB_MAX_SIZE:
             raise RuntimeError(
-                f"G-code 超过 TX/RX 任务上限: {len(gcode)}/{JOB_MAX_SIZE} bytes"
+                f"G-code 超过仅上传任务上限: {len(gcode)}/{JOB_MAX_SIZE} bytes"
             )
         if TX_UART_RESYNC_BYTE in gcode:
             raise RuntimeError("G-code 包含保留的 UART 同步控制字节 0x18")
@@ -350,7 +351,7 @@ class SleJobSerialClient:
                     chunk_count += 1
                     has_preroll = "preroll=1" in ack.line
                     is_last = offset >= total
-                    if chunk_count <= 12 or has_preroll or is_last:
+                    if chunk_count <= 3 or has_preroll or is_last:
                         self._on_log("status", f"ACK off={offset} preroll={1 if has_preroll else 0}")
                     pct = offset * 100 // total
                     if status_cb:

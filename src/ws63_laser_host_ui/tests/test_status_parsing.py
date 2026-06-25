@@ -16,6 +16,9 @@ from transports.sle_tx_transport import (
 
 
 class StatusParsingTests(unittest.TestCase):
+    def test_host_upload_limit_matches_demo_cache(self) -> None:
+        self.assertEqual(JOB_MAX_SIZE, 65536)
+
     def test_prepare_gcode_removes_standalone_metric_declaration(self) -> None:
         prepared, removed = prepare_gcode_for_rx(b"G21 ; millimeters\nG90\nM5\n")
 
@@ -28,11 +31,35 @@ class StatusParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "行长度上限"):
             prepare_gcode_for_rx(b"X" * (GCODE_LINE_MAX_BYTES + 1))
 
-    def test_upload_rejects_jobs_larger_than_firmware_cache(self) -> None:
+    def test_upload_only_rejects_jobs_larger_than_firmware_cache(self) -> None:
         client = SleJobSerialClient(lambda channel, message: None)
 
-        with self.assertRaisesRegex(RuntimeError, "任务上限"):
+        with self.assertRaisesRegex(RuntimeError, "仅上传任务上限"):
             client.upload_job(1, b"X" * (JOB_MAX_SIZE + 1), 1.0)
+
+    def test_upload_execute_can_bypass_host_size_audit(self) -> None:
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                return None
+
+            def send_line(self, line: str) -> None:
+                return None
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK resync" in pattern:
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    raise RuntimeError("passed size audit")
+                return WaitResult("", 1)
+
+        client = FakeClient(lambda channel, message: None)
+        with self.assertRaisesRegex(RuntimeError, "passed size audit"):
+            client.upload_job(
+                1,
+                b"X" * (JOB_MAX_SIZE + 1),
+                1.0,
+                enforce_job_size_limit=False,
+            )
 
     def test_upload_rejects_preroll_without_explicit_auto_start(self) -> None:
         client = SleJobSerialClient(lambda channel, message: None)

@@ -392,7 +392,6 @@ int legacy_uart_route_task_entry(void *arg)
 {
     unused(arg);
 
-    osal_printk("[LEGACY_UART] UART RX task start\r\n");
     osal_msleep(500);
     send_grbl_startup("boot");
 
@@ -425,7 +424,6 @@ int legacy_uart_route_task_entry(void *arg)
 
 errcode_t legacy_uart_route_init(void)
 {
-    osal_printk("[LEGACY_UART] legacy_uart_route_init begin\r\n");
 #if defined(CONFIG_PINCTRL_SUPPORT_IE)
     uapi_pin_set_ie(LEGACY_UART_RX_PIN, PIN_IE_1);
 #endif
@@ -451,15 +449,12 @@ errcode_t legacy_uart_route_init(void)
         return ret;
     }
 
-    osal_printk("[LEGACY_UART] legacy_uart_route_init OK uart=%d tx=GPIO%d rx=GPIO%d baud=%d\r\n", LEGACY_UART_BUS,
-                LEGACY_UART_TX_PIN, LEGACY_UART_RX_PIN, LEGACY_UART_BAUD_RATE);
     return ERRCODE_SUCC;
 }
 
 errcode_t legacy_uart_route_start(void)
 {
     if (g_route_started) {
-        osal_printk("[LEGACY_UART] route already started\r\n");
         return ERRCODE_SUCC;
     }
 
@@ -495,7 +490,6 @@ errcode_t legacy_uart_route_start(void)
     }
 
     g_route_started = true;
-    osal_printk("[LEGACY_UART] route started\r\n");
     return ERRCODE_SUCC;
 }
 

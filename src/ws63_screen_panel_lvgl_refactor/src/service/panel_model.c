@@ -119,7 +119,6 @@ void panel_model_init(void)
     memset(&g_model, 0, sizeof(g_model));
     g_model.view_mode = PANEL_VIEW_ONLINE;
     panel_model_set_scene(PANEL_SCENE_IDLE_NONE);
-    osal_printk("[MODEL] init scene=IDLE_NONE\r\n");
 }
 
 void panel_model_set_state(system_state_t state)
@@ -316,8 +315,6 @@ void panel_model_set_scene(panel_fake_scene_t scene)
     }
 
     update_progress_fields();
-    osal_printk("[MODEL] scene=%d state=%d owner=%d mode=%d progress=%d\r\n",
-                g_model.scene, g_model.state, g_model.owner, g_model.mode, g_model.progress);
 }
 
 void panel_model_toggle_primary_mode(void)
@@ -337,11 +334,6 @@ void panel_model_toggle_primary_mode(void)
     }
 
     g_model.event_id++;
-    osal_printk("[MODEL] view mode=%s owner=%s rx_mode=%s live=%d\r\n",
-                panel_model_view_mode_text(g_model.view_mode),
-                panel_model_owner_text(g_model.owner),
-                panel_model_mode_text(g_model.mode),
-                g_model.live_status_active ? 1 : 0);
 }
 
 void panel_model_set_progress(int pct)
@@ -363,8 +355,6 @@ void panel_model_tick(void)
 
     if (state_is_requesting(g_model.state) &&
         g_model.job_seconds >= PANEL_FAKE_REQUEST_DONE_SECONDS) {
-        osal_printk("[MODEL] fake request acknowledged state=%d -> IDLE_NONE\r\n",
-                    g_model.state);
         panel_model_set_scene(PANEL_SCENE_IDLE_NONE);
     }
 }
@@ -409,10 +399,6 @@ void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint
              (name != NULL && name[0] != '\0') ? name : "TF_JOB");
     snprintf(g_model.last_error, sizeof(g_model.last_error), "无");
 
-    osal_printk("[MODEL] offline file selected name=%s size=%u lines=%u\r\n",
-                g_model.job_name,
-                (unsigned int)g_model.total_size,
-                (unsigned int)g_model.total_lines);
 }
 
 void panel_model_start_offline_selected(void)
@@ -433,7 +419,6 @@ void panel_model_start_offline_selected(void)
     g_model.seq++;
     g_model.event_id++;
     update_progress_fields();
-    osal_printk("[MODEL] offline fake send start name=%s\r\n", g_model.job_name);
 }
 
 void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,

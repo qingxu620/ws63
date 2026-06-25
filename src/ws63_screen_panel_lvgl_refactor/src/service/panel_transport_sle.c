@@ -52,7 +52,6 @@ static uint8_t g_server_id = 0;
 static uint16_t g_conn_id = PANEL_SLE_CONN_INVALID;
 static uint16_t g_service_handle = 0;
 static uint16_t g_status_property_handle = 0;
-static uint32_t g_rx_panel_status_count = 0;
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -136,12 +135,6 @@ static void handle_panel_write(const uint8_t *data, uint16_t len)
         panel_status_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
         apply_panel_status(&st);
-        g_rx_panel_status_count++;
-        if ((g_rx_panel_status_count & 0x07U) == 1U) {
-            osal_printk("[PANEL_SLE_SRV] panel_status seq=%u owner=%u mode=%u state=%u flags=0x%02x rx=%u/%u\r\n",
-                        (unsigned int)st.seq, st.owner, st.mode, st.job_state, st.flags,
-                        (unsigned int)st.received_size, (unsigned int)st.total_size);
-        }
         return;
     }
 
@@ -149,12 +142,6 @@ static void handle_panel_write(const uint8_t *data, uint16_t len)
         status_resp_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
         apply_status_resp(&st);
-        g_rx_panel_status_count++;
-        if ((g_rx_panel_status_count & 0x07U) == 1U) {
-            osal_printk("[PANEL_SLE_SRV] status_resp state=%u status=%u job=%u rx=%u/%u\r\n",
-                        st.state, st.status, (unsigned int)st.job_id,
-                        (unsigned int)st.received_size, (unsigned int)st.total_size);
-        }
     }
 }
 
@@ -189,17 +176,15 @@ static void ssaps_mtu_changed_cbk(uint8_t server_id, uint16_t conn_id,
 {
     unused(server_id);
     unused(conn_id);
+    unused(mtu_size);
     unused(status);
-    if (mtu_size != NULL) {
-        osal_printk("[PANEL_SLE_SRV] MTU changed: %u\r\n", mtu_size->mtu_size);
-    }
 }
 
 static void ssaps_start_service_cbk(uint8_t server_id, uint16_t handle, errcode_t status)
 {
     unused(server_id);
     unused(handle);
-    osal_printk("[PANEL_SLE_SRV] service start status=0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_ssaps_register_cbks(void)
@@ -270,10 +255,8 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         g_conn_id = conn_id;
-        osal_printk("[PANEL_SLE_SRV] connected conn_id=%u\r\n", conn_id);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED && conn_id == g_conn_id) {
         g_conn_id = PANEL_SLE_CONN_INVALID;
-        osal_printk("[PANEL_SLE_SRV] disconnected\r\n");
         panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
                                           0, g_model.seq + 1U, 0, 0, 0, 0, 0, 1, 0U);
     }
@@ -283,7 +266,7 @@ static void sle_pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errc
 {
     unused(conn_id);
     unused(addr);
-    osal_printk("[PANEL_SLE_SRV] pair complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
@@ -292,7 +275,7 @@ static void sle_auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
     unused(conn_id);
     unused(addr);
     unused(evt);
-    osal_printk("[PANEL_SLE_SRV] auth complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_conn_register_cbks(void)
@@ -306,22 +289,23 @@ static void sle_conn_register_cbks(void)
 
 static void sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
 {
-    osal_printk("[PANEL_SLE_SRV] adv enable id=0x%02x status=0x%02x\r\n", announce_id, status);
+    unused(announce_id);
+    unused(status);
 }
 
 static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
 {
-    osal_printk("[PANEL_SLE_SRV] adv disable id=0x%02x status=0x%02x\r\n", announce_id, status);
+    unused(announce_id);
+    unused(status);
 }
 
 static void sle_announce_terminal_cbk(uint32_t announce_id)
 {
-    osal_printk("[PANEL_SLE_SRV] adv terminal id=0x%02x\r\n", announce_id);
+    unused(announce_id);
 }
 
 static void sle_enable_cbk(errcode_t status)
 {
-    osal_printk("[PANEL_SLE_SRV] enable status=0x%02x\r\n", status);
     if (status != ERRCODE_SLE_SUCCESS) {
         return;
     }
@@ -381,7 +365,6 @@ static void sle_enable_cbk(errcode_t status)
         osal_printk("[PANEL_SLE_SRV] start announce fail: 0x%x\r\n", ret);
         return;
     }
-    osal_printk("[PANEL_SLE_SRV] advertising as '%s'\r\n", SLE_PANEL_SERVER_NAME);
 }
 
 static void sle_announce_register_cbks(void)
@@ -399,13 +382,14 @@ errcode_t panel_transport_sle_start(void)
     g_conn_id = PANEL_SLE_CONN_INVALID;
     g_service_handle = 0;
     g_status_property_handle = 0;
-    g_rx_panel_status_count = 0;
 
     sle_announce_register_cbks();
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
 
     errcode_t ret = enable_sle();
-    osal_printk("[PANEL_SLE_SRV] enable_sle ret=0x%x\r\n", ret);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_SRV] enable_sle fail: 0x%x\r\n", ret);
+    }
     return ret;
 }

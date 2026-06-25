@@ -31,8 +31,6 @@ static void focus_arc_cb(lv_event_t *e)
 static void focus_on_cb(lv_event_t *e)
 {
     (void)e;
-    int power = lv_arc_get_value(g_arc_focus);
-    osal_printk("[CONTROL] focus ON S%d\r\n", power);
     lv_label_set_text(g_lbl_focus_state, "激光开启");
     lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
 }
@@ -40,7 +38,6 @@ static void focus_on_cb(lv_event_t *e)
 static void focus_off_cb(lv_event_t *e)
 {
     (void)e;
-    osal_printk("[CONTROL] focus OFF\r\n");
     lv_label_set_text(g_lbl_focus_state, "激光关闭");
     lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
 }
@@ -48,7 +45,7 @@ static void focus_off_cb(lv_event_t *e)
 static void jog_cb(lv_event_t *e)
 {
     const char *dir = (const char *)lv_event_get_user_data(e);
-    osal_printk("[CONTROL] jog %s\r\n", dir);
+    (void)dir;
 }
 
 static lv_obj_t *create_jog_btn(lv_obj_t *parent, const char *symbol, const char *dir)

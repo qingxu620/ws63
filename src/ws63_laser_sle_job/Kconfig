@@ -74,11 +74,11 @@ config LASER_SLE_JOB_UART_RX_PIN
 config LASER_SLE_JOB_WORK_AREA_X_MM
     int "X轴工作区域（mm）"
     range 1 300
-    default 70
+    default 99
 
 config LASER_SLE_JOB_WORK_AREA_Y_MM
     int "Y轴工作区域（mm）"
     range 1 300
-    default 70
+    default 99
 
 endmenu

@@ -16,17 +16,17 @@ from dataclasses import dataclass
 # ---- Constants ----
 
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
-RX_WORK_AREA_MM = 70.0
+RX_WORK_AREA_MM = 99.0
 LASER_S_MAX = 1000.0
 TX_UART_RESYNC_CHAR = "\x18"
 
 SUPPORTED_GCODE_COMMANDS = {
     "G0", "G00", "G1", "G01", "G21", "G90", "G91", "G28", "G92",
-    "M3", "M5", "M30",
+    "M3", "M4", "M5", "M30",
 }
 
 UNSUPPORTED_GCODE_COMMANDS = {
-    "G2", "G3", "G4", "G17", "G18", "G19", "G54", "G55", "M4",
+    "G2", "G3", "G4", "G17", "G18", "G19", "G54", "G55",
 }
 
 # Pattern to extract G/M commands from a line
@@ -116,11 +116,11 @@ def validate_gcode(text: str) -> list[str]:
     - Line length <= 120 bytes
     - No NaN/inf
     - No %
-    - No unsupported commands (G2, G3, G4, G17, G18, G19, G54, G55, M4)
+    - No unsupported commands (G2, G3, G4, G17, G18, G19, G54, G55)
     - X/Y/F/S values parseable
     - F > 0
     - S in 0-1000
-    - X/Y in 0-70mm
+    - X/Y in 0-99mm
     """
     errors: list[str] = []
     lines = text.strip().split("\n")

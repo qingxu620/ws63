@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QTabWidget
 from app.config_store import HostConfig
 from app.state_models import AppState
 from app.state_models import LinkState
+from transports.sle_tx_transport import JOB_MAX_SIZE, JOB_PREROLL_BYTES
 from ui.main_window import MainWindow
 from ui.pages.connection_page import ConnectionPage
 from ui.pages.gcode_page import GcodePage
@@ -178,12 +179,12 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(page.btn_connect.objectName(), "btnPrimary")
         self.assertTrue(page.cmd_combo.isEnabled())
 
-    def test_marking_range_is_limited_to_60mm_square(self) -> None:
+    def test_marking_range_is_limited_to_99mm_square(self) -> None:
         page = GcodePage()
 
         self.assertEqual(page.size_spin.minimum(), 0)
-        self.assertEqual(page.size_spin.maximum(), 60)
-        self.assertEqual(page.size_spin.value(), 60)
+        self.assertEqual(page.size_spin.maximum(), 99)
+        self.assertEqual(page.size_spin.value(), 99)
 
     def test_zero_square_size_generates_safe_empty_job_in_both_modes(self) -> None:
         page = GcodePage()
@@ -490,6 +491,33 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(uploads[-1]["preroll_bytes"], 0)
         self.assertFalse(uploads[-1]["start_on_preroll"])
         self.assertEqual(controls, ["@EXEC_START 7"])
+
+    def test_upload_execute_forces_preroll_for_jobs_larger_than_cache(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        uploads: list[dict[str, object]] = []
+        controls: list[str] = []
+
+        class FakeClient:
+            def upload_job(self, *args, **kwargs) -> None:
+                uploads.append(kwargs)
+
+            def send_control(self, command, expect, timeout) -> None:
+                controls.append(command)
+
+            def close(self) -> None:
+                pass
+
+        window.client = FakeClient()
+        large_job = b"G1 X1\n" * ((JOB_MAX_SIZE // 6) + 2)
+        self.assertGreater(len(large_job), JOB_MAX_SIZE)
+
+        window._upload_exec_worker(large_job, 8, 20.0, 0)
+
+        self.assertEqual(uploads[-1]["preroll_bytes"], JOB_PREROLL_BYTES)
+        self.assertTrue(uploads[-1]["start_on_preroll"])
+        self.assertFalse(uploads[-1]["enforce_job_size_limit"])
+        self.assertEqual(controls, [])
 
     def test_upload_execute_worker_releases_after_exec_start_ack(self) -> None:
         window = MainWindow()

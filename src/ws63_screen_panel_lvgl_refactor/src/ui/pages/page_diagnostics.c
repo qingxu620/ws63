@@ -37,11 +37,6 @@ static void mode_toggle_cb(lv_event_t *e)
 {
     (void)e;
     panel_model_toggle_primary_mode();
-    osal_printk("[DIAG] mode toggle view=%s scene=%s owner=%s rx_mode=%s\r\n",
-                panel_model_view_mode_text(g_model.view_mode),
-                panel_model_scene_text(g_model.scene),
-                panel_model_owner_text(g_model.owner),
-                panel_model_mode_text(g_model.mode));
 }
 
 static lv_obj_t *create_info_row(lv_obj_t *parent, const char *label, const char *value,

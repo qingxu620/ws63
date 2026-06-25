@@ -33,7 +33,7 @@ from app.image_gcode import (
 )
 
 
-RX_JOB_MAX_BYTES = 131072
+RX_JOB_MAX_BYTES = 65536
 
 
 class GcodePage(QWidget):
@@ -132,7 +132,7 @@ class GcodePage(QWidget):
             params_layout, "提取阈值 (0-255)", 0, 255, 128
         )
         self.size_slider, self.size_spin = self._parameter_row(
-            params_layout, "正方形边长 (mm，0×0 至 60×60)", 0, 60, 60
+            params_layout, "正方形边长 (mm，0×0 至 99×99)", 0, 99, 99
         )
         self.speed_slider, self.speed_spin = self._parameter_row(
             params_layout, "工件雕刻速度 (mm/min)", 100, 10_000, 3000
@@ -456,7 +456,7 @@ class GcodePage(QWidget):
         actual_height = image.height() * step_mm
         output_bytes = len(text.encode("utf-8"))
         vector_stats = f" · 路径 {path_count} · 节点 {point_count}" if mode == "vector" else ""
-        size_warning = " · ⚠ 超过128KiB任务上限" if output_bytes > RX_JOB_MAX_BYTES else ""
+        size_warning = " · ⚠ 超过64KiB上传上限" if output_bytes > RX_JOB_MAX_BYTES else ""
         self._converted_status = (
             f"{mode_label} · X 0–{self.size_spin.value()} mm · "
             f"Y 0–{self.size_spin.value()} mm · "

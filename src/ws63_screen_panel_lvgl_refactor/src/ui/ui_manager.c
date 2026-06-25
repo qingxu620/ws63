@@ -53,7 +53,6 @@ errcode_t ui_manager_init(void)
     g_pages[PAGE_HOME].created = true;
     g_current_page = PAGE_HOME;
 
-    osal_printk("[UI] manager init, dashboard created\r\n");
     return ERRCODE_SUCC;
 }
 

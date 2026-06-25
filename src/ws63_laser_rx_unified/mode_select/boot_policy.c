@@ -47,8 +47,6 @@ static void rx_boot_start_wifi_coexist_once(void)
     }
 
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
-    osal_printk("[RX_BOOT] start WiFi coexist listener\r\n");
-    osal_printk("[ROUTE] start LEGACY_WIFI coexist\r\n");
     errcode_t ret = legacy_wifi_route_start();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[RX_BOOT] WiFi coexist start failed: 0x%x\r\n", ret);
@@ -57,8 +55,6 @@ static void rx_boot_start_wifi_coexist_once(void)
     }
     g_wifi_coexist_started = true;
     g_boot_state = RX_BOOT_STATE_SLE_WIFI_COEXIST;
-    osal_printk("[RX_MODE] primary=SLE_JOB wifi_coexist=1 laser=%s\r\n",
-                laser_is_enabled() ? "ON" : "OFF");
 #else
     osal_printk("[RX_BOOT] WiFi coexist unavailable: transport disabled\r\n");
 #endif
@@ -79,8 +75,6 @@ static int rx_boot_policy_task(void *arg)
     }
 
     g_boot_state = RX_BOOT_STATE_SLE_ADVERTISING;
-    osal_printk("[RX_BOOT] sle advertising persistent, waiting tx indefinitely\r\n");
-    route_manager_dump_status();
     rx_boot_start_wifi_coexist_once();
 
     bool last_connected = false;
@@ -90,13 +84,6 @@ static int rx_boot_policy_task(void *arg)
             g_boot_state = g_wifi_coexist_started ? RX_BOOT_STATE_SLE_WIFI_COEXIST :
                            (connected ? RX_BOOT_STATE_SLE_CONNECTED :
                                         RX_BOOT_STATE_SLE_ADVERTISING);
-            osal_printk("[RX_BOOT] tx_connected=%d stay SLE_JOB\r\n",
-                        connected ? 1 : 0);
-            route_manager_dump_status();
-            if (g_wifi_coexist_started) {
-                osal_printk("[RX_MODE] primary=SLE_JOB wifi_coexist=1 laser=%s\r\n",
-                            laser_is_enabled() ? "ON" : "OFF");
-            }
             last_connected = connected;
         }
         osal_msleep(RX_BOOT_POLICY_POLL_MS);
@@ -107,7 +94,6 @@ errcode_t rx_boot_policy_start(void)
 {
     g_boot_state = RX_BOOT_STATE_SLE_STARTING;
     g_wifi_coexist_started = false;
-    osal_printk("[RX_BOOT] policy=SLE_WIFI_COEXIST_DEMO\r\n");
 
     osal_kthread_lock();
     osal_task *task = osal_kthread_create(rx_boot_policy_task, NULL, "rx_boot_policy",

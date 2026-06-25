@@ -228,8 +228,6 @@ static void start_seek_if_needed(void)
     (void)sle_set_seek_param(&param);
 
     g_last_connect_ms = now;
-    osal_printk("[tx] seeking rx/panel need_rx=%d need_panel=%d...\r\n",
-                need_rx_link() ? 1 : 0, need_panel_link() ? 1 : 0);
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[tx] start seek fail: 0x%x\r\n", ret);
@@ -239,10 +237,11 @@ static void start_seek_if_needed(void)
 /* SLE callbacks */
 static void sle_enable_cbk(errcode_t status)
 {
-    osal_printk("[tx] sle enable: 0x%x\r\n", status);
     if (status == ERRCODE_SLE_SUCCESS) {
         g_sle_enabled = true;
         start_seek_if_needed();
+    } else {
+        osal_printk("[tx] sle enable fail: 0x%x\r\n", status);
     }
 }
 
@@ -266,8 +265,6 @@ static void seek_result_cbk(sle_seek_result_info_t *seek_result)
     memcpy_s(&g_pending_addr, sizeof(g_pending_addr), &seek_result->addr, sizeof(seek_result->addr));
     g_connecting = true;
     g_pending_role = role;
-    osal_printk("[tx] found %s, stop seek then connect\r\n",
-                (role == SLE_LINK_ROLE_RX) ? "receiver" : "panel");
     errcode_t ret = sle_stop_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_connecting = false;
@@ -279,13 +276,11 @@ static void seek_result_cbk(sle_seek_result_info_t *seek_result)
 static void seek_enable_cbk(errcode_t status)
 {
     g_seek_active = (status == ERRCODE_SLE_SUCCESS);
-    osal_printk("[tx] seek enable: 0x%x\r\n", status);
 }
 
 static void seek_disable_cbk(errcode_t status)
 {
     g_seek_active = false;
-    osal_printk("[tx] seek disable: 0x%x\r\n", status);
     if (status != ERRCODE_SLE_SUCCESS || !g_connecting) {
         g_connecting = false;
         g_pending_role = SLE_LINK_ROLE_NONE;
@@ -321,8 +316,6 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         }
         g_connecting = false;
         g_pending_role = SLE_LINK_ROLE_NONE;
-        osal_printk("[tx] connected %s conn_id=%u\r\n",
-                    (role == SLE_LINK_ROLE_PANEL) ? "panel" : "rx", conn_id);
 
         /* Request fast connection interval immediately */
         sle_connection_param_update_t parame = {0};
@@ -331,8 +324,7 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         parame.interval_max = 0x14;
         parame.max_latency = 0;
         parame.supervision_timeout = 0x1F4;
-        errcode_t ret = sle_update_connect_param(&parame);
-        osal_printk("[tx] conn param update ret=0x%x\r\n", ret);
+        (void)sle_update_connect_param(&parame);
 
         /* Start service discovery */
         ssap_exchange_info_t info = {0};
@@ -363,7 +355,7 @@ static void pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errcode_
 {
     unused(conn_id);
     unused(addr);
-    osal_printk("[tx] pair complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
@@ -372,7 +364,7 @@ static void auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
     unused(conn_id);
     unused(addr);
     unused(evt);
-    osal_printk("[tx] auth complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void exchange_info_cbk(uint8_t client_id, uint16_t conn_id,
@@ -380,7 +372,7 @@ static void exchange_info_cbk(uint8_t client_id, uint16_t conn_id,
 {
     unused(client_id);
     unused(param);
-    osal_printk("[tx] mtu exchange: 0x%x\r\n", status);
+    unused(status);
     /* Discover services */
     ssapc_find_structure_param_t find_param = {0};
     find_param.type = SSAP_FIND_TYPE_PRIMARY_SERVICE;
@@ -399,8 +391,6 @@ static void find_structure_cbk(uint8_t client_id, uint16_t conn_id,
     uint16_t expected_uuid = is_panel_conn ? SLE_PANEL_SERVICE_UUID : SLE_JOB_SERVICE_UUID;
     if (!uuid16_equals(&service->uuid, expected_uuid)) return;
 
-    osal_printk("[%s] found service 0x%x\r\n",
-                is_panel_conn ? "tx_panel" : "tx", expected_uuid);
     ssapc_find_structure_param_t find_param = {0};
     find_param.type = SSAP_FIND_TYPE_PROPERTY;
     find_param.start_hdl = service->start_hdl;
@@ -418,7 +408,6 @@ static void find_property_cbk(uint8_t client_id, uint16_t conn_id,
         if (uuid16_equals(&property->uuid, SLE_PANEL_STATUS_CHAR_UUID)) {
             g_panel_status_handle = property->handle;
             g_panel_handles_ready = true;
-            osal_printk("[tx_panel] status handle=0x%x ready\r\n", g_panel_status_handle);
             start_seek_if_needed();
         }
         return;
@@ -430,15 +419,12 @@ static void find_property_cbk(uint8_t client_id, uint16_t conn_id,
 
     if (uuid16_equals(&property->uuid, SLE_JOB_DATA_CHAR_UUID)) {
         g_data_handle = property->handle;
-        osal_printk("[tx] data handle: 0x%x\r\n", g_data_handle);
     } else if (uuid16_equals(&property->uuid, SLE_JOB_RESP_CHAR_UUID)) {
         g_resp_handle = property->handle;
-        osal_printk("[tx] resp handle: 0x%x\r\n", g_resp_handle);
     }
 
     g_handles_ready = (g_data_handle != 0) && (g_resp_handle != 0);
     if (g_handles_ready) {
-        osal_printk("[tx] ready!\r\n");
         start_seek_if_needed();
     }
 }
@@ -525,7 +511,9 @@ errcode_t sle_job_client_init(void)
     ssapc_register_callbacks(&ssapc_cbk);
 
     errcode_t ret = enable_sle();
-    osal_printk("[tx] enable_sle ret=0x%x\r\n", ret);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[tx] enable_sle fail: 0x%x\r\n", ret);
+    }
     return ret;
 }
 

@@ -40,7 +40,6 @@ static int uart_transport_rx_task(void *arg)
 {
     unused(arg);
 
-    osal_printk("[UART] rx task start\r\n");
     osal_msleep(500);
     rx_core_on_stream_ready(RX_SRC_UART);
 
@@ -61,9 +60,6 @@ static int uart_transport_rx_task(void *arg)
 
 errcode_t uart_transport_init(void)
 {
-    osal_printk("[UART] init begin\r\n");
-    osal_printk("[UART] baud=%d\r\n", RX_UART_BAUD_RATE);
-
 #if defined(CONFIG_PINCTRL_SUPPORT_IE)
     uapi_pin_set_ie(RX_UART_RX_PIN, PIN_IE_1);
 #endif
@@ -89,8 +85,6 @@ errcode_t uart_transport_init(void)
         return ret;
     }
 
-    osal_printk("[UART] init ok bus=%d tx=GPIO%d rx=GPIO%d baud=%d\r\n", RX_UART_BUS,
-                RX_UART_TX_PIN, RX_UART_RX_PIN, RX_UART_BAUD_RATE);
     return ERRCODE_SUCC;
 }
 

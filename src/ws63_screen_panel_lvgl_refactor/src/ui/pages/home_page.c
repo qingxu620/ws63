@@ -268,18 +268,15 @@ static void btn_event_cb(lv_event_t *e)
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
             (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING)) {
             ui_manager_switch_page(PAGE_FILE_BROWSER);
-            osal_printk("[PANEL_CMD] open TF file browser before offline start\r\n");
             break;
         }
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
             g_model.owner == PANEL_OWNER_SCREEN &&
             g_model.state == SYS_STATE_READY) {
             panel_model_start_offline_selected();
-            osal_printk("[PANEL_CMD] offline fake send started (real SLE not connected)\r\n");
             break;
         }
         panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING);
-        osal_printk("[PANEL_CMD] demo start request -> SCREEN_SENDING (backend not connected)\r\n");
         break;
     case 1:
         if (!perms.can_stop) {
@@ -287,7 +284,6 @@ static void btn_event_cb(lv_event_t *e)
             break;
         }
         panel_model_request_stop();
-        osal_printk("[PANEL_CMD] stop request queued in fake model\r\n");
         break;
     case 2:
         if (!perms.can_abort) {
@@ -295,7 +291,6 @@ static void btn_event_cb(lv_event_t *e)
             break;
         }
         panel_model_request_abort();
-        osal_printk("[PANEL_CMD] abort request queued in fake model\r\n");
         break;
     case 3:
         if (!perms.can_focus_off) {
@@ -303,7 +298,6 @@ static void btn_event_cb(lv_event_t *e)
             break;
         }
         panel_model_request_focus_off();
-        osal_printk("[PANEL_CMD] focus_off request queued in fake model\r\n");
         break;
     case 4: ui_manager_switch_page(PAGE_SETTINGS); break;
     }

@@ -40,7 +40,6 @@ static void toggle_cb(lv_event_t *e)
         lv_obj_set_style_bg_color(btn, COLOR_BG_CARD, 0);
         lv_label_set_text(entry->lbl_toggle, LV_SYMBOL_CLOSE " 关");
     }
-    osal_printk("[SOUND] %s %s\r\n", entry->name, entry->enabled ? "ON" : "OFF");
 }
 
 static void vol_cb(lv_event_t *e)

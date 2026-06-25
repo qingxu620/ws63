@@ -95,9 +95,6 @@ void panel_file_manager_refresh(void)
         g_file_mgr.count++;
     }
 
-    osal_printk("[FILE_MGR] refresh fake TF list count=%u seq=%u\r\n",
-                (unsigned int)g_file_mgr.count,
-                (unsigned int)g_file_mgr.seq);
 }
 
 const panel_file_manager_t *panel_file_manager_get(void)
@@ -131,10 +128,6 @@ bool panel_file_manager_select(uint8_t index)
 
     g_file_mgr.selected_index = (int8_t)index;
     g_file_mgr.seq++;
-    osal_printk("[FILE_MGR] selected %s size=%u lines=%u\r\n",
-                entry->name,
-                (unsigned int)entry->size_bytes,
-                (unsigned int)entry->line_count);
     return true;
 }
 

@@ -58,7 +58,7 @@ void sle_job_cache_clear(void)
 
 sle_job_status_t sle_job_cache_begin(uint32_t job_id, uint32_t total_size, uint16_t expected_crc)
 {
-    if (total_size == 0 || total_size > SLE_JOB_CACHE_SIZE) {
+    if (total_size == 0) {
         return SLE_JOB_STATUS_NO_SPACE;
     }
 
@@ -74,24 +74,11 @@ sle_job_status_t sle_job_cache_begin(uint32_t job_id, uint32_t total_size, uint1
     if (g_mutex_ready) {
         osal_mutex_unlock(&g_cache_mutex);
     }
-    osal_printk("[JOB_CACHE] begin job=%u size=%u crc=0x%04x buf=%u\r\n",
-                (unsigned int)job_id, (unsigned int)total_size, expected_crc,
-                (unsigned int)SLE_JOB_CACHE_SIZE);
     return SLE_JOB_STATUS_OK;
 }
 
 sle_job_status_t sle_job_cache_write(uint32_t job_id, uint32_t offset, const uint8_t *data, uint16_t len)
 {
-    if (!g_receiving || job_id != g_job_id || data == NULL || len == 0 ||
-        offset != g_received || (uint32_t)len > sle_job_cache_free()) {
-        osal_printk("[JOB_CACHE_WRITE_IN] job=%u expected_job=%u off=%u expected_off=%u len=%u data=%p received=%u avail=%u free=%u receiving=%d all_received=%d\r\n",
-                    (unsigned int)job_id, (unsigned int)g_job_id,
-                    (unsigned int)offset, (unsigned int)g_received,
-                    (unsigned int)len, (const void *)data,
-                    (unsigned int)g_received, (unsigned int)g_data_len,
-                    (unsigned int)sle_job_cache_free(), (int)g_receiving,
-                    (int)g_all_received);
-    }
     if (!g_receiving || job_id != g_job_id) {
         osal_printk("[JOB_CACHE_WRITE_REJECT] reason=not_receiving receiving=%d job=%u expected=%u\r\n",
                     (int)g_receiving, (unsigned int)job_id, (unsigned int)g_job_id);
@@ -150,8 +137,6 @@ sle_job_status_t sle_job_cache_finish(uint32_t job_id, uint32_t total_size, uint
 
     g_receiving = false;
     g_ready = true;
-    osal_printk("[JOB_CACHE] ready job=%u size=%u crc=0x%04x\r\n",
-                (unsigned int)g_job_id, (unsigned int)g_received, g_running_crc);
     return SLE_JOB_STATUS_OK;
 }
 

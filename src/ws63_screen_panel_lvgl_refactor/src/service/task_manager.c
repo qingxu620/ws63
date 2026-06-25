@@ -7,7 +7,6 @@
 
 errcode_t task_manager_init(void)
 {
-    osal_printk("[TASK] manager init\r\n");
     return ERRCODE_SUCC;
 }
 
@@ -24,6 +23,5 @@ errcode_t task_create(const char *name, task_func_t func, void *arg,
     osal_kthread_set_priority(task, priority);
     osal_kfree(task);
     osal_kthread_unlock();
-    osal_printk("[TASK] created '%s' prio=%lu\r\n", name, (unsigned long)priority);
     return ERRCODE_SUCC;
 }

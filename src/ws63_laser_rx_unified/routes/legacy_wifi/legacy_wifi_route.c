@@ -19,7 +19,6 @@
 #include "wifi_device.h"
 #include "wifi_hotspot.h"
 #include "wifi_hotspot_config.h"
-#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,30 +59,24 @@ static void wifi_event_scan_state_changed(int32_t state, int32_t size)
 
 static void wifi_event_connection_changed(int32_t state, const wifi_linked_info_stru *info, int32_t reason_code)
 {
+    unused(state);
     unused(info);
-    osal_printk("[laser wifi] sta event state=%d reason=%d\r\n", state, reason_code);
+    unused(reason_code);
 }
 
 static void wifi_event_softap_state_changed(int32_t state)
 {
-    osal_printk("[laser wifi] softap state=%d %s\r\n",
-                state, (state == WIFI_STATE_AVALIABLE) ? "available" : "unavailable");
+    unused(state);
 }
 
 static void wifi_event_softap_sta_join(const wifi_sta_info_stru *info)
 {
-    osal_printk("[laser wifi] softap sta join mac=%02x:**:**:**:%02x:%02x\r\n",
-                (info != NULL) ? info->mac_addr[0] : 0,
-                (info != NULL) ? info->mac_addr[4] : 0,
-                (info != NULL) ? info->mac_addr[5] : 0);
+    unused(info);
 }
 
 static void wifi_event_softap_sta_leave(const wifi_sta_info_stru *info)
 {
-    osal_printk("[laser wifi] softap sta leave mac=%02x:**:**:**:%02x:%02x\r\n",
-                (info != NULL) ? info->mac_addr[0] : 0,
-                (info != NULL) ? info->mac_addr[4] : 0,
-                (info != NULL) ? info->mac_addr[5] : 0);
+    unused(info);
 }
 
 static wifi_event_stru g_wifi_event_cb = {
@@ -107,7 +100,6 @@ static void wifi_register_events_once(void)
     }
 
     g_wifi_event_registered = true;
-    osal_printk("[laser wifi] wifi event callback ready\r\n");
 }
 
 static void log_tcp_rx_chunk(const uint8_t *buf, int len)
@@ -117,36 +109,7 @@ static void log_tcp_rx_chunk(const uint8_t *buf, int len)
 
     if (len == 1 && buf[0] == '?') {
         g_tcp_rx_realtime_q++;
-        if ((g_tcp_rx_realtime_q & 0x0fUL) == 1) {
-            osal_printk("[WIFI_RT] '?' count=%lu chunks=%lu bytes=%lu\r\n",
-                        g_tcp_rx_realtime_q, g_tcp_rx_chunks, g_tcp_rx_bytes);
-        }
-        return;
     }
-
-    char preview[96];
-    int out = 0;
-    int limit = (len < 40) ? len : 40;
-    for (int i = 0; i < limit && out < (int)sizeof(preview) - 5; i++) {
-        uint8_t ch = buf[i];
-        if (ch == '\r') {
-            preview[out++] = '\\';
-            preview[out++] = 'r';
-        } else if (ch == '\n') {
-            preview[out++] = '\\';
-            preview[out++] = 'n';
-        } else if (ch == GRBL_RESET_CHAR) {
-            preview[out++] = '^';
-            preview[out++] = 'X';
-        } else if (isprint(ch)) {
-            preview[out++] = (char)ch;
-        } else {
-            out += snprintf(&preview[out], sizeof(preview) - (size_t)out, "\\x%02X", ch);
-        }
-    }
-    preview[out] = '\0';
-    osal_printk("[WIFI_TCP_RX] chunk=%lu len=%d total=%lu data=\"%s%s\"\r\n",
-                g_tcp_rx_chunks, len, g_tcp_rx_bytes, preview, (len > limit) ? "..." : "");
 }
 
 static void wifi_send_str(const char *str)
@@ -175,8 +138,6 @@ static void wifi_send_str(const char *str)
 static void send_ok(void)
 {
     g_ok_count++;
-    osal_printk("[WIFI_OK] count=%lu tx_msg=%lu tx_bytes=%lu\r\n",
-                g_ok_count, g_tcp_tx_messages, g_tcp_tx_bytes);
     wifi_send_str("ok\r\n");
 }
 
@@ -216,18 +177,6 @@ static bool parsed_line_contains_gcode(const legacy_wifi_gcode_line_t *gc, int e
         if ((p == gc->line || !(((*(p - 1) >= 'A') && (*(p - 1) <= 'Z')) ||
                                 ((*(p - 1) >= 'a') && (*(p - 1) <= 'z')))) &&
             atoi(p + 1) == expected_code) {
-            return true;
-        }
-        p++;
-    }
-    return false;
-}
-
-static bool line_contains_mcode(const char *line, int expected_code)
-{
-    const char *p = line;
-    while ((p = strchr(p, 'M')) != NULL) {
-        if ((p == line || !isalpha((unsigned char)*(p - 1))) && atoi(p + 1) == expected_code) {
             return true;
         }
         p++;
@@ -324,11 +273,6 @@ static void send_status_report(void)
              legacy_wifi_motion_executor_get_x(), legacy_wifi_motion_executor_get_y(), (int)legacy_wifi_gcode_processor_get_feed_rate(),
              (int)legacy_wifi_gcode_processor_get_laser_power(), legacy_wifi_gcode_processor_get_line_count());
     wifi_send_str(buf);
-    if ((g_status_count & 0x0fUL) == 1) {
-        osal_printk("[WIFI_STATUS] count=%lu state=%s x=%.3f y=%.3f q=%u busy=%d\r\n",
-                    g_status_count, state, legacy_wifi_motion_executor_get_x(), legacy_wifi_motion_executor_get_y(),
-                    (unsigned int)legacy_wifi_motion_executor_queue_depth(), legacy_wifi_motion_executor_is_busy() ? 1 : 0);
-    }
 }
 
 static void send_periodic_status(void)
@@ -563,11 +507,8 @@ static void execute_gcode_line(const char *line, int len)
 {
     legacy_wifi_motion_cmd_t cmds[4];
     int cmd_count = 0;
-    bool m5_requested = line_contains_mcode(line, 5);
 
     if (legacy_wifi_gcode_process_line(line, len, cmds, 4, &cmd_count)) {
-        osal_printk("[WIFI_PARSE] id=%lu cmds=%d m5=%d line=\"%s\"\r\n",
-                    g_line_id, cmd_count, m5_requested ? 1 : 0, line);
         for (int i = 0; i < cmd_count; i++) {
             if (!enqueue_motion_cmd(&cmds[i])) {
                 return;
@@ -575,11 +516,6 @@ static void execute_gcode_line(const char *line, int len)
         }
         if (cmd_count > 0) {
             wait_motion_queue_watermark();
-        }
-        if (m5_requested) {
-            osal_printk("[WIFI_M5_ACCEPT] id=%lu queue=%u ack=immediate\r\n",
-                        g_line_id,
-                        (unsigned int)legacy_wifi_motion_executor_queue_depth());
         }
     }
 
@@ -593,7 +529,6 @@ static void process_line(const char *line, int len)
     }
 
     g_line_id++;
-    osal_printk("[WIFI_LINE] id=%lu len=%d line=\"%s\"\r\n", g_line_id, len, line);
 
     if (strcmp(line, "?") == 0) {
         send_status_report();
@@ -651,7 +586,6 @@ static int start_softap(void)
     while (wifi_is_wifi_inited() == 0) {
         osal_msleep(10);
     }
-    osal_printk("[laser wifi] wifi init ready\r\n");
     wifi_register_events_once();
 
     (void)memcpy_s(hapd_conf.ssid, sizeof(hapd_conf.ssid), LEGACY_WIFI_AP_SSID,
@@ -698,9 +632,6 @@ static int start_softap(void)
         return -1;
     }
 
-    osal_printk("[laser wifi] softap ssid=%s ip=%d.%d.%d.%d port=%d channel=%d hidden_flag=%d\r\n", LEGACY_WIFI_AP_SSID,
-                LEGACY_WIFI_AP_IP_A, LEGACY_WIFI_AP_IP_B, LEGACY_WIFI_AP_IP_C, LEGACY_WIFI_AP_IP_D,
-                LEGACY_WIFI_TCP_PORT, LEGACY_WIFI_AP_CHANNEL, config.hidden_ssid_flag);
     return 0;
 }
 
@@ -737,7 +668,6 @@ static int start_tcp_server(void)
         return -1;
     }
 
-    osal_printk("[laser wifi] tcp server listening port=%d\r\n", LEGACY_WIFI_TCP_PORT);
     return 0;
 }
 
@@ -748,9 +678,6 @@ static void close_client(void)
     if (sock >= 0) {
         lwip_close(sock);
     }
-    osal_printk("[WIFI_CLIENT_CLOSE] rx_chunks=%lu rx_bytes=%lu tx_msg=%lu tx_bytes=%lu lines=%lu ok=%lu err=%lu status=%lu\r\n",
-                g_tcp_rx_chunks, g_tcp_rx_bytes, g_tcp_tx_messages, g_tcp_tx_bytes,
-                g_line_id, g_ok_count, g_error_count, g_status_count);
     g_rx_pos = 0;
     legacy_wifi_motion_executor_flush();
     laser_force_off();
@@ -760,7 +687,6 @@ int legacy_wifi_route_task_entry(void *arg)
 {
     unused(arg);
 
-    osal_printk("[laser wifi] task started\r\n");
     if (start_softap() != 0 || start_tcp_server() != 0) {
         return -1;
     }
@@ -770,7 +696,6 @@ int legacy_wifi_route_task_entry(void *arg)
         socklen_t addr_len = sizeof(client_addr);
         uint8_t buf[LEGACY_WIFI_TCP_RX_BUF_SIZE];
 
-        osal_printk("[laser wifi] waiting tcp client\r\n");
         int client = accept(g_listen_sock, (struct sockaddr *)&client_addr, &addr_len);
         if (client < 0) {
             osal_printk("[laser wifi] accept failed errno=%d\r\n", errno);
@@ -789,13 +714,11 @@ int legacy_wifi_route_task_entry(void *arg)
         g_ok_count = 0;
         g_error_count = 0;
         g_status_count = 0;
-        osal_printk("[laser wifi] client connected sock=%d\r\n", client);
         send_grbl_startup("tcp-connect");
 
         while (g_client_sock >= 0) {
             int ret = recv(client, buf, sizeof(buf), 0);
             if (ret <= 0) {
-                osal_printk("[laser wifi] client disconnected ret=%d errno=%d\r\n", ret, errno);
                 break;
             }
             log_tcp_rx_chunk(buf, ret);
@@ -813,16 +736,12 @@ int legacy_wifi_route_task_entry(void *arg)
 
 errcode_t legacy_wifi_route_init(void)
 {
-    osal_printk("[LEGACY_WIFI] legacy_wifi_route_init OK ssid=%s ip=%d.%d.%d.%d port=%d channel=%d hidden_flag=%d\r\n",
-                LEGACY_WIFI_AP_SSID, LEGACY_WIFI_AP_IP_A, LEGACY_WIFI_AP_IP_B, LEGACY_WIFI_AP_IP_C,
-                LEGACY_WIFI_AP_IP_D, LEGACY_WIFI_TCP_PORT, LEGACY_WIFI_AP_CHANNEL, LEGACY_WIFI_AP_HIDDEN_FLAG);
     return ERRCODE_SUCC;
 }
 
 errcode_t legacy_wifi_route_start(void)
 {
     if (g_route_started) {
-        osal_printk("[LEGACY_WIFI] route already started\r\n");
         return ERRCODE_SUCC;
     }
 
@@ -859,7 +778,6 @@ errcode_t legacy_wifi_route_start(void)
     }
 
     g_route_started = true;
-    osal_printk("[LEGACY_WIFI] route started\r\n");
     return ERRCODE_SUCC;
 }
 

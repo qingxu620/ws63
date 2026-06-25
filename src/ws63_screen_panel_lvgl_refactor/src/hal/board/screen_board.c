@@ -39,24 +39,11 @@ static void screen_gpio_input(pin_t pin)
 
 errcode_t screen_board_init(void)
 {
-#if SCREEN_BOARD_REV_FINAL_HW_I2C
-    osal_printk("[SCREEN] board rev: final hw i2c\r\n");
-    osal_printk("[SCREEN] lcd pinmap CS=GPIO%d RST=GPIO%d DC=GPIO%d BL=GPIO%d SCK=GPIO%d MOSI=GPIO%d MISO=GPIO%d\r\n",
-                SCREEN_LCD_CS_PIN, SCREEN_LCD_RST_PIN, SCREEN_LCD_DC_PIN,
-                SCREEN_LCD_BL_PIN, SCREEN_LCD_SPI_SCK_PIN,
-                SCREEN_LCD_SPI_MOSI_PIN, SCREEN_LCD_SPI_MISO_PIN);
-#endif
-
     /* LCD GPIOs */
     screen_gpio_output(SCREEN_LCD_CS_PIN, GPIO_LEVEL_HIGH);
     screen_gpio_output(SCREEN_LCD_DC_PIN, GPIO_LEVEL_HIGH);
     screen_gpio_output(SCREEN_LCD_RST_PIN, GPIO_LEVEL_HIGH);
     screen_gpio_output(SCREEN_LCD_BL_PIN, GPIO_LEVEL_HIGH);
-    osal_printk("[SCREEN] lcd bl pin=GPIO%d active=HIGH\r\n", SCREEN_LCD_BL_PIN);
-    {
-        gpio_level_t bl_val = uapi_gpio_get_val(SCREEN_LCD_BL_PIN);
-        osal_printk("[SCREEN] lcd bl on (readback=%d)\r\n", bl_val);
-    }
 
     /* Touch RST/INT */
     screen_gpio_output(SCREEN_TOUCH_RST_PIN, GPIO_LEVEL_HIGH);
@@ -66,9 +53,6 @@ errcode_t screen_board_init(void)
     uapi_pin_set_mode(SCREEN_LCD_SPI_SCK_PIN, SCREEN_LCD_SPI_PIN_MODE);
     uapi_pin_set_mode(SCREEN_LCD_SPI_MOSI_PIN, SCREEN_LCD_SPI_PIN_MODE);
     uapi_pin_set_mode(SCREEN_LCD_SPI_MISO_PIN, SCREEN_LCD_SPI_PIN_MODE);
-
-    /* SPI init */
-    osal_printk("[SCREEN] lcd spi baud=%d\r\n", SCREEN_LCD_SPI_BAUDRATE);
 
     spi_attr_t spi_attr = {0};
     spi_attr.is_slave = false;
@@ -188,8 +172,6 @@ errcode_t screen_lcd_bl_pwm_init(uint8_t brightness_pct)
     }
 
     g_lcd_bl_pwm_ready = true;
-    osal_printk("[SCREEN] lcd bl PWM5 ready brightness=%u%%\r\n",
-                (unsigned int)brightness_pct);
     return ERRCODE_SUCC;
 
 fallback:
@@ -431,19 +413,11 @@ errcode_t screen_touch_i2c_read(uint8_t reg, uint8_t *data, uint32_t len)
 
 void screen_i2c_scan(void)
 {
-    gpio_level_t scl = uapi_gpio_get_val(SCREEN_TOUCH_SCL_PIN);
-    gpio_level_t sda = uapi_gpio_get_val(SCREEN_TOUCH_SDA_PIN);
-    osal_printk("[TOUCH][I2C] bus idle: SCL=%d SDA=%d\r\n", scl, sda);
-    osal_printk("[TOUCH][I2C] scanning 0x08~0x77 (7-bit addr)...\r\n");
     for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
         i2c_start();
-        bool ack = i2c_write_byte((addr << 1) | 0);
+        (void)i2c_write_byte((addr << 1) | 0);
         i2c_stop();
-        if (ack) {
-            osal_printk("[TOUCH][I2C] found addr=0x%02X\r\n", addr);
-        }
     }
-    osal_printk("[TOUCH][I2C] scan done\r\n");
 }
 
 bool screen_i2c_probe(uint8_t addr_7bit)

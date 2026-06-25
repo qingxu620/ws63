@@ -7,16 +7,10 @@
 #include "dac8562.h"
 #include "laser_ctrl.h"
 #include "route_manager.h"
-#include "route_status.h"
 #include "soc_osal.h"
 
 static void laser_rx_unified_entry(void)
 {
-    osal_printk("========================================\r\n");
-    osal_printk("  WS63 Laser RX Integrated\r\n");
-    osal_printk("  Route-based integration R5D\r\n");
-    osal_printk("========================================\r\n");
-
     errcode_t ret = dac8562_init();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[RX_INTEGRATED] dac init failed: 0x%x\r\n", ret);
@@ -32,24 +26,12 @@ static void laser_rx_unified_entry(void)
     laser_force_off();
     route_manager_init();
 
-    route_status_print_boot_summary();
-    route_manager_print_status();
-#if defined(CONFIG_LASER_RX_TRANSPORT_UART)
-    osal_printk("[RX_INTEGRATED] legacy_uart compiled but not started in R5D\r\n");
-#endif
-#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
-    osal_printk("[RX_INTEGRATED] legacy_wifi compiled, starts as coexist listener after SLE ready in R5D\r\n");
-#endif
 #if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
-    osal_printk("[RX_INTEGRATED] R5D start sle_job route\r\n");
     if (!route_manager_set_active(RX_ROUTE_SLE_JOB)) {
         osal_printk("[RX_INTEGRATED] start sle_job failed\r\n");
         laser_force_off();
         return;
     }
-    osal_printk("[RX_INTEGRATED] active_route=%s\r\n", rx_route_name(route_manager_get_active()));
-    osal_printk("[RX_INTEGRATED] laser=%s\r\n", laser_is_enabled() ? "ON" : "OFF");
-    route_manager_dump_status();
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
     if (rx_boot_policy_start() != ERRCODE_SUCC) {
         osal_printk("[RX_INTEGRATED] persistent advertising monitor failed, SLE_JOB remains active\r\n");

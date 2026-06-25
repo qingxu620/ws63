@@ -109,7 +109,7 @@ Image conversion modes:
   noise-area option removes small regions and path simplification reduces
   stair-step points. The converted preview shows these paths in red.
 
-The square marking-size control applies the same `0–60 mm` side length to X and
+The square marking-size control applies the same `0–99 mm` side length to X and
 Y. Source aspect ratio is preserved inside that square. A `0×0 mm` selection
 creates a safe empty job containing only laser-off/end commands.
 

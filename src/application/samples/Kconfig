@@ -89,7 +89,7 @@ config ENABLE_LASER_SINGLE_SAMPLE
         振镜运动和激光控制。适合验证底层运动、DAC、PWM、激光关断等核心逻辑。
 
 if ENABLE_LASER_SINGLE_SAMPLE
-source "ws63_laser_single/Kconfig"
+source "deprecated/ws63_laser_single/Kconfig"
 endif
 
 config ENABLE_LASER_WIFI_SAMPLE
@@ -104,7 +104,7 @@ config ENABLE_LASER_WIFI_SAMPLE
         LaserGRBL 可通过 IP:PORT 直接连接，适合实时无线打标。
 
 if ENABLE_LASER_WIFI_SAMPLE
-source "ws63_laser_wifi/Kconfig"
+source "deprecated/ws63_laser_wifi/Kconfig"
 endif
 
 config ENABLE_LASER_SLE_JOB_SAMPLE
@@ -151,7 +151,7 @@ config ENABLE_LVGL_SAMPLE
         注意：与 ENABLE_SCREEN_SAMPLE 互斥（共用硬件）。
 
 if ENABLE_LVGL_SAMPLE
-source "ws63_screen_panel_lvgl/Kconfig"
+source "deprecated/ws63_screen_panel_lvgl/Kconfig"
 endif
 
 config ENABLE_LVGL_PANEL
@@ -165,5 +165,5 @@ config ENABLE_LVGL_PANEL
         与 ENABLE_LVGL_SAMPLE 互斥（共用硬件和 LVGL）。
 
 if ENABLE_LVGL_PANEL
-source "ws63_screen_panel_lvgl/Kconfig"
+source "deprecated/ws63_screen_panel_lvgl/Kconfig"
 endif

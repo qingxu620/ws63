@@ -10,13 +10,13 @@
 #if defined(CONFIG_LASER_RX_WORK_AREA_X_MM)
 #define SLE_JOB_GALVO_WORK_AREA_X_MM ((double)CONFIG_LASER_RX_WORK_AREA_X_MM)
 #else
-#define SLE_JOB_GALVO_WORK_AREA_X_MM 70.0
+#define SLE_JOB_GALVO_WORK_AREA_X_MM 99.0
 #endif
 
 #if defined(CONFIG_LASER_RX_WORK_AREA_Y_MM)
 #define SLE_JOB_GALVO_WORK_AREA_Y_MM ((double)CONFIG_LASER_RX_WORK_AREA_Y_MM)
 #else
-#define SLE_JOB_GALVO_WORK_AREA_Y_MM 70.0
+#define SLE_JOB_GALVO_WORK_AREA_Y_MM 99.0
 #endif
 
 #define SLE_JOB_GALVO_X_MIN_MM 0.0
@@ -72,8 +72,8 @@
 #error "CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE must be defined for the SLE job route"
 #endif
 
-#if CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE != 131072
-#error "The integrated SLE job route requires a 131072-byte cache"
+#if CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE != 65536
+#error "The integrated SLE job route requires a 65536-byte cache"
 #endif
 
 #define SLE_JOB_CACHE_SIZE CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE

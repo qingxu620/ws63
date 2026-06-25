@@ -9,7 +9,8 @@ from typing import Optional, TextIO
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout,
+    QWidget,
 )
 
 from app.config_store import ConfigStore, HostConfig
@@ -19,6 +20,7 @@ from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
+    JOB_MAX_SIZE, JOB_PREROLL_BYTES,
 )
 from workers.serial_worker import WorkerManager
 from ui.widgets.status_badge import StatusBadge
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         # Workers
         self.worker = WorkerManager(self)
         self.worker.log.connect(self._enqueue_log)
+        self.worker.error.connect(self._show_error_dialog)
         self.worker.progress.connect(self._on_progress)
         self.worker.task_status.connect(self._on_task_status)
 
@@ -159,6 +162,9 @@ class MainWindow(QMainWindow):
 
     def _enqueue_log(self, channel: str, message: str) -> None:
         self.event_bus.emit_log(channel, message)
+
+    def _show_error_dialog(self, message: str) -> None:
+        QMessageBox.warning(self, "任务错误", message)
 
     def _on_log_message(self, channel: str, message: str) -> None:
         # Protocol state is safety-critical and must not depend on log rendering.
@@ -518,12 +524,19 @@ class MainWindow(QMainWindow):
         self._focus_off_before_job()
         crc = crc16_ccitt(gcode)
         total = len(gcode)
-        self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传并执行 job={job_id} size={total} crc=0x{crc:04x} preroll={preroll}")
+        effective_preroll = preroll
+        if total > JOB_MAX_SIZE and (effective_preroll <= 0 or effective_preroll >= total):
+            effective_preroll = min(JOB_PREROLL_BYTES, total - 1)
+            self.worker.log.emit(
+                "status",
+                f"[EXEC_FLOW] 大文件超过64K，强制启用 preroll={effective_preroll}",
+            )
+        self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传并执行 job={job_id} size={total} crc=0x{crc:04x} preroll={effective_preroll}")
 
         # Determine small-file vs large-file path
-        use_preroll = preroll > 0 and total > preroll
-        if preroll > 0 and total <= preroll:
-            self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 ({total} <= {preroll}), 使用 normal upload 路径")
+        use_preroll = effective_preroll > 0 and total > effective_preroll
+        if effective_preroll > 0 and total <= effective_preroll:
+            self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 ({total} <= {effective_preroll}), 使用 normal upload 路径")
         self.worker.log.emit("status", f"[EXEC_FLOW] use_preroll={use_preroll} path={'preroll' if use_preroll else 'normal'}")
 
         # Reset execution state. Completion is received asynchronously from RX.
@@ -539,8 +552,9 @@ class MainWindow(QMainWindow):
                 job_id, gcode, timeout,
                 progress_cb=lambda t: self.worker.progress.emit(t),
                 status_cb=lambda t, p: self.worker.task_status.emit(t, p),
-                preroll_bytes=preroll if use_preroll else 0,
+                preroll_bytes=effective_preroll if use_preroll else 0,
                 start_on_preroll=use_preroll,
+                enforce_job_size_limit=False,
             )
             self.worker.log.emit("status", f"[EXEC_FLOW] 上传阶段完成")
 

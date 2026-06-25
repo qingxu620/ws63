@@ -148,7 +148,6 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
 
     if (g_owner_conn_id == SLE_CONN_INVALID) {
         g_owner_conn_id = conn_id;
-        osal_printk("[job_rx] owner claimed by conn_id=%u\r\n", conn_id);
     }
 
     if (conn_id != g_owner_conn_id) {
@@ -177,16 +176,14 @@ static void ssaps_mtu_changed_cbk(uint8_t server_id, uint16_t conn_id,
     unused(server_id);
     unused(conn_id);
     unused(status);
-    if (mtu_size != NULL) {
-        osal_printk("[job_rx] MTU changed: %u\r\n", mtu_size->mtu_size);
-    }
+    unused(mtu_size);
 }
 
 static void ssaps_start_service_cbk(uint8_t server_id, uint16_t handle, errcode_t status)
 {
     unused(server_id);
     unused(handle);
-    osal_printk("[job_rx] service start status=0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_ssaps_register_cbks(void)
@@ -267,7 +264,6 @@ static errcode_t sle_job_route_server_add(void)
         osal_printk("[job_rx] start service fail: 0x%x\r\n", ret);
         return ret;
     }
-    osal_printk("[job_rx] service registered OK\r\n");
     return ERRCODE_SLE_SUCCESS;
 }
 
@@ -280,10 +276,8 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         conn_table_add(conn_id);
-        osal_printk("[job_rx] SLE connected conn_id=%u conns=%u owner=%u\r\n",
-                    conn_id, conn_table_count(), g_owner_conn_id);
         errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
-        osal_printk("[job_rx] keep advertising for observer ret=0x%x\r\n", adv_ret);
+        unused(adv_ret);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         bool was_owner = (conn_id == g_owner_conn_id);
         (void)conn_table_remove(conn_id);
@@ -291,11 +285,8 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             g_owner_conn_id = SLE_CONN_INVALID;
         }
         if (g_server_stopping) {
-            osal_printk("[job_rx] SLE disconnected during route stop\r\n");
             return;
         }
-        osal_printk("[job_rx] SLE disconnected conn_id=%u was_owner=%d conns=%u\r\n",
-                    conn_id, was_owner ? 1 : 0, conn_table_count());
         if (was_owner && g_disconnect_cb != NULL) {
             osal_printk("[job_rx] owner disconnected, force safe stop\r\n");
             g_disconnect_cb();
@@ -308,7 +299,7 @@ static void sle_pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errc
 {
     unused(conn_id);
     unused(addr);
-    osal_printk("[job_rx] pair complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
@@ -317,7 +308,7 @@ static void sle_auth_complete_cbk(uint16_t conn_id, const sle_addr_t *addr,
     unused(conn_id);
     unused(addr);
     unused(evt);
-    osal_printk("[job_rx] auth complete: 0x%x\r\n", status);
+    unused(status);
 }
 
 static void sle_conn_register_cbks(void)
@@ -350,23 +341,29 @@ static uint8_t g_scan_rsp_data[] = {
 
 static void sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
 {
-    osal_printk("[job_rx] adv enable id=0x%02x status=0x%02x\r\n", announce_id, status);
+    unused(announce_id);
+    if (status != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx] adv enable fail status=0x%02x\r\n", status);
+    }
 }
 
 static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
 {
-    osal_printk("[job_rx] adv disable id=0x%02x status=0x%02x\r\n", announce_id, status);
+    unused(announce_id);
+    if (status != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx] adv disable fail status=0x%02x\r\n", status);
+    }
 }
 
 static void sle_announce_terminal_cbk(uint32_t announce_id)
 {
-    osal_printk("[job_rx] adv terminal id=0x%02x\r\n", announce_id);
+    unused(announce_id);
 }
 
 static void sle_enable_cbk(errcode_t status)
 {
-    osal_printk("[job_rx] enable status=0x%02x\r\n", status);
     if (status != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx] enable fail status=0x%02x\r\n", status);
         return;
     }
 
@@ -425,7 +422,6 @@ static void sle_enable_cbk(errcode_t status)
         osal_printk("[job_rx] start announce fail: 0x%x\r\n", ret);
         return;
     }
-    osal_printk("[job_rx] advertising as '%s'\r\n", SLE_JOB_RECEIVER_NAME);
 }
 
 static void sle_announce_register_cbks(void)
@@ -447,22 +443,26 @@ errcode_t sle_job_route_server_init(void)
     sle_ssaps_register_cbks();
 
     errcode_t ret = enable_sle();
-    osal_printk("[job_rx] enable_sle ret=0x%x\r\n", ret);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx] enable_sle fail: 0x%x\r\n", ret);
+    }
     return ret;
 }
 
 errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
-    osal_printk("[job_rx] route server stop begin connected=%d\r\n",
-                (conn_table_count() > 0U) ? 1 : 0);
     if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
-        osal_printk("[job_rx] disconnect all ret=0x%x\r\n", disc_ret);
+        if (disc_ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[job_rx] disconnect all fail: 0x%x\r\n", disc_ret);
+        }
         conn_table_reset();
     }
     errcode_t adv_ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
-    osal_printk("[job_rx] stop announce ret=0x%x\r\n", adv_ret);
+    if (adv_ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx] stop announce fail: 0x%x\r\n", adv_ret);
+    }
     return ERRCODE_SLE_SUCCESS;
 }
 

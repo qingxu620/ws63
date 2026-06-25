@@ -33,7 +33,6 @@ static void apply_brightness(uint8_t val)
         return;
     }
     g_applied_brightness = val;
-    osal_printk("[SETTINGS] brightness applied=%u\r\n", (unsigned int)val);
 }
 
 static void brightness_cb(lv_event_t *e)

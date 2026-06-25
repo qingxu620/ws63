@@ -46,19 +46,19 @@ config LASER_RX_TRANSPORT_SLE_JOB
 
 config LASER_RX_SLE_JOB_CACHE_SIZE
     int "Integrated SLE job cache size"
-    default 131072
-    range 131072 131072
+    default 65536
+    range 65536 65536
     depends on LASER_RX_TRANSPORT_SLE_JOB
     help
-        Keep the validated SLE RX cache at 131072 bytes. R4A intentionally has
-        no 64 KiB fallback because that would silently change job behavior.
+        Keep the demo SLE RX cache at 65536 bytes. Larger Host jobs must be
+        rejected before upload so RX cannot overflow the task cache.
 
 config LASER_RX_WORK_AREA_X_MM
     int "Work area X in mm"
-    default 70
+    default 99
 
 config LASER_RX_WORK_AREA_Y_MM
     int "Work area Y in mm"
-    default 70
+    default 99
 
 endmenu

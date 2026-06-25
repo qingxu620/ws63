@@ -42,6 +42,7 @@ class WorkerManager(QObject):
     """Manages background worker threads for serial operations."""
 
     log = Signal(str, str)
+    error = Signal(str)
     progress = Signal(str)
     task_status = Signal(str, float)
     finished = Signal()
@@ -62,6 +63,7 @@ class WorkerManager(QObject):
         t.signals.progress.connect(self.progress)
         t.signals.task_status.connect(self.task_status)
         t.signals.finished.connect(self._on_finished)
+        t.signals.error.connect(self.error)
         t.signals.error.connect(lambda msg: self.log.emit("error", msg))
         self._thread = t
         t.start()

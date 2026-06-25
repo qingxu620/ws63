@@ -59,9 +59,6 @@ static const char *state_name(sle_job_state_t state)
 
 static void focus_force_off(void)
 {
-    if (g_focus_active) {
-        osal_printk("[FOCUS] force_off\r\n");
-    }
     g_focus_active = false;
     laser_force_off();
 }
@@ -258,13 +255,6 @@ static void throttle_streaming_executor(void)
         return;
     }
 
-    static uint32_t s_last_log_ms = 0;
-    uint32_t now_ms = (uint32_t)uapi_systick_get_ms();
-    if (s_last_log_ms == 0 || (now_ms - s_last_log_ms) >= JOB_EXEC_STREAM_THROTTLE_LOG_MS) {
-        osal_printk("[JOB_EXEC_STREAM_THROTTLE] avail=%u queue=%u all_received=%d\r\n",
-                    (unsigned int)avail, (unsigned int)queue, (int)job_cache_is_all_received());
-        s_last_log_ms = now_ms;
-    }
     osal_msleep(JOB_EXEC_STREAM_THROTTLE_SLEEP_MS);
 }
 
@@ -280,8 +270,6 @@ static int job_exec_task(void *arg)
         return 0;
     }
 
-    osal_printk("[JOB_EXEC] start job=%u size=%u\r\n",
-                (unsigned int)job_cache_job_id(), (unsigned int)job_cache_total_size());
     g_executed_lines = 0;
     uint32_t wait_start_ms = 0;
 
@@ -322,12 +310,6 @@ static int job_exec_task(void *arg)
                 }
                 g_executed_lines++;
                 throttle_streaming_executor();
-                if ((g_executed_lines % JOB_STATUS_LOG_PERIOD_LINES) == 0) {
-                    osal_printk("[JOB_EXEC] line=%u avail=%u queue=%u\r\n",
-                                (unsigned int)g_executed_lines,
-                                (unsigned int)job_cache_available(),
-                                (unsigned int)motion_executor_queue_depth());
-                }
             }
             line_pos = 0;
         } else if (line_pos < (JOB_LINE_MAX - 1U)) {
@@ -423,17 +405,16 @@ static void handle_job_begin(const sle_packet_view_t *pkt)
         g_diag_rx_data_count = 0;
         seq_commit(pkt->seq);
     }
-    osal_printk("[JOB_BEGIN] seq=%u job=%u size=%u crc=0x%04x st=%u\r\n",
-                pkt->seq, (unsigned int)begin.job_id, (unsigned int)begin.total_size,
-                begin.job_crc16, st);
     send_ack(pkt->type, pkt->seq, st);
 }
 
 static void handle_job_data(const sle_packet_view_t *pkt)
 {
-    osal_printk("[JOB_DATA_IN] state=%s seq=%u pkt_len=%u payload=%p\r\n",
-                state_name(g_state), (unsigned int)pkt->seq,
-                (unsigned int)pkt->len, (const void *)pkt->payload);
+    if (JOB_DIAG_LOG) {
+        osal_printk("[JOB_DATA_IN] state=%s seq=%u pkt_len=%u payload=%p\r\n",
+                    state_name(g_state), (unsigned int)pkt->seq,
+                    (unsigned int)pkt->len, (const void *)pkt->payload);
+    }
 
     if (g_state != JOB_STATE_RECEIVING_JOB && g_state != JOB_STATE_EXECUTING) {
         osal_printk("[JOB_DATA_REJECT] reason=bad_state state=%s seq=%u pkt_len=%u\r\n",
@@ -451,11 +432,13 @@ static void handle_job_data(const sle_packet_view_t *pkt)
     }
     job_data_payload_t hdr;
     memcpy(&hdr, pkt->payload, sizeof(hdr));
-    osal_printk("[JOB_DATA_HDR] seq=%u job=%u off=%u data_len=%u pkt_len=%u expect_len=%u cache_rx=%u state=%s\r\n",
-                (unsigned int)pkt->seq, (unsigned int)hdr.job_id, (unsigned int)hdr.offset,
-                (unsigned int)hdr.data_len, (unsigned int)pkt->len,
-                (unsigned int)(sizeof(job_data_payload_t) + hdr.data_len),
-                (unsigned int)job_cache_received(), state_name(g_state));
+    if (JOB_DIAG_LOG) {
+        osal_printk("[JOB_DATA_HDR] seq=%u job=%u off=%u data_len=%u pkt_len=%u expect_len=%u cache_rx=%u state=%s\r\n",
+                    (unsigned int)pkt->seq, (unsigned int)hdr.job_id, (unsigned int)hdr.offset,
+                    (unsigned int)hdr.data_len, (unsigned int)pkt->len,
+                    (unsigned int)(sizeof(job_data_payload_t) + hdr.data_len),
+                    (unsigned int)job_cache_received(), state_name(g_state));
+    }
 
     if (hdr.data_len == 0) {
         osal_printk("[JOB_DATA_REJECT] reason=zero_len state=%s seq=%u job=%u off=%u pkt_len=%u\r\n",
@@ -480,7 +463,8 @@ static void handle_job_data(const sle_packet_view_t *pkt)
         seq_commit(pkt->seq);
     }
     g_diag_rx_data_count++;
-    if (g_diag_rx_data_count <= 12U || st != JOB_STATUS_OK) {
+    if ((JOB_DIAG_LOG && g_diag_rx_data_count <= JOB_DIAG_LOG_MAX_DATA) ||
+        st != JOB_STATUS_OK) {
         osal_printk("[JOB_DATA_RESULT] state=%s seq=%u job=%u off=%u len=%u cache_rx=%u st=%u\r\n",
                     state_name(g_state), (unsigned int)pkt->seq,
                     (unsigned int)hdr.job_id, (unsigned int)hdr.offset,
@@ -491,10 +475,6 @@ static void handle_job_data(const sle_packet_view_t *pkt)
 
 static void handle_job_end(const sle_packet_view_t *pkt)
 {
-    osal_printk("[JOB_END_IN] state=%s seq=%u pkt_len=%u exec_active=%d\r\n",
-                state_name(g_state), (unsigned int)pkt->seq,
-                (unsigned int)pkt->len, (int)g_exec_active);
-
     if ((g_state != JOB_STATE_RECEIVING_JOB && g_state != JOB_STATE_EXECUTING) ||
         pkt->len != sizeof(job_end_payload_t)) {
         osal_printk("[JOB_END_REJECT] state=%s seq=%u pkt_len=%u\r\n",
@@ -518,12 +498,6 @@ static void handle_job_end(const sle_packet_view_t *pkt)
         job_cache_set_all_received();
         g_abort_requested = true;
     }
-    osal_printk("[JOB_END] seq=%u job=%u size=%u crc=0x%04x st=%u state=%s\r\n",
-                pkt->seq, (unsigned int)end.job_id, (unsigned int)end.total_size,
-                end.job_crc16, st, state_name(g_state));
-    osal_printk("[JOB_END_RESULT] state=%s st=%u all_received=%d exec_active=%d\r\n",
-                state_name(g_state), (unsigned int)st,
-                (int)job_cache_is_all_received(), (int)g_exec_active);
     send_ack(pkt->type, pkt->seq, st);
 }
 
@@ -543,8 +517,6 @@ static void handle_exec_start(const sle_packet_view_t *pkt)
         g_state = JOB_STATE_EXECUTING;
         seq_commit(pkt->seq);
     }
-    osal_printk("[EXEC_START] seq=%u job=%u st=%u state=%s ack-before-launch\r\n",
-                pkt->seq, (unsigned int)start.job_id, st, state_name(g_state));
     send_ack(pkt->type, pkt->seq, st);
     if (st == JOB_STATUS_OK) {
         sle_job_status_t launch_st = launch_job_execution();
@@ -582,12 +554,10 @@ static void handle_focus_ctrl(const sle_packet_view_t *pkt)
         g_focus_active = true;
         seq_commit(pkt->seq);
         send_ack(pkt->type, pkt->seq, JOB_STATUS_OK);
-        osal_printk("[FOCUS] on s=%u power=%u\r\n", (unsigned int)fp.power, (unsigned int)internal_power);
     } else {
         focus_force_off();
         seq_commit(pkt->seq);
         send_ack(pkt->type, pkt->seq, JOB_STATUS_OK);
-        osal_printk("[FOCUS] off\r\n");
     }
 }
 
@@ -692,5 +662,4 @@ void job_manager_init(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
-    osal_printk("[JOB_RX] manager init cache=%u sliding-window\r\n", (unsigned int)job_cache_size());
 }

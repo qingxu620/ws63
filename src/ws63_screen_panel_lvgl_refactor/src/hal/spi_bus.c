@@ -7,6 +7,5 @@
 
 errcode_t spi_bus_init(void)
 {
-    osal_printk("[SPI_BUS] init (lcd-only mode)\r\n");
     return ERRCODE_SUCC;
 }

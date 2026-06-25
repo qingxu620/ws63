@@ -38,8 +38,6 @@ static int panel_task(void *arg)
 {
     (void)arg;
 
-    osal_printk("[PANEL] task begin\r\n");
-
     /* HAL init */
     errcode_t ret = spi_bus_init();
     if (ret != ERRCODE_SUCC) {
@@ -72,8 +70,6 @@ static int panel_task(void *arg)
     /* Model + UI */
     panel_model_init();
     ui_manager_init();
-
-    osal_printk("[PANEL] init done, entering handler loop\r\n");
 
     uint32_t tick_count = 0;
     bool sle_started = false;
@@ -133,18 +129,12 @@ static int panel_task(void *arg)
 
 static void panel_entry(void)
 {
-    osal_printk("========================================\r\n");
-    osal_printk("  WS63 Panel UI (refactor)\r\n");
-    osal_printk("  LVGL v9.3.0 + MSP3223 ILI9341 + FT6336\r\n");
-    osal_printk("========================================\r\n");
-
     errcode_t ret = task_create("panel_task", panel_task, NULL,
                                 LVGL_TASK_STACK_SIZE, LVGL_TASK_PRIORITY);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[PANEL] create task failed\r\n");
         return;
     }
-    osal_printk("[PANEL] task created\r\n");
 }
 
 app_run(panel_entry);

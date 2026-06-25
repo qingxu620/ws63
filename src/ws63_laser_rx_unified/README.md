@@ -10,8 +10,8 @@ USART commands, but LaserGRBL image jobs exposed compatibility and timing risks.
 
 The new mainline is route-based integration:
 
-- Legacy UART route: later reuse the mature `src/ws63_laser_single/` behavior.
-- Legacy WiFi route: later reuse the mature `src/ws63_laser_wifi/` behavior.
+- Legacy UART route: later reuse the mature `src/deprecated/ws63_laser_single/` behavior.
+- Legacy WiFi route: later reuse the mature `src/deprecated/ws63_laser_wifi/` behavior.
 - SLE Job route: later reuse the mature `src/ws63_laser_sle_job/receiver/`
   packet/cache/preroll behavior.
 - Shared code is limited to firmware entry, route selection, route status,
@@ -58,7 +58,7 @@ Route-based integration R1
 ## R2A Scope
 
 R2A compiles the prefixed Legacy UART route copied from
-`src/ws63_laser_single/`, but still does not start the route.
+`src/deprecated/ws63_laser_single/`, but still does not start the route.
 
 Implemented in R2A:
 
@@ -115,7 +115,7 @@ R2A boot validation:
 
 R2B starts the prefixed Legacy UART route when
 `CONFIG_LASER_RX_TRANSPORT_UART=y`. The route remains based on the mature
-`src/ws63_laser_single/` behavior, with route-local symbols and headers to avoid
+`src/deprecated/ws63_laser_single/` behavior, with route-local symbols and headers to avoid
 conflicts inside the integrated firmware.
 
 Implemented in R2B:
@@ -153,7 +153,7 @@ Expected absent from R2B boot:
 ## R3A Scope
 
 R3A compiles the prefixed Legacy WiFi route copied from
-`src/ws63_laser_wifi/`, but does not start SoftAP, the TCP server, or a WiFi
+`src/deprecated/ws63_laser_wifi/`, but does not start SoftAP, the TCP server, or a WiFi
 task.
 
 Implemented in R3A:
@@ -298,7 +298,7 @@ tasks.
 Implemented in R4A:
 
 - `routes/sle_job/sle_job_route.c/.h` compile-only lifecycle stub
-- route-local server, job manager, 131072-byte cache, packet, CRC16, G-code,
+- route-local server, job manager, 65536-byte cache, packet, CRC16, G-code,
   and motion executor sources
 - exported symbols prefixed with `sle_job_`
 - route-local headers named `sle_job_*.h`; no generic `config.h`, `protocol.h`,
@@ -314,7 +314,8 @@ R4A protocol invariants:
 - CRC16-CCITT initial value: `0xFFFF`
 - packed structures and little-endian multi-byte fields remain unchanged
 - ACK/NACK, sequence, duplicate, cache, and preroll behavior remain unchanged
-- SLE job cache is fixed at 131072 bytes; there is no 64 KiB fallback
+- SLE job cache is fixed at 65536 bytes for the demo; Host upload rejects
+  larger jobs before transfer
 - Host demo preroll baseline remains 4096 bytes
 
 Expected R4A boot log:
@@ -397,7 +398,7 @@ Route-based integration R4B
 [SLE_JOB_ROUTE] server ready
 ```
 
-R4B preserves the R4A protocol invariants and the 131072-byte cache. Hardware
+R4B preserves the R4A protocol invariants and uses the configured SLE job cache. Hardware
 acceptance uses the existing SLE TX firmware and
 `src/ws63_laser_host_ui` with `preroll=4096`.
 
@@ -470,7 +471,7 @@ SLE Job route validation baseline:
 
 ## R3-pre Legacy WiFi Route Audit
 
-The independent WiFi sample is `src/ws63_laser_wifi/`.
+The independent WiFi sample is `src/deprecated/ws63_laser_wifi/`.
 
 Current source structure:
 
@@ -511,7 +512,7 @@ Files that should be copied/adapted into `routes/legacy_wifi/` during R3A:
 Files that should not be copied directly:
 
 - `src/main.c`; integrated startup must remain in `src/ws63_laser_rx_unified/main.c`.
-- Old WiFi project files in place; `src/ws63_laser_wifi/` remains the stable
+- Old WiFi project files in place; `src/deprecated/ws63_laser_wifi/` remains the stable
   rollback baseline and must not be modified during route porting.
 - Hardware layer should be evaluated carefully. Prefer reusing integrated
   `hardware/dac8562.c/.h` and `hardware/laser_ctrl.c/.h` if behavior remains
@@ -569,7 +570,7 @@ R3B validation standard:
 
 R3 risk and rollback:
 
-- Do not modify `src/ws63_laser_wifi/`.
+- Do not modify `src/deprecated/ws63_laser_wifi/`.
 - If R3 fails, burn the independent WiFi firmware and continue using the known
   working WiFi baseline.
 - Do not modify SLE protocol, job cache, ACK/NACK, or Legacy UART R2B behavior.
@@ -891,8 +892,9 @@ disables competing app samples, enables `CONFIG_LASER_RX_TRANSPORT_UART=y` for
 Legacy UART compile coverage, enables `CONFIG_LASER_RX_TRANSPORT_WIFI=y` for
 the validated Legacy WiFi route, and enables
 `CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` for the R5B persistent route. The SLE job
-cache is fixed at 131072 bytes. Legacy UART/WiFi remain compiled but are not
-started. The script builds serially and archives the generated
+cache is fixed at 65536 bytes. Legacy UART/WiFi remain compiled and R5D starts
+WiFi as a coexist listener while SLE_JOB remains primary. The script builds
+serially and archives the generated
 firmware as:
 
 ```text
@@ -912,6 +914,6 @@ firmware as:
 If any integrated route fails during later phases, burn the corresponding
 stable independent firmware:
 
-- USART Direct: `src/ws63_laser_single/`
-- WiFi TCP: `src/ws63_laser_wifi/`
+- USART Direct: `src/deprecated/ws63_laser_single/`
+- WiFi TCP: `src/deprecated/ws63_laser_wifi/`
 - SLE Job RX: `src/ws63_laser_sle_job/receiver/`
