@@ -418,13 +418,19 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(page.arc._value, 100)
         self.assertEqual(page.arc._caption, "执行完成")
 
-    def test_main_window_does_not_create_auto_status_polling(self) -> None:
+    def test_main_window_polls_status_only_during_execution(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
 
-        self.assertFalse(hasattr(window, "status_poll_timer"))
-        self.assertFalse(hasattr(window, "status_worker"))
-        self.assertFalse(hasattr(window, "_status_poll_worker"))
+        self.assertFalse(window._exec_poll_timer.isActive())
+
+        window.state.tx_state = LinkState.CONNECTED
+        window.client.is_open = lambda: True
+        window._on_task_status("执行中，等待 RX 完成", -1)
+        self.assertTrue(window._exec_poll_timer.isActive())
+
+        window._mark_execution_complete()
+        self.assertFalse(window._exec_poll_timer.isActive())
 
     def test_abort_return_to_idle_is_not_reported_as_success(self) -> None:
         window = MainWindow()

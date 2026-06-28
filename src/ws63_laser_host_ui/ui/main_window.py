@@ -3,11 +3,12 @@ Main window — integrates all pages, manages transport, workers, and state.
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout,
     QWidget,
@@ -63,6 +64,11 @@ class MainWindow(QMainWindow):
         self._log_file: Optional[TextIO] = None
         self._log_pending = 0
         self._log_view_error_reported = False
+        self._exec_poll_inflight = False
+        self._exec_poll_failures = 0
+        self._exec_poll_timer = QTimer(self)
+        self._exec_poll_timer.setInterval(800)
+        self._exec_poll_timer.timeout.connect(self._poll_execution_status)
 
         # UI
         self._build_ui()
@@ -258,9 +264,11 @@ class MainWindow(QMainWindow):
             self.state.execution_expected = True
             self.state.execution_complete = False
             self.page_job.set_execution_state(True)
+            self._start_execution_status_poll()
         elif status.state in (5, 6):
             self.state.execution_expected = False
             self.page_job.set_execution_state(False)
+            self._stop_execution_status_poll()
 
     def _mark_execution_complete(self) -> None:
         already_complete = self.state.execution_complete
@@ -272,10 +280,59 @@ class MainWindow(QMainWindow):
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = True
+        self._stop_execution_status_poll()
         self._update_monitor()
         self.page_job.set_execution_state(False, completed=True)
         if not already_complete:
             self.page_job.set_task_status("执行完成", -1)
+
+    def _start_execution_status_poll(self) -> None:
+        if self._exec_poll_timer.isActive() or not self._client_is_open():
+            return
+        self._exec_poll_failures = 0
+        self._exec_poll_timer.start()
+        self._enqueue_log("status", "[EXEC_POLL] started")
+
+    def _stop_execution_status_poll(self) -> None:
+        if self._exec_poll_timer.isActive():
+            self._exec_poll_timer.stop()
+            self._enqueue_log("status", "[EXEC_POLL] stopped")
+        self._exec_poll_inflight = False
+
+    def _poll_execution_status(self) -> None:
+        if (not self.state.execution_expected or self.state.execution_complete or
+                self.state.termination_requested):
+            self._stop_execution_status_poll()
+            return
+        if self._exec_poll_inflight or not self._client_is_open():
+            return
+
+        self._exec_poll_inflight = True
+        thread = threading.Thread(
+            target=self._execution_status_poll_worker,
+            name="exec-status-poll",
+            daemon=True,
+        )
+        thread.start()
+
+    def _execution_status_poll_worker(self) -> None:
+        try:
+            result = self.client.transact_status(2.0)
+            self._exec_poll_failures = 0
+            self.worker.log.emit(
+                "status", f"[EXEC_POLL] STATUS {result.elapsed_ms}ms: {result.line}"
+            )
+            self.status_line_received.emit(result.line)
+        except Exception as exc:
+            self._exec_poll_failures += 1
+            if self._exec_poll_failures in (1, 3, 10):
+                self.worker.log.emit("error", f"[EXEC_POLL] 查询状态失败: {exc}")
+        finally:
+            self._exec_poll_inflight = False
+
+    def _client_is_open(self) -> bool:
+        is_open = getattr(self.client, "is_open", None)
+        return bool(is_open()) if callable(is_open) else False
 
     def _update_status_badges(self) -> None:
         s = self.state
@@ -342,6 +399,7 @@ class MainWindow(QMainWindow):
             self.state.execution_complete = False
             self._update_monitor()
             self.page_job.set_execution_state(True)
+            self._start_execution_status_poll()
             if not was_expected:
                 self._enqueue_log(
                     "status",
@@ -351,12 +409,14 @@ class MainWindow(QMainWindow):
             self.state.execution_expected = False
             self.state.termination_requested = True
             self.state.execution_complete = False
+            self._stop_execution_status_poll()
             self.page_job.set_execution_state(False)
         elif text in ("停止命令失败", "放弃命令失败"):
             self.state.termination_requested = False
         elif text == "执行失败":
             self.state.execution_expected = False
             self.state.execution_complete = False
+            self._stop_execution_status_poll()
             self.page_job.set_execution_state(False)
         if text.startswith("上传完成"):
             self.state.rx_state_code = 2
@@ -398,6 +458,7 @@ class MainWindow(QMainWindow):
             return
         if not self._focus_off_before_disconnect():
             return
+        self._stop_execution_status_poll()
         self.client.close()
         self.state.tx_state = LinkState.DISCONNECTED
         self.page_conn.set_connected(False)
@@ -730,6 +791,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.client.close()
+        self._stop_execution_status_poll()
         self.tx_monitor.close()
         self.rx_monitor.close()
         if self._log_file:
