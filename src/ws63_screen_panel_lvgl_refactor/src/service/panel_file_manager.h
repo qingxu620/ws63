@@ -18,6 +18,7 @@ extern "C" {
 
 #define PANEL_FILE_MAX_COUNT      6
 #define PANEL_FILE_NAME_MAX       32
+#define PANEL_FILE_PATH_MAX       96
 #define PANEL_FILE_PREVIEW_MAX    96
 
 typedef enum {
@@ -29,6 +30,7 @@ typedef enum {
 
 typedef struct {
     char name[PANEL_FILE_NAME_MAX];
+    char path[PANEL_FILE_PATH_MAX];
     uint32_t size_bytes;
     uint32_t line_count;
     panel_file_type_t type;

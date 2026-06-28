@@ -14,6 +14,7 @@
 #include "service/task_manager.h"
 #include "service/panel_model.h"
 #include "service/panel_transport_sle.h"
+#include "service/panel_offline_job.h"
 #include "ui/ui_manager.h"
 #include <stdbool.h>
 
@@ -70,6 +71,10 @@ static int panel_task(void *arg)
     /* Model + UI */
     panel_model_init();
     ui_manager_init();
+    ret = panel_offline_job_init();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[PANEL] offline job task start failed: 0x%x\r\n", ret);
+    }
 
     uint32_t tick_count = 0;
     bool sle_started = false;

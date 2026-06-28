@@ -7,6 +7,7 @@
 #include "ui_manager.h"
 #include "../service/panel_file_manager.h"
 #include "../service/panel_model.h"
+#include "../service/panel_offline_job.h"
 #include "soc_osal.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -25,6 +26,9 @@ static lv_obj_t *g_btn_monitor;
 static lv_obj_t *g_lbl_start;
 static lv_obj_t *g_lbl_monitor;
 static file_row_t g_rows[PANEL_FILE_MAX_COUNT];
+static uint32_t g_rendered_seq = UINT32_MAX;
+static int8_t g_rendered_selected_index = INT8_MIN;
+static bool g_rendered_busy = false;
 
 static void back_btn_cb(lv_event_t *e)
 {
@@ -69,7 +73,10 @@ static void start_btn_cb(lv_event_t *e)
         return;
     }
 
-    panel_model_start_offline_selected();
+    if (panel_offline_job_start_selected() != ERRCODE_SUCC) {
+        osal_printk("[FILE_PAGE] start rejected: offline job busy or invalid\r\n");
+        return;
+    }
     ui_manager_switch_page(PAGE_JOB_MONITOR);
 }
 
@@ -154,11 +161,11 @@ static void create_file_row(lv_obj_t *parent, uint8_t index)
     lv_obj_set_style_text_font(g_rows[index].name, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_rows[index].name, COLOR_TEXT_BRIGHT, 0);
     lv_obj_set_width(g_rows[index].name, 268);
-    lv_label_set_long_mode(g_rows[index].name, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_long_mode(g_rows[index].name, LV_LABEL_LONG_DOT);
 
     g_rows[index].meta = lv_label_create(col);
     lv_label_set_text(g_rows[index].meta, "--");
-    lv_obj_set_style_text_font(g_rows[index].meta, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(g_rows[index].meta, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_rows[index].meta, COLOR_TEXT_MUTED, 0);
 }
 
@@ -233,7 +240,7 @@ void page_file_browser_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(g_lbl_selected, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_selected, COLOR_TEXT_LIGHT, 0);
     lv_obj_set_width(g_lbl_selected, 270);
-    lv_label_set_long_mode(g_lbl_selected, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_long_mode(g_lbl_selected, LV_LABEL_LONG_DOT);
 
     lv_obj_t *action_row = lv_obj_create(status_card);
     lv_obj_set_size(action_row, 270, 32);
@@ -268,7 +275,7 @@ void page_file_browser_create(lv_obj_t *parent)
 
     g_lbl_preview = lv_label_create(preview_card);
     lv_label_set_text(g_lbl_preview, "--");
-    lv_obj_set_style_text_font(g_lbl_preview, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(g_lbl_preview, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_preview, COLOR_TEXT_MUTED, 0);
     lv_obj_set_width(g_lbl_preview, 270);
     lv_label_set_long_mode(g_lbl_preview, LV_LABEL_LONG_WRAP);
@@ -278,6 +285,13 @@ void page_file_browser_update(void)
 {
     const panel_file_manager_t *mgr = panel_file_manager_get();
     char buf[96];
+    bool busy = panel_offline_job_is_busy();
+
+    if (g_rendered_seq == mgr->seq &&
+        g_rendered_selected_index == mgr->selected_index &&
+        g_rendered_busy == busy) {
+        return;
+    }
 
     snprintf(buf, sizeof(buf), "%s %s | %u个文件 | %s",
              mgr->mount_label,
@@ -289,9 +303,9 @@ void page_file_browser_update(void)
         mgr->mounted ? COLOR_LASER_ORANGE : COLOR_LASER_RED, 0);
 
     const panel_file_entry_t *selected = panel_file_manager_get_selected();
-    bool has_selection = selected != NULL;
+    bool has_selection = selected != NULL && !busy;
     if (selected != NULL) {
-        snprintf(buf, sizeof(buf), "已选择：%s", selected->name);
+        snprintf(buf, sizeof(buf), busy ? "正在发送：%s" : "已选择：%s", selected->name);
         lv_label_set_text(g_lbl_selected, buf);
     } else {
         lv_label_set_text(g_lbl_selected, "未选择文件");
@@ -336,4 +350,8 @@ void page_file_browser_update(void)
     } else {
         lv_label_set_text(g_lbl_preview, "选择 .gcode/.nc/.gco 文件后显示预览");
     }
+
+    g_rendered_seq = mgr->seq;
+    g_rendered_selected_index = mgr->selected_index;
+    g_rendered_busy = busy;
 }

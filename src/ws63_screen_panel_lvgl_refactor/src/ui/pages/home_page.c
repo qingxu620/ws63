@@ -12,6 +12,7 @@
 #include "home_page.h"
 #include "panel_theme.h"
 #include "ui_manager.h"
+#include "../service/panel_file_manager.h"
 #include "../service/panel_model.h"
 #include "soc_osal.h"
 #include <stdio.h>
@@ -30,8 +31,7 @@ static lv_obj_t *g_lbl_state_badge;
 static lv_obj_t *g_lbl_job_time;
 static lv_obj_t *g_lbl_job_name;
 static lv_obj_t *g_lbl_safety_val;
-static lv_obj_t *g_lbl_speed;
-static lv_obj_t *g_lbl_power;
+static lv_obj_t *g_lbl_sd_file;
 
 /* Action bar buttons */
 static lv_obj_t *g_btn_start;
@@ -151,6 +151,13 @@ static void create_progress_block(lv_obj_t *parent)
     lv_label_set_text(g_lbl_state_badge, "无任务");
 }
 
+static void sd_file_card_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        ui_manager_switch_page(PAGE_FILE_BROWSER);
+    }
+}
+
 static void create_info_block(lv_obj_t *parent)
 {
     lv_obj_t *block = lv_obj_create(parent);
@@ -199,46 +206,23 @@ static void create_info_block(lv_obj_t *parent)
     g_lbl_safety_val = create_label(safety_card, PANEL_FONT_CN, COLOR_LASER_YELLOW);
     lv_label_set_text(g_lbl_safety_val, "已锁定");
 
-    lv_obj_t *param_box = create_card(block, 174, 44);
-    lv_obj_set_flex_flow(param_box, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(param_box, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *file_card = create_card(block, 174, 44);
+    lv_obj_set_flex_flow(file_card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(file_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(file_card, 6, 0);
+    lv_obj_add_flag(file_card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(file_card, 4);
+    lv_obj_add_event_cb(file_card, sd_file_card_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *speed_col = lv_obj_create(param_box);
-    lv_obj_set_size(speed_col, 72, 30);
-    lv_obj_remove_flag(speed_col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(speed_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(speed_col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(speed_col, 0, 0);
-    lv_obj_set_style_pad_all(speed_col, 0, 0);
-    lv_obj_set_style_bg_opa(speed_col, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(speed_col, 0, 0);
+    lv_obj_t *file_lbl = create_label(file_card, PANEL_FONT_CN, COLOR_TEXT_MUTED);
+    lv_label_set_text(file_lbl, "SD文件");
+    lv_obj_set_width(file_lbl, 48);
+    lv_label_set_long_mode(file_lbl, LV_LABEL_LONG_CLIP);
 
-    lv_obj_t *speed_lbl = create_label(speed_col, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(speed_lbl, "速度");
-    g_lbl_speed = create_label(speed_col, &lv_font_montserrat_14, lv_color_white());
-    lv_label_set_text(g_lbl_speed, "--");
-
-    lv_obj_t *div = lv_obj_create(param_box);
-    lv_obj_set_size(div, 1, 24);
-    lv_obj_set_style_bg_color(div, COLOR_BORDER, 0);
-    lv_obj_set_style_bg_opa(div, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(div, 0, 0);
-    lv_obj_set_style_radius(div, 0, 0);
-
-    lv_obj_t *power_col = lv_obj_create(param_box);
-    lv_obj_set_size(power_col, 72, 30);
-    lv_obj_remove_flag(power_col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(power_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(power_col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(power_col, 0, 0);
-    lv_obj_set_style_pad_all(power_col, 0, 0);
-    lv_obj_set_style_bg_opa(power_col, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(power_col, 0, 0);
-
-    lv_obj_t *power_lbl = create_label(power_col, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(power_lbl, "功率");
-    g_lbl_power = create_label(power_col, &lv_font_montserrat_14, lv_color_white());
-    lv_label_set_text(g_lbl_power, "--");
+    g_lbl_sd_file = create_label(file_card, PANEL_FONT_CN, COLOR_LASER_BLUE);
+    lv_obj_set_width(g_lbl_sd_file, 104);
+    lv_label_set_long_mode(g_lbl_sd_file, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_text(g_lbl_sd_file, "点击选择");
 }
 
 static void set_focus_visual_state(bool on)
@@ -528,15 +512,11 @@ static void apply_state(void)
     lv_label_set_text(g_lbl_sle,
         g_model.view_mode == PANEL_VIEW_OFFLINE ? "离线" : "联机");
 
-    {
-        char speed_buf[12];
-        char power_buf[12];
-        snprintf(speed_buf, sizeof(speed_buf), "%s",
-                 g_model.state == SYS_STATE_RUNNING ? "F1000" : "--");
-        snprintf(power_buf, sizeof(power_buf), "%s",
-                 g_model.laser_output_active ? "S500" : "--");
-        lv_label_set_text(g_lbl_speed, speed_buf);
-        lv_label_set_text(g_lbl_power, power_buf);
+    const panel_file_entry_t *selected = panel_file_manager_get_selected();
+    if (selected != NULL) {
+        lv_label_set_text(g_lbl_sd_file, selected->name);
+    } else {
+        lv_label_set_text(g_lbl_sd_file, "点击选择");
     }
 
     set_focus_visual_state(g_model.focus_active);

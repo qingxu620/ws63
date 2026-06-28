@@ -10,6 +10,7 @@
 #include "pwm.h"
 #include "soc_osal.h"
 #include "spi.h"
+#include "spi_bus.h"
 #include "tcxo.h"
 
 #if SCREEN_BOARD_REV_FINAL_HW_I2C || SCREEN_BOARD_REV_FLYWIRE_HW_I2C
@@ -208,10 +209,17 @@ errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
         return ERRCODE_SUCC;
     }
 
+    errcode_t ret = spi_bus_lock(1000);
+    if (ret != ERRCODE_SUCC) {
+        return ret;
+    }
+
     spi_xfer_data_t xfer = {0};
     xfer.tx_buff = (uint8_t *)data;
     xfer.tx_bytes = len;
-    return uapi_spi_master_write(SCREEN_LCD_SPI_BUS, &xfer, 1000);
+    ret = uapi_spi_master_write(SCREEN_LCD_SPI_BUS, &xfer, 1000);
+    spi_bus_unlock();
+    return ret;
 }
 
 void screen_touch_rst(bool level)

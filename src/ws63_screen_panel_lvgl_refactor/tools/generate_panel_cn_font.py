@@ -11,7 +11,6 @@ if a standalone TTF is not available.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PANEL_ROOT = ROOT
 FONT_OUTPUT = PANEL_ROOT / "src" / "ui" / "fonts" / "lv_font_panel_cn_14.c"
+EXTRA_CHARS_FILE = PANEL_ROOT / "tools" / "panel_font_extra_chars.txt"
 FONT_NAME = "lv_font_panel_cn_14"
 FONT_SIZE = 14
 FONT_BPP = 4
@@ -81,6 +81,8 @@ def collect_chars() -> list[str]:
     """Scan source files for Chinese characters used in UI strings."""
     chars: set[str] = set()
     for path in (PANEL_ROOT / "src").rglob("*.[ch]"):
+        if path == FONT_OUTPUT or "src/ui/fonts" in path.as_posix():
+            continue
         text = path.read_text(errors="ignore")
         chars.update(
             ch
@@ -88,11 +90,13 @@ def collect_chars() -> list[str]:
             if "\u4e00" <= ch <= "\u9fff" or ch in "，。！？：；（）"
         )
 
-    # Also include chars from the existing font file (preserves any extras)
-    if FONT_OUTPUT.exists():
-        old = FONT_OUTPUT.read_text(errors="ignore")
-        for match in re.finditer(r"U\+([0-9A-Fa-f]{4,6})", old):
-            chars.add(chr(int(match.group(1), 16)))
+    if EXTRA_CHARS_FILE.exists():
+        text = EXTRA_CHARS_FILE.read_text(encoding="utf-8", errors="ignore")
+        chars.update(
+            ch
+            for ch in text
+            if "\u4e00" <= ch <= "\u9fff" or ch in "，。！？：；（）"
+        )
 
     return sorted(chars, key=ord)
 

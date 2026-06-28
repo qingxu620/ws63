@@ -116,6 +116,11 @@ void panel_model_request_abort(void);
 void panel_model_request_focus_off(void);
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count);
 void panel_model_start_offline_selected(void);
+void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uint32_t line_count);
+void panel_model_offline_upload_progress(uint32_t received_size);
+void panel_model_offline_execution_started(void);
+void panel_model_offline_job_done(void);
+void panel_model_offline_error(const char *error);
 void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,
                                        uint8_t flags, uint32_t seq, uint32_t job_id,
                                        uint32_t received_size, uint32_t total_size,

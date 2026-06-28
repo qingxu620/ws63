@@ -1,6 +1,6 @@
 /**
  * @file panel_transport_sle.c
- * @brief SLE server used by the screen panel to receive TX-mirrored status.
+ * @brief SLE server for TX-mirrored status and SLE client for offline RX jobs.
  */
 #include "panel_transport_sle.h"
 #include "panel_model.h"
@@ -17,6 +17,7 @@
 #include "sle_connection_manager.h"
 #include "sle_device_discovery.h"
 #include "sle_errcode.h"
+#include "sle_ssap_client.h"
 #include "sle_ssap_server.h"
 
 #include <string.h>
@@ -45,13 +46,37 @@
 #define SLE_ADV_DATA_TYPE_TX_POWER_LEVEL 0x0C
 #endif
 
+#ifndef SLE_SEEK_ACTIVE
+#define SLE_SEEK_ACTIVE 0x01
+#endif
+
 #define PANEL_SLE_CONN_INVALID 0xFFFF
+#define PANEL_SLE_CLIENT_ID 0
+#define PANEL_SLE_UUID_LEN_2 2
+#define PANEL_SLE_CONNECT_RETRY_MS 1000U
+#define PANEL_SLE_WRITE_CFM_TIMEOUT_MS 1000U
 
 static uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
 static uint8_t g_server_id = 0;
-static uint16_t g_conn_id = PANEL_SLE_CONN_INVALID;
+static uint16_t g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+static uint16_t g_rx_conn_id = PANEL_SLE_CONN_INVALID;
 static uint16_t g_service_handle = 0;
 static uint16_t g_status_property_handle = 0;
+static uint16_t g_rx_data_handle = 0;
+static uint16_t g_rx_resp_handle = 0;
+static bool g_sle_enabled;
+static bool g_seek_active;
+static bool g_client_connecting;
+static bool g_rx_handles_ready;
+static sle_addr_t g_pending_rx_addr = {0};
+static uint32_t g_last_seek_ms;
+static osal_semaphore g_write_cfm_sem;
+static volatile bool g_write_cfm_sem_ready;
+static volatile errcode_t g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+static panel_transport_rx_response_cb_t g_rx_response_cb;
+
+static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -90,6 +115,116 @@ static void sle_uuid_setu2(uint16_t u2, sle_uuid_t *out)
     out->uuid[15] = (uint8_t)((u2 >> 8) & 0xFF);
 }
 
+static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
+{
+    return (uuid != NULL) && (uuid->len == PANEL_SLE_UUID_LEN_2) &&
+           (uuid->uuid[14] == (uint8_t)(expect & 0xFF)) &&
+           (uuid->uuid[15] == (uint8_t)((expect >> 8) & 0xFF));
+}
+
+static bool adv_name_match(const sle_seek_result_info_t *seek_result, const char *name)
+{
+    if (seek_result == NULL || seek_result->data == NULL || name == NULL) {
+        return false;
+    }
+
+    uint8_t *data = seek_result->data;
+    uint16_t len = seek_result->data_length;
+    size_t name_len = strlen(name);
+    for (uint16_t i = 0; i < len;) {
+        if ((i + 1U) >= len) {
+            break;
+        }
+        uint8_t ad_type = data[i];
+        uint8_t ad_len = data[i + 1U];
+        if ((uint16_t)(i + 2U + ad_len) > len) {
+            break;
+        }
+        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME &&
+            ad_len == name_len && memcmp(&data[i + 2U], name, name_len) == 0) {
+            return true;
+        }
+        i = (uint16_t)(i + 2U + ad_len);
+    }
+    return false;
+}
+
+static bool adv_service_match(const sle_seek_result_info_t *seek_result, uint16_t service_uuid)
+{
+    if (seek_result == NULL || seek_result->data == NULL) {
+        return false;
+    }
+
+    uint8_t *data = seek_result->data;
+    uint16_t len = seek_result->data_length;
+    for (uint16_t i = 0; i < len;) {
+        if ((i + 1U) >= len) {
+            break;
+        }
+        uint8_t ad_type = data[i];
+        uint8_t ad_len = data[i + 1U];
+        if ((uint16_t)(i + 2U + ad_len) > len) {
+            break;
+        }
+        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS &&
+            ad_len >= PANEL_SLE_UUID_LEN_2) {
+            for (uint8_t j = 0; (uint8_t)(j + 1U) < ad_len; j = (uint8_t)(j + PANEL_SLE_UUID_LEN_2)) {
+                uint16_t uuid = (uint16_t)data[i + 2U + j] |
+                                ((uint16_t)data[i + 3U + j] << 8);
+                if (uuid == service_uuid) {
+                    return true;
+                }
+            }
+        }
+        i = (uint16_t)(i + 2U + ad_len);
+    }
+    return false;
+}
+
+static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_result)
+{
+    if (seek_result == NULL) {
+        return false;
+    }
+    if (memcmp(seek_result->addr.addr, g_receiver_mac, SLE_ADDR_LEN) == 0 ||
+        memcmp(seek_result->addr.addr, g_test_receiver_mac, SLE_ADDR_LEN) == 0) {
+        return true;
+    }
+    return adv_name_match(seek_result, SLE_JOB_RECEIVER_NAME) ||
+           adv_name_match(seek_result, "LaserRX") ||
+           adv_service_match(seek_result, SLE_JOB_SERVICE_UUID);
+}
+
+static void start_seek_if_needed(void)
+{
+    if (!g_sle_enabled || g_seek_active || g_client_connecting ||
+        (g_rx_conn_id != PANEL_SLE_CONN_INVALID && g_rx_handles_ready)) {
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if (g_last_seek_ms != 0U &&
+        (uint32_t)(now - g_last_seek_ms) < PANEL_SLE_CONNECT_RETRY_MS) {
+        return;
+    }
+
+    sle_seek_param_t param = {0};
+    param.own_addr_type = 0;
+    param.filter_duplicates = 0;
+    param.seek_filter_policy = 0;
+    param.seek_phys = 1;
+    param.seek_type[0] = SLE_SEEK_ACTIVE;
+    param.seek_interval[0] = 0x64;
+    param.seek_window[0] = 0x64;
+    (void)sle_set_seek_param(&param);
+
+    g_last_seek_ms = now;
+    errcode_t ret = sle_start_seek();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_CLI] start seek fail: 0x%x\r\n", ret);
+    }
+}
+
 static uint8_t panel_mode_from_job_state(uint8_t job_state, uint8_t status)
 {
     if (status != JOB_STATUS_OK || job_state == JOB_STATE_ERROR) {
@@ -98,15 +233,16 @@ static uint8_t panel_mode_from_job_state(uint8_t job_state, uint8_t status)
     return PANEL_MODE_ONLINE;
 }
 
-static void apply_status_resp(const status_resp_payload_t *st)
+static void apply_status_resp_as(const status_resp_payload_t *st, uint8_t owner, uint8_t mode)
 {
     if (st == NULL) {
         return;
     }
 
     uint8_t flags = PANEL_STATUS_FLAG_OWNER_LINK | PANEL_STATUS_FLAG_ANY_LINK;
-    uint8_t mode = panel_mode_from_job_state(st->state, st->status);
-    panel_model_apply_rx_panel_status(PANEL_OWNER_HOST, mode, st->state, flags,
+    uint8_t effective_mode = (st->status == JOB_STATUS_OK && st->state != JOB_STATE_ERROR) ?
+        mode : PANEL_MODE_ERROR;
+    panel_model_apply_rx_panel_status(owner, effective_mode, st->state, flags,
                                       g_model.seq + 1U, st->job_id,
                                       st->received_size, st->total_size,
                                       st->executed_lines, st->cache_free,
@@ -141,7 +277,7 @@ static void handle_panel_write(const uint8_t *data, uint16_t len)
     if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t)) {
         status_resp_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
-        apply_status_resp(&st);
+        apply_status_resp_as(&st, PANEL_OWNER_HOST, panel_mode_from_job_state(st.state, st.status));
     }
 }
 
@@ -158,7 +294,7 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
-    g_conn_id = conn_id;
+    g_panel_conn_id = conn_id;
     handle_panel_write(write_cb_para->value, write_cb_para->length);
 }
 
@@ -254,11 +390,31 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        g_conn_id = conn_id;
-    } else if (conn_state == SLE_ACB_STATE_DISCONNECTED && conn_id == g_conn_id) {
-        g_conn_id = PANEL_SLE_CONN_INVALID;
+        if (g_client_connecting) {
+            g_rx_conn_id = conn_id;
+            g_client_connecting = false;
+            ssap_exchange_info_t info = {0};
+            info.mtu_size = 512;
+            info.version = 1;
+            (void)ssapc_exchange_info_req(PANEL_SLE_CLIENT_ID, conn_id, &info);
+        } else {
+            g_panel_conn_id = conn_id;
+        }
+    } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        if (conn_id == g_panel_conn_id) {
+            g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+        }
+        if (conn_id == g_rx_conn_id) {
+            g_rx_conn_id = PANEL_SLE_CONN_INVALID;
+            g_rx_handles_ready = false;
+            g_rx_data_handle = 0;
+            g_rx_resp_handle = 0;
+            osal_printk("[PANEL_SLE_CLI] rx disconnected\r\n");
+        }
+        g_client_connecting = false;
         panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
                                           0, g_model.seq + 1U, 0, 0, 0, 0, 0, 1, 0U);
+        start_seek_if_needed();
     }
 }
 
@@ -304,11 +460,51 @@ static void sle_announce_terminal_cbk(uint32_t announce_id)
     unused(announce_id);
 }
 
+static void sle_seek_enable_cbk(errcode_t status)
+{
+    g_seek_active = (status == ERRCODE_SLE_SUCCESS);
+}
+
+static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
+{
+    if (seek_result == NULL || g_client_connecting ||
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID || !seek_result_matches_receiver(seek_result)) {
+        return;
+    }
+
+    (void)memcpy_s(&g_pending_rx_addr, sizeof(g_pending_rx_addr),
+                   &seek_result->addr, sizeof(seek_result->addr));
+    g_client_connecting = true;
+    errcode_t ret = sle_stop_seek();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_client_connecting = false;
+        osal_printk("[PANEL_SLE_CLI] stop seek fail: 0x%x\r\n", ret);
+    }
+}
+
+static void sle_seek_disable_cbk(errcode_t status)
+{
+    g_seek_active = false;
+    if (status != ERRCODE_SLE_SUCCESS || !g_client_connecting) {
+        g_client_connecting = false;
+        start_seek_if_needed();
+        return;
+    }
+
+    errcode_t ret = sle_connect_remote_device(&g_pending_rx_addr);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_client_connecting = false;
+        osal_printk("[PANEL_SLE_CLI] connect submit fail: 0x%x\r\n", ret);
+        start_seek_if_needed();
+    }
+}
+
 static void sle_enable_cbk(errcode_t status)
 {
     if (status != ERRCODE_SLE_SUCCESS) {
         return;
     }
+    g_sle_enabled = true;
 
     errcode_t ret = panel_server_add();
     if (ret != ERRCODE_SLE_SUCCESS) {
@@ -365,6 +561,8 @@ static void sle_enable_cbk(errcode_t status)
         osal_printk("[PANEL_SLE_SRV] start announce fail: 0x%x\r\n", ret);
         return;
     }
+
+    start_seek_if_needed();
 }
 
 static void sle_announce_register_cbks(void)
@@ -374,22 +572,203 @@ static void sle_announce_register_cbks(void)
     seek_cbks.announce_disable_cb = sle_announce_disable_cbk;
     seek_cbks.announce_terminal_cb = sle_announce_terminal_cbk;
     seek_cbks.sle_enable_cb = sle_enable_cbk;
+    seek_cbks.seek_enable_cb = sle_seek_enable_cbk;
+    seek_cbks.seek_disable_cb = sle_seek_disable_cbk;
+    seek_cbks.seek_result_cb = sle_seek_result_cbk;
     sle_announce_seek_register_callbacks(&seek_cbks);
+}
+
+static void ssapc_exchange_info_cbk(uint8_t client_id, uint16_t conn_id,
+    ssap_exchange_info_t *param, errcode_t status)
+{
+    unused(client_id);
+    unused(param);
+    unused(status);
+    if (conn_id != g_rx_conn_id) {
+        return;
+    }
+
+    ssapc_find_structure_param_t find_param = {0};
+    find_param.type = SSAP_FIND_TYPE_PRIMARY_SERVICE;
+    find_param.start_hdl = 1;
+    find_param.end_hdl = 0xFFFF;
+    (void)ssapc_find_structure(PANEL_SLE_CLIENT_ID, conn_id, &find_param);
+}
+
+static void ssapc_find_structure_cbk(uint8_t client_id, uint16_t conn_id,
+    ssapc_find_service_result_t *service, errcode_t status)
+{
+    unused(client_id);
+    if (conn_id != g_rx_conn_id || status != ERRCODE_SLE_SUCCESS ||
+        service == NULL || !uuid16_equals(&service->uuid, SLE_JOB_SERVICE_UUID)) {
+        return;
+    }
+
+    ssapc_find_structure_param_t find_param = {0};
+    find_param.type = SSAP_FIND_TYPE_PROPERTY;
+    find_param.start_hdl = service->start_hdl;
+    find_param.end_hdl = service->end_hdl;
+    (void)ssapc_find_structure(PANEL_SLE_CLIENT_ID, conn_id, &find_param);
+}
+
+static void ssapc_find_property_cbk(uint8_t client_id, uint16_t conn_id,
+    ssapc_find_property_result_t *property, errcode_t status)
+{
+    unused(client_id);
+    if (conn_id != g_rx_conn_id || status != ERRCODE_SLE_SUCCESS || property == NULL) {
+        return;
+    }
+
+    if (uuid16_equals(&property->uuid, SLE_JOB_DATA_CHAR_UUID)) {
+        g_rx_data_handle = property->handle;
+    } else if (uuid16_equals(&property->uuid, SLE_JOB_RESP_CHAR_UUID)) {
+        g_rx_resp_handle = property->handle;
+    }
+    g_rx_handles_ready = (g_rx_data_handle != 0U) && (g_rx_resp_handle != 0U);
+    if (g_rx_handles_ready) {
+        osal_printk("[PANEL_SLE_CLI] rx ready conn=%u data=0x%x resp=0x%x\r\n",
+                    (unsigned int)g_rx_conn_id, (unsigned int)g_rx_data_handle,
+                    (unsigned int)g_rx_resp_handle);
+    }
+}
+
+static void ssapc_write_cfm_cbk(uint8_t client_id, uint16_t conn_id,
+    ssapc_write_result_t *write_result, errcode_t status)
+{
+    unused(client_id);
+    unused(write_result);
+    if (conn_id != g_rx_conn_id) {
+        return;
+    }
+    g_last_write_cfm_status = status;
+    if (g_write_cfm_sem_ready) {
+        osal_sem_up(&g_write_cfm_sem);
+    }
+}
+
+static void handle_rx_response_packet(const uint8_t *data, uint16_t len)
+{
+    sle_packet_view_t pkt;
+    if (!sle_packet_decode(data, len, &pkt)) {
+        osal_printk("[PANEL_SLE_CLI] bad rx response len=%u\r\n", len);
+        return;
+    }
+
+    if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t)) {
+        status_resp_payload_t st;
+        (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
+        apply_status_resp_as(&st, PANEL_OWNER_SCREEN, PANEL_MODE_OFFLINE);
+    } else if (pkt.type == PKT_PANEL_STATUS && pkt.len == sizeof(panel_status_payload_t)) {
+        panel_status_payload_t st;
+        (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
+        apply_panel_status(&st);
+    }
+
+    if (g_rx_response_cb != NULL) {
+        g_rx_response_cb(data, len);
+    }
+}
+
+static void ssapc_notification_cbk(uint8_t client_id, uint16_t conn_id,
+    ssapc_handle_value_t *data, errcode_t status)
+{
+    unused(client_id);
+    if (conn_id != g_rx_conn_id || status != ERRCODE_SLE_SUCCESS ||
+        data == NULL || data->data == NULL || data->handle != g_rx_resp_handle) {
+        return;
+    }
+    handle_rx_response_packet(data->data, data->data_len);
+}
+
+static void ssapc_indication_cbk(uint8_t client_id, uint16_t conn_id,
+    ssapc_handle_value_t *data, errcode_t status)
+{
+    ssapc_notification_cbk(client_id, conn_id, data, status);
+}
+
+static void sle_ssapc_register_cbks(void)
+{
+    ssapc_callbacks_t cbk = {0};
+    cbk.exchange_info_cb = ssapc_exchange_info_cbk;
+    cbk.find_structure_cb = ssapc_find_structure_cbk;
+    cbk.ssapc_find_property_cbk = ssapc_find_property_cbk;
+    cbk.write_cfm_cb = ssapc_write_cfm_cbk;
+    cbk.notification_cb = ssapc_notification_cbk;
+    cbk.indication_cb = ssapc_indication_cbk;
+    ssapc_register_callbacks(&cbk);
 }
 
 errcode_t panel_transport_sle_start(void)
 {
-    g_conn_id = PANEL_SLE_CONN_INVALID;
+    g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+    g_rx_conn_id = PANEL_SLE_CONN_INVALID;
     g_service_handle = 0;
     g_status_property_handle = 0;
+    g_rx_data_handle = 0;
+    g_rx_resp_handle = 0;
+    g_sle_enabled = false;
+    g_seek_active = false;
+    g_client_connecting = false;
+    g_rx_handles_ready = false;
+    g_last_seek_ms = 0;
+    g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
+        g_write_cfm_sem_ready = true;
+    }
 
     sle_announce_register_cbks();
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
+    sle_ssapc_register_cbks();
 
     errcode_t ret = enable_sle();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[PANEL_SLE_SRV] enable_sle fail: 0x%x\r\n", ret);
     }
     return ret;
+}
+
+void panel_transport_sle_poll(void)
+{
+    start_seek_if_needed();
+}
+
+bool panel_transport_sle_rx_is_connected(void)
+{
+    return g_rx_conn_id != PANEL_SLE_CONN_INVALID && g_rx_handles_ready;
+}
+
+errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
+{
+    if (data == NULL || len == 0 || !panel_transport_sle_rx_is_connected() ||
+        g_rx_data_handle == 0 || !g_write_cfm_sem_ready) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    while (osal_sem_down_timeout(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
+    }
+
+    ssapc_write_param_t param = {0};
+    param.handle = g_rx_data_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.data_len = len;
+    param.data = (uint8_t *)data;
+
+    g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    errcode_t ret = ssapc_write_req(PANEL_SLE_CLIENT_ID, g_rx_conn_id, &param);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_CLI] write submit fail ret=0x%x len=%u\r\n",
+                    ret, (unsigned int)len);
+        return ret;
+    }
+    if (osal_sem_down_timeout(&g_write_cfm_sem, PANEL_SLE_WRITE_CFM_TIMEOUT_MS) != OSAL_SUCCESS) {
+        osal_printk("[PANEL_SLE_CLI] write cfm timeout len=%u\r\n", (unsigned int)len);
+        return ERRCODE_SLE_TIMEOUT;
+    }
+    return g_last_write_cfm_status;
+}
+
+void panel_transport_sle_set_rx_response_cb(panel_transport_rx_response_cb_t cb)
+{
+    g_rx_response_cb = cb;
 }
