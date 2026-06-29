@@ -4,10 +4,14 @@ import unittest
 import re
 
 from app.image_gcode import (
+    prepare_laser_mask,
+    raster_mask_to_gcode,
     raster_rows_to_gcode,
     simplify_vector_contours,
     trace_dark_runs,
+    trace_dark_runs_from_mask,
     trace_vector_contours,
+    trace_vector_contours_from_mask,
     vector_contours_to_gcode,
 )
 
@@ -17,6 +21,67 @@ class ImageGcodeTests(unittest.TestCase):
         rows = [[255, 0, 10, 255, 20, 255]]
 
         self.assertEqual(trace_dark_runs(rows, threshold=128), [[(1, 2), (4, 4)]])
+
+    def test_prepare_laser_mask_recovers_mid_tone_subject(self) -> None:
+        rows = [
+            [240, 240, 240, 240, 240],
+            [240, 180, 180, 180, 240],
+            [240, 180, 180, 180, 240],
+            [240, 180, 180, 180, 240],
+            [240, 240, 240, 240, 240],
+        ]
+
+        mask = prepare_laser_mask(
+            rows,
+            threshold=128,
+            adaptive=True,
+            adaptive_radius=2,
+            adaptive_bias=10,
+        )
+
+        self.assertTrue(mask[2][2])
+        self.assertFalse(mask[0][0])
+        self.assertEqual(trace_dark_runs_from_mask(mask)[2], [(1, 3)])
+
+    def test_prepare_laser_mask_removes_small_noise_components(self) -> None:
+        rows = [
+            [255, 255, 255, 255],
+            [255, 0, 255, 255],
+            [255, 255, 0, 0],
+            [255, 255, 0, 0],
+        ]
+
+        mask = prepare_laser_mask(
+            rows,
+            threshold=128,
+            adaptive=False,
+            min_area_px=2,
+        )
+
+        self.assertFalse(mask[1][1])
+        self.assertTrue(mask[2][2])
+        self.assertTrue(mask[3][3])
+
+    def test_edge_enhance_marks_gray_transitions_for_vector_mode(self) -> None:
+        rows = [
+            [240, 240, 240, 240, 240],
+            [240, 220, 160, 220, 240],
+            [240, 220, 160, 220, 240],
+            [240, 220, 160, 220, 240],
+            [240, 240, 240, 240, 240],
+        ]
+
+        mask = prepare_laser_mask(
+            rows,
+            threshold=128,
+            adaptive=False,
+            edge_enhance=True,
+            edge_threshold=40,
+        )
+
+        self.assertTrue(any(mask[y][1] or mask[y][2] or mask[y][3] for y in range(1, 4)))
+        contours = trace_vector_contours_from_mask(mask, min_area_px=1)
+        self.assertTrue(contours)
 
     def test_raster_rows_to_gcode_emits_scaled_segments(self) -> None:
         rows = [
@@ -41,6 +106,24 @@ class ImageGcodeTests(unittest.TestCase):
         self.assertIn("S1000", gcode)
         self.assertIn("G0 X0.000 Y0.000", gcode)
         self.assertIn("G1 X50.000 Y0.000", gcode)
+        self.assertTrue(gcode.endswith("M5\nM30\n"))
+
+    def test_raster_mask_to_gcode_emits_scaled_segments(self) -> None:
+        mask = [
+            [True, True, False, False],
+            [False, True, True, False],
+        ]
+
+        gcode = raster_mask_to_gcode(
+            mask,
+            width_mm=100.0,
+            speed_mm_min=3000,
+        )
+
+        self.assertIn("G0 X0.000 Y0.000", gcode)
+        self.assertIn("G1 X50.000 Y0.000", gcode)
+        self.assertIn("G0 X75.000 Y25.000", gcode)
+        self.assertIn("G1 X25.000 Y25.000", gcode)
         self.assertTrue(gcode.endswith("M5\nM30\n"))
 
     def test_raster_rows_to_gcode_rejects_ragged_rows(self) -> None:

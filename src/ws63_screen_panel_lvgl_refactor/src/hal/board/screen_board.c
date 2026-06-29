@@ -6,6 +6,7 @@
 #include "screen_config.h"
 
 #include "gpio.h"
+#include "hal_dma.h"
 #include "pinctrl.h"
 #include "pwm.h"
 #include "soc_osal.h"
@@ -22,8 +23,10 @@
 #define SCREEN_LCD_BL_PWM_PIN_MODE      PIN_MODE_1
 #define SCREEN_LCD_BL_PWM_PERIOD_TICKS  1000U
 #define SCREEN_LCD_BL_PWM_CYCLES        0xFFU
+#define SCREEN_LCD_SPI_DMA_WIDTH        0U
 
 static bool g_lcd_bl_pwm_ready;
+static bool g_lcd_spi_dma_ready;
 
 static void screen_gpio_output(pin_t pin, gpio_level_t level)
 {
@@ -71,6 +74,31 @@ errcode_t screen_board_init(void)
         osal_printk("[SCREEN] spi init FAILED (0x%x)\r\n", ret);
         return ret;
     }
+
+#if defined(CONFIG_SPI_SUPPORT_DMA) && (CONFIG_SPI_SUPPORT_DMA == 1)
+    ret = uapi_dma_init();
+    if (ret == ERRCODE_SUCC) {
+        ret = uapi_dma_open();
+    }
+    if (ret == ERRCODE_SUCC) {
+        spi_dma_config_t dma_cfg = {
+            .src_width = SCREEN_LCD_SPI_DMA_WIDTH,
+            .dest_width = SCREEN_LCD_SPI_DMA_WIDTH,
+            .burst_length = 0,
+            .priority = 0,
+        };
+        ret = uapi_spi_set_dma_mode(SCREEN_LCD_SPI_BUS, true, &dma_cfg);
+    }
+    if (ret == ERRCODE_SUCC) {
+        g_lcd_spi_dma_ready = true;
+        osal_printk("[SCREEN] lcd spi DMA enabled\r\n");
+    } else {
+        g_lcd_spi_dma_ready = false;
+        osal_printk("[SCREEN] lcd spi DMA unavailable: 0x%x, fallback polling\r\n", ret);
+    }
+#else
+    g_lcd_spi_dma_ready = false;
+#endif
 
 #if SCREEN_BOARD_REV_FINAL_HW_I2C || SCREEN_BOARD_REV_FLYWIRE_HW_I2C
     /* Hardware I2C1: pinmux handled in screen_hw_i2c_init() */
@@ -218,6 +246,9 @@ errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
     xfer.tx_buff = (uint8_t *)data;
     xfer.tx_bytes = len;
     ret = uapi_spi_master_write(SCREEN_LCD_SPI_BUS, &xfer, 1000);
+    if (ret != ERRCODE_SUCC && g_lcd_spi_dma_ready) {
+        osal_printk("[SCREEN] spi DMA write failed len=%u ret=0x%x\r\n", (unsigned int)len, ret);
+    }
     spi_bus_unlock();
     return ret;
 }

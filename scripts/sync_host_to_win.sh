@@ -23,6 +23,7 @@ rsync -av --delete \
     --exclude='.venv/' \
     --exclude='venv/' \
     --exclude='logs/' \
+    --exclude='generated_images/' \
     --exclude='config/host_ui_config.json' \
     "${SRC}" "${DST}"
 
@@ -34,4 +35,8 @@ echo "  ${WIN_DST}"
 echo ""
 echo "启动命令 (Win11 CMD):"
 echo "  cd /d ${WIN_DST}"
+echo "  python main.py"
+echo ""
+echo "启动命令 (PowerShell):"
+echo "  Set-Location '${WIN_DST}'"
 echo "  python main.py"

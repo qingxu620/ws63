@@ -23,8 +23,10 @@
 #define LVGL_TICK_MS         1
 #define LVGL_TASK_STACK_SIZE 0x6000
 #define LVGL_TASK_PRIORITY   25
-#define LVGL_HANDLER_MS      5
+#define LVGL_HANDLER_MS      10
 #define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
+#define PANEL_FAKE_PROGRESS_PERIOD_TICKS (100 / LVGL_HANDLER_MS)
+#define PANEL_JOB_TIME_PERIOD_TICKS (1000 / LVGL_HANDLER_MS)
 
 static timer_handle_t g_tick_timer = NULL;
 
@@ -108,7 +110,7 @@ static int panel_task(void *arg)
             (g_model.state == SYS_STATE_RECEIVING ||
              g_model.state == SYS_STATE_SENDING ||
              g_model.state == SYS_STATE_RUNNING) &&
-            (tick_count % 20) == 0) {
+            (tick_count % PANEL_FAKE_PROGRESS_PERIOD_TICKS) == 0) {
             if (g_model.progress < 100) {
                 panel_model_set_progress(g_model.progress + 1);
             } else if (g_model.state == SYS_STATE_RECEIVING) {
@@ -123,7 +125,7 @@ static int panel_task(void *arg)
         }
 
         /* Job time tick (every ~1s) */
-        if ((tick_count % 200) == 0) {
+        if ((tick_count % PANEL_JOB_TIME_PERIOD_TICKS) == 0) {
             panel_model_tick();
         }
 

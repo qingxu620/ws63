@@ -34,8 +34,8 @@
  *   LCD_BL   -> GPIO5
  */
 #define SCREEN_LCD_SPI_BUS             0
-#define SCREEN_LCD_SPI_BAUDRATE        32000000  /* 32MHz */
-#define SCREEN_LCD_SPI_BUS_CLK         32000000
+#define SCREEN_LCD_SPI_BAUDRATE        40000000  /* 40MHz target SCK */
+#define SCREEN_LCD_SPI_BUS_CLK         80000000  /* 80MHz source, SPI min divider is 2 */
 #define SCREEN_LCD_SPI_SCK_PIN         7
 #define SCREEN_LCD_SPI_MOSI_PIN        9
 #define SCREEN_LCD_SPI_MISO_PIN        11

@@ -3,12 +3,14 @@ Main window — integrates all pages, manages transport, workers, and state.
 """
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO
 
 from PySide6.QtCore import QTimer, Signal
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout,
     QWidget,
@@ -23,6 +25,7 @@ from transports.sle_tx_transport import (
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
     JOB_MAX_SIZE, JOB_PREROLL_BYTES,
 )
+from workers.doubao_image_worker import DoubaoImageWorker
 from workers.serial_worker import WorkerManager
 from ui.widgets.status_badge import StatusBadge
 from ui.widgets.sidebar_nav import SidebarNav
@@ -58,6 +61,7 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self._show_error_dialog)
         self.worker.progress.connect(self._on_progress)
         self.worker.task_status.connect(self._on_task_status)
+        self._doubao_worker: Optional[DoubaoImageWorker] = None
 
         # Log file
         self._log_path: Optional[Path] = None
@@ -153,6 +157,7 @@ class MainWindow(QMainWindow):
         self.page_job.exec_start_requested.connect(self._on_exec_start)
         self.page_job.exec_stop_requested.connect(self._on_exec_stop)
         self.page_job.abort_requested.connect(self._on_abort)
+        self.page_job.outline_scan_requested.connect(self._on_outline_scan_requested)
         self.page_job.focus_on_requested.connect(self._on_focus_on)
         self.page_job.focus_off_requested.connect(self._on_focus_off)
         self.page_job.status_requested.connect(self._on_status)
@@ -515,11 +520,66 @@ class MainWindow(QMainWindow):
         else:
             self._enqueue_log("host", "G-code 编辑器已清空")
 
-    def _on_ai_generation_requested(self, prompt: str) -> None:
-        self.page_gcode.show_ai_unavailable()
-        self._enqueue_log(
-            "host",
-            f"AI 生图请求未执行（未配置图像服务）: {prompt}",
+    def _on_ai_generation_requested(
+        self, prompt: str, size: str, watermark: bool, output_dir: str
+    ) -> None:
+        if not os.environ.get("ARK_API_KEY", "").strip():
+            message = "未检测到 ARK_API_KEY，请先在系统环境变量中配置火山方舟 API Key"
+            self.page_gcode.image_status.setText(message)
+            self.page_gcode.update_ui_generating_state(False)
+            self._enqueue_log("error", message)
+            return
+        if self._doubao_worker is not None and self._doubao_worker.isRunning():
+            self.page_gcode.image_status.setText("图像生成任务进行中，请等待完成")
+            return
+
+        worker = DoubaoImageWorker(prompt, size, watermark, output_dir, self)
+        worker.log.connect(self._enqueue_log)
+        worker.status.connect(self.page_gcode.image_status.setText)
+        worker.image_ready.connect(self._on_ai_image_ready)
+        worker.error.connect(self._on_ai_image_error)
+        worker.finished.connect(self._on_ai_image_finished)
+        self._doubao_worker = worker
+        worker.start()
+
+    def _on_ai_image_ready(self, path: str) -> None:
+        image = QImage(path)
+        if image.isNull():
+            self._on_ai_image_error(f"生成图片已保存但无法预览: {path}")
+            return
+        self.page_gcode.set_image(path, image)
+        self.page_gcode.image_status.setText(f"豆包生图完成，已保存: {path}")
+
+    def _on_ai_image_error(self, message: str) -> None:
+        self.page_gcode.image_status.setText(message)
+        self._enqueue_log("error", f"豆包生图失败: {message}")
+
+    def _on_ai_image_finished(self) -> None:
+        self.page_gcode.update_ui_generating_state(False)
+        self._doubao_worker = None
+
+    def _on_outline_scan_requested(self) -> None:
+        payload = self.page_gcode.build_outline_scan_payload()
+        if payload is None:
+            self._enqueue_log("error", "当前 G-code 没有可扫描的开光外框")
+            return
+        path, data = payload
+        if not self._client_is_open():
+            self._enqueue_log("error", "TX 命令串口未连接，无法扫描外框")
+            return
+        if self.worker.is_busy():
+            self._enqueue_log("error", "任务进行中")
+            return
+        job_id = self.page_job.get_job_id()
+        self.state.gcode_path = path
+        self._enqueue_log("status", f"开始扫描外框: {path} ({len(data)} 字节，两圈)")
+        self._begin_job_tracking(data, job_id)
+        self._run_job_worker(
+            self._upload_exec_worker,
+            data,
+            job_id,
+            self.page_job.get_timeout(),
+            0,
         )
 
     # ---- Job operations ----
@@ -783,6 +843,11 @@ class MainWindow(QMainWindow):
         self._enqueue_log("host", f"设置已保存: {self.config_store.path}")
 
     def closeEvent(self, event) -> None:
+        if self._doubao_worker is not None and self._doubao_worker.isRunning():
+            self.page_gcode.image_status.setText("豆包生图仍在进行中，请等待完成后再退出")
+            self._enqueue_log("error", "豆包生图仍在进行中，拒绝退出上位机")
+            event.ignore()
+            return
         if self.worker.is_busy():
             self._enqueue_log("error", "任务操作进行中，拒绝退出上位机")
             event.ignore()

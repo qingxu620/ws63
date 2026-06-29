@@ -46,6 +46,8 @@ static lv_obj_t *g_lbl_focus;
 static lv_obj_t *g_lbl_settings;
 static bool g_focus_visual_on;
 static bool g_focus_visual_allowed;
+static uint32_t g_rendered_model_seq = UINT32_MAX;
+static uint32_t g_rendered_file_seq = UINT32_MAX;
 
 static lv_obj_t *create_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color)
 {
@@ -569,9 +571,19 @@ void home_page_create(lv_obj_t *parent)
     create_action_bar(scr);
     g_focus_visual_on = false;
     g_focus_visual_allowed = false;
+    g_rendered_model_seq = UINT32_MAX;
+    g_rendered_file_seq = UINT32_MAX;
 }
 
 void home_page_update(void)
 {
+    const panel_file_manager_t *file_mgr = panel_file_manager_get();
+    uint32_t file_seq = (file_mgr != NULL) ? file_mgr->seq : 0U;
+    if (g_rendered_model_seq == g_model.seq && g_rendered_file_seq == file_seq) {
+        return;
+    }
+
     apply_state();
+    g_rendered_model_seq = g_model.seq;
+    g_rendered_file_seq = file_seq;
 }

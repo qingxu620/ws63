@@ -198,7 +198,12 @@ void page_diagnostics_create(lv_obj_t *parent)
 
 void page_diagnostics_update(void)
 {
+    static uint32_t s_rendered_seq = UINT32_MAX;
     char buf[32];
+
+    if (s_rendered_seq == g_model.seq) {
+        return;
+    }
 
     lv_label_set_text(g_lbl_host, g_model.host_connected ? "已连接" : "未连接");
     lv_obj_set_style_text_color(g_lbl_host,
@@ -246,4 +251,5 @@ void page_diagnostics_update(void)
         COLOR_LASER_RED : COLOR_TEXT_LIGHT, 0);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.seq);
     lv_label_set_text(g_lbl_seq, buf);
+    s_rendered_seq = g_model.seq;
 }

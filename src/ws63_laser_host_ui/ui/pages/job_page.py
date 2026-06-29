@@ -123,6 +123,7 @@ class JobPage(QWidget):
     exec_start_requested = Signal()
     exec_stop_requested = Signal()
     abort_requested = Signal()
+    outline_scan_requested = Signal()
     focus_on_requested = Signal(int)        # power 0-100
     focus_off_requested = Signal()
     status_requested = Signal()
@@ -329,6 +330,14 @@ class JobPage(QWidget):
         self.btn_exec.setMinimumHeight(34)
         self.btn_exec.clicked.connect(self.exec_start_requested.emit)
         e_layout.addWidget(self.btn_exec)
+
+        self.btn_outline_scan = QPushButton("扫描外框")
+        self.btn_outline_scan.setObjectName("btnWarn")
+        self.btn_outline_scan.setCursor(self.cursor())
+        self.btn_outline_scan.setMinimumHeight(34)
+        self.btn_outline_scan.setToolTip("按当前 G-code 的实际开光范围低功率高速扫描两圈")
+        self.btn_outline_scan.clicked.connect(self.outline_scan_requested.emit)
+        e_layout.addWidget(self.btn_outline_scan)
 
         self.btn_stop = QPushButton("停止执行")
         self.btn_stop.setObjectName("btnWarn")

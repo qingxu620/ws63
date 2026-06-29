@@ -253,8 +253,13 @@ void page_job_monitor_create(lv_obj_t *parent)
 
 void page_job_monitor_update(void)
 {
+    static uint32_t s_rendered_seq = UINT32_MAX;
     /* Update with demo data from model */
     char buf[24];
+
+    if (s_rendered_seq == g_model.seq) {
+        return;
+    }
 
     if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
         lv_label_set_text(g_lbl_title, "Offline View");
@@ -290,4 +295,5 @@ void page_job_monitor_update(void)
 
     snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
     lv_label_set_text(g_lbl_cache_free, buf);
+    s_rendered_seq = g_model.seq;
 }

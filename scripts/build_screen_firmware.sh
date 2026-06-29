@@ -117,6 +117,12 @@ switch_config() {
             ;;
     esac
 
+    # LCD LVGL flush writes multi-kilobyte RGB565 blocks through SPI. Enable
+    # SPI DMA for screen builds so uapi_spi_master_write() avoids long CPU
+    # polling transfers on those large pixel payloads.
+    set_config_y CONFIG_SPI_SUPPORT_DMA
+    set_config_n CONFIG_SPI_SUPPORT_POLL_AND_DMA_AUTO_SWITCH
+
     verify_config
 }
 

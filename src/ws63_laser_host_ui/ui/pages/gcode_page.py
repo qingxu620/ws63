@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -13,6 +16,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -26,21 +30,54 @@ from PySide6.QtWidgets import (
 
 from app.image_gcode import (
     Contour,
-    raster_rows_to_gcode,
+    raster_mask_to_gcode,
+    prepare_laser_mask,
     simplify_vector_contours,
-    trace_vector_contours,
+    trace_vector_contours_from_mask,
     vector_contours_to_gcode,
 )
 
 
 RX_JOB_MAX_BYTES = 65536
+OUTLINE_SCAN_FEED_MM_MIN = 10000
+OUTLINE_SCAN_POWER_S = 80
+OUTLINE_SCAN_LOOPS = 2
+SCANLINE_PROMPT_SUFFIX = (
+    "用于激光打标扫描填充。请生成主体清晰、白色或浅色背景、明暗层次明确的图像，"
+    "允许灰度和适度阴影，用高对比轮廓突出主体，背景保持简单。避免彩色杂乱背景、"
+    "文字、复杂纹理、过密毛发和大面积噪点。"
+)
+VECTOR_PROMPT_SUFFIX = (
+    "用于激光打标轮廓矢量提取。请生成主体边界清晰、白色或浅色背景、形体完整的"
+    "插画、卡通或产品图，允许少量灰度层次，但要有明确外轮廓和主要内轮廓。"
+    "避免照片级复杂纹理、碎线、低对比边缘、复杂背景和文字。"
+)
+_GCODE_WORD_RE = re.compile(
+    r"([A-Z])\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class _MarkBounds:
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+    @property
+    def width(self) -> float:
+        return self.max_x - self.min_x
+
+    @property
+    def height(self) -> float:
+        return self.max_y - self.min_y
 
 
 class GcodePage(QWidget):
     """AI/image workspace plus the existing plain-text G-code editor."""
 
     gcode_loaded = Signal(str, bytes)
-    ai_generation_requested = Signal(str)
+    ai_generation_requested = Signal(str, str, bool, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -104,6 +141,45 @@ class GcodePage(QWidget):
         self.prompt_edit.setPlainText("极简线条狼头，黑白简笔矢量风格")
         self.prompt_edit.setFixedHeight(64)
         prompt_layout.addWidget(self.prompt_edit)
+
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+        self.prompt_preset_combo = QComboBox()
+        self.prompt_preset_combo.setObjectName("promptPresetMode")
+        self.prompt_preset_combo.addItem("跟随提取模式", "auto")
+        self.prompt_preset_combo.addItem("扫描填充优化", "scanline")
+        self.prompt_preset_combo.addItem("轮廓矢量优化", "vector")
+        self.prompt_preset_combo.addItem("仅使用原提示词", "raw")
+        preset_row.addWidget(QLabel("模板"))
+        preset_row.addWidget(self.prompt_preset_combo, 1)
+        prompt_layout.addLayout(preset_row)
+
+        gen_options = QHBoxLayout()
+        gen_options.setSpacing(8)
+        self.image_size_combo = QComboBox()
+        self.image_size_combo.setObjectName("doubaoImageSize")
+        self.image_size_combo.addItems(["2k", "3k", "4k"])
+        self.image_size_combo.setCurrentText("2k")
+        gen_options.addWidget(QLabel("尺寸"))
+        gen_options.addWidget(self.image_size_combo, 1)
+        self.watermark_check = QCheckBox("加水印")
+        self.watermark_check.setChecked(True)
+        gen_options.addWidget(self.watermark_check)
+        prompt_layout.addLayout(gen_options)
+
+        output_row = QHBoxLayout()
+        output_row.setSpacing(8)
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.setObjectName("doubaoOutputDir")
+        default_output_dir = Path(__file__).resolve().parents[2] / "generated_images"
+        self.output_dir_edit.setText(str(default_output_dir))
+        self.output_dir_edit.setPlaceholderText("生成图片保存目录")
+        output_row.addWidget(self.output_dir_edit, 1)
+        self.btn_output_dir = QPushButton("目录")
+        self.btn_output_dir.clicked.connect(self._choose_output_dir)
+        output_row.addWidget(self.btn_output_dir)
+        prompt_layout.addLayout(output_row)
+
         prompt_buttons = QHBoxLayout()
         self.btn_generate = QPushButton("生成图像")
         self.btn_generate.setObjectName("btnPrimary")
@@ -135,7 +211,7 @@ class GcodePage(QWidget):
             params_layout, "正方形边长 (mm，0×0 至 99×99)", 0, 99, 99
         )
         self.speed_slider, self.speed_spin = self._parameter_row(
-            params_layout, "工件雕刻速度 (mm/min)", 100, 10_000, 3000
+            params_layout, "工件雕刻速度 (mm/min)", 100, 12_000, 3000
         )
         self.power_slider, self.power_spin = self._parameter_row(
             params_layout, "最大功率 S (0-1000)", 0, 1000, 1000
@@ -354,13 +430,55 @@ class GcodePage(QWidget):
     def show_ai_unavailable(self) -> None:
         self.image_status.setText("未配置 AI 图像服务；可使用“导入图片”完成本地转换")
 
+    def update_ui_generating_state(self, is_generating: bool) -> None:
+        self.btn_generate.setEnabled(not is_generating)
+        self.btn_import_image.setEnabled(not is_generating)
+        self.btn_output_dir.setEnabled(not is_generating)
+        self.prompt_edit.setEnabled(not is_generating)
+        self.prompt_preset_combo.setEnabled(not is_generating)
+        self.image_size_combo.setEnabled(not is_generating)
+        self.watermark_check.setEnabled(not is_generating)
+        self.output_dir_edit.setEnabled(not is_generating)
+        if is_generating:
+            self.image_status.setText("生成中...")
+
     def _request_ai_image(self) -> None:
         prompt = self.prompt_edit.toPlainText().strip()
         if not prompt:
             self.image_status.setText("请先输入图像提示词")
             return
-        self.image_status.setText("正在请求图像服务...")
-        self.ai_generation_requested.emit(prompt)
+        output_dir = self.output_dir_edit.text().strip()
+        if not output_dir:
+            self.image_status.setText("请选择生成图片输出目录")
+            return
+        self.update_ui_generating_state(True)
+        self.ai_generation_requested.emit(
+            self._compose_generation_prompt(prompt),
+            self.image_size_combo.currentText(),
+            self.watermark_check.isChecked(),
+            output_dir,
+        )
+
+    def _compose_generation_prompt(self, prompt: str) -> str:
+        mode = self.prompt_preset_combo.currentData()
+        if mode == "auto":
+            mode = self.extract_mode.currentData()
+        if mode == "scanline":
+            suffix = SCANLINE_PROMPT_SUFFIX
+        elif mode == "vector":
+            suffix = VECTOR_PROMPT_SUFFIX
+        else:
+            return prompt
+        return f"主题：{prompt}\n生成要求：{suffix}"
+
+    def _choose_output_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "选择生成图片输出目录",
+            self.output_dir_edit.text().strip() or str(Path.home()),
+        )
+        if path:
+            self.output_dir_edit.setText(path)
 
     def _import_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -412,10 +530,15 @@ class GcodePage(QWidget):
             self._set_preview_mode("converted")
             return
         if mode == "vector":
-            contours = trace_vector_contours(
+            mask = prepare_laser_mask(
                 rows,
                 self.threshold_spin.value(),
+                adaptive=True,
+                edge_enhance=True,
                 min_area_px=float(self.vector_min_area.value()),
+            )
+            contours = trace_vector_contours_from_mask(
+                mask, min_area_px=float(self.vector_min_area.value())
             )
             contours = simplify_vector_contours(
                 contours, tolerance_px=self.vector_simplify.value()
@@ -435,17 +558,21 @@ class GcodePage(QWidget):
             point_count = sum(max(0, len(contour) - 1) for contour in contours)
             suffix = "vector"
         else:
-            text = raster_rows_to_gcode(
+            mask = prepare_laser_mask(
                 rows,
                 self.threshold_spin.value(),
+                adaptive=True,
+                edge_enhance=False,
+                min_area_px=4,
+            )
+            text = raster_mask_to_gcode(
+                mask,
                 size_mm,
                 self.speed_spin.value(),
                 height_mm=size_mm,
                 power_s=self.power_spin.value(),
             )
-            self._converted_image = self._build_effect_preview(
-                rows, self.threshold_spin.value()
-            )
+            self._converted_image = self._build_mask_preview(mask)
             mode_label = "扫描填充"
             suffix = "scanline"
         step_mm = min(
@@ -455,10 +582,11 @@ class GcodePage(QWidget):
         actual_width = image.width() * step_mm
         actual_height = image.height() * step_mm
         output_bytes = len(text.encode("utf-8"))
+        algorithm = "边缘增强" if mode == "vector" else "自适应阈值"
         vector_stats = f" · 路径 {path_count} · 节点 {point_count}" if mode == "vector" else ""
         size_warning = " · ⚠ 超过64KiB上传上限" if output_bytes > RX_JOB_MAX_BYTES else ""
         self._converted_status = (
-            f"{mode_label} · X 0–{self.size_spin.value()} mm · "
+            f"{mode_label} · {algorithm} · X 0–{self.size_spin.value()} mm · "
             f"Y 0–{self.size_spin.value()} mm · "
             f"图形 {actual_width:.1f}×{actual_height:.1f} mm · "
             f"阈值 {self.threshold_spin.value()} · S{self.power_spin.value()}"
@@ -468,6 +596,104 @@ class GcodePage(QWidget):
         self.set_content(f"{source}.{suffix}.generated.gcode", text.encode("utf-8"))
         self.btn_preview_converted.setEnabled(True)
         self._set_preview_mode("converted")
+
+    def build_outline_scan_payload(self) -> tuple[str, bytes] | None:
+        source = self.editor.toPlainText()
+        bounds = self._mark_bounds_from_gcode(source)
+        if bounds is None:
+            self.image_status.setText("当前 G-code 没有可扫描的开光外框")
+            return None
+        if bounds.width < 0.05 or bounds.height < 0.05:
+            self.image_status.setText("开光外框太小，无法扫描")
+            return None
+        text = self._build_outline_scan_gcode(bounds)
+        source_name = Path(self._path).stem if self._path else "outline"
+        data = text.encode("utf-8")
+        self.image_status.setText(
+            f"外框扫描 · X {bounds.min_x:.2f}-{bounds.max_x:.2f} mm · "
+            f"Y {bounds.min_y:.2f}-{bounds.max_y:.2f} mm · "
+            f"F{OUTLINE_SCAN_FEED_MM_MIN} · S{OUTLINE_SCAN_POWER_S} · {OUTLINE_SCAN_LOOPS}圈"
+        )
+        return f"{source_name}.outline_scan.gcode", data
+
+    @staticmethod
+    def _mark_bounds_from_gcode(text: str) -> _MarkBounds | None:
+        x = 0.0
+        y = 0.0
+        laser_power = 0.0
+        absolute = True
+        bounds: list[float] | None = None
+
+        def include_segment(x0: float, y0: float, x1: float, y1: float) -> None:
+            nonlocal bounds
+            values = (x0, y0, x1, y1)
+            if any(value < -0.001 or value > 99.001 for value in values):
+                return
+            if bounds is None:
+                bounds = [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
+                return
+            bounds[0] = min(bounds[0], x0, x1)
+            bounds[1] = min(bounds[1], y0, y1)
+            bounds[2] = max(bounds[2], x0, x1)
+            bounds[3] = max(bounds[3], y0, y1)
+
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.split(";", 1)[0].strip().upper()
+            if not line or line.startswith("("):
+                continue
+            words = {match.group(1).upper(): float(match.group(2)) for match in _GCODE_WORD_RE.finditer(line)}
+            if not words:
+                continue
+            command = None
+            if "G" in words:
+                command = f"G{int(words['G'])}"
+                if command == "G90":
+                    absolute = True
+                elif command == "G91":
+                    absolute = False
+            if "M" in words:
+                mcode = int(words["M"])
+                if mcode in (3, 4):
+                    laser_power = float(words.get("S", laser_power))
+                elif mcode == 5:
+                    laser_power = 0.0
+            new_x = x
+            new_y = y
+            has_xy = "X" in words or "Y" in words
+            if "X" in words:
+                new_x = words["X"] if absolute else x + words["X"]
+            if "Y" in words:
+                new_y = words["Y"] if absolute else y + words["Y"]
+            if command == "G1" and has_xy and laser_power > 0:
+                include_segment(x, y, new_x, new_y)
+            if command in ("G0", "G1") and has_xy:
+                x = new_x
+                y = new_y
+
+        if bounds is None:
+            return None
+        return _MarkBounds(bounds[0], bounds[1], bounds[2], bounds[3])
+
+    @staticmethod
+    def _build_outline_scan_gcode(bounds: _MarkBounds) -> str:
+        lines = [
+            "G90",
+            "M5",
+            f"F{OUTLINE_SCAN_FEED_MM_MIN}",
+            f"G0 X{bounds.min_x:.3f} Y{bounds.min_y:.3f}",
+            f"M3 S{OUTLINE_SCAN_POWER_S}",
+        ]
+        for _ in range(OUTLINE_SCAN_LOOPS):
+            lines.extend(
+                [
+                    f"G1 X{bounds.max_x:.3f} Y{bounds.min_y:.3f}",
+                    f"G1 X{bounds.max_x:.3f} Y{bounds.max_y:.3f}",
+                    f"G1 X{bounds.min_x:.3f} Y{bounds.max_y:.3f}",
+                    f"G1 X{bounds.min_x:.3f} Y{bounds.min_y:.3f}",
+                ]
+            )
+        lines.extend(("M5", "M30"))
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _build_effect_preview(rows: list[list[int]], threshold: int) -> QImage:
@@ -479,6 +705,19 @@ class GcodePage(QWidget):
         for y, row in enumerate(rows):
             for x, value in enumerate(row):
                 if value <= threshold:
+                    effect.setPixelColor(x, y, dark)
+        return effect
+
+    @staticmethod
+    def _build_mask_preview(mask: list[list[bool]]) -> QImage:
+        height = len(mask)
+        width = len(mask[0])
+        effect = QImage(width, height, QImage.Format.Format_RGB32)
+        effect.fill(QColor("white"))
+        dark = QColor("#0f172a")
+        for y, row in enumerate(mask):
+            for x, is_dark in enumerate(row):
+                if is_dark:
                     effect.setPixelColor(x, y, dark)
         return effect
 

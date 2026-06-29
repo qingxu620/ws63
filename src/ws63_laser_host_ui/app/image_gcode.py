@@ -7,6 +7,7 @@ import math
 
 Point = tuple[int, int]
 Contour = list[Point]
+Mask = list[list[bool]]
 
 
 def _validated_rows(rows: Sequence[Sequence[int]]) -> tuple[int, int]:
@@ -30,6 +31,171 @@ def trace_dark_runs(
         start: int | None = None
         for x, value in enumerate(row):
             is_dark = int(value) <= limit
+            if is_dark and start is None:
+                start = x
+            elif not is_dark and start is not None:
+                runs.append((start, x - 1))
+                start = None
+        if start is not None:
+            runs.append((start, len(row) - 1))
+        traced.append(runs)
+    return traced
+
+
+def _validated_mask(mask: Sequence[Sequence[bool]]) -> tuple[int, int]:
+    if not mask or not mask[0]:
+        raise ValueError("image mask must not be empty")
+    width = len(mask[0])
+    if any(len(row) != width for row in mask):
+        raise ValueError("all image mask rows must have the same width")
+    return width, len(mask)
+
+
+def _build_integral_rows(rows: Sequence[Sequence[int]]) -> list[list[int]]:
+    width, height = _validated_rows(rows)
+    integral = [[0] * (width + 1) for _ in range(height + 1)]
+    for y, row in enumerate(rows, start=1):
+        row_sum = 0
+        previous = integral[y - 1]
+        current = integral[y]
+        for x, value in enumerate(row, start=1):
+            row_sum += int(value)
+            current[x] = previous[x] + row_sum
+    return integral
+
+
+def _window_mean(
+    integral: Sequence[Sequence[int]], x0: int, y0: int, x1: int, y1: int
+) -> float:
+    total = (
+        integral[y1 + 1][x1 + 1]
+        - integral[y0][x1 + 1]
+        - integral[y1 + 1][x0]
+        + integral[y0][x0]
+    )
+    return total / ((x1 - x0 + 1) * (y1 - y0 + 1))
+
+
+def _edge_mask(
+    rows: Sequence[Sequence[int]], edge_threshold: int
+) -> Mask:
+    width, height = _validated_rows(rows)
+    threshold = max(0, int(edge_threshold))
+    mask: Mask = [[False] * width for _ in range(height)]
+    for y in range(height):
+        y0 = max(0, y - 1)
+        y1 = min(height - 1, y + 1)
+        for x in range(width):
+            x0 = max(0, x - 1)
+            x1 = min(width - 1, x + 1)
+            gradient = max(
+                abs(int(rows[y][x1]) - int(rows[y][x0])),
+                abs(int(rows[y1][x]) - int(rows[y0][x])),
+            )
+            if gradient >= threshold:
+                mask[y][x] = True
+    return mask
+
+
+def _remove_small_components(mask: Sequence[Sequence[bool]], min_area_px: float) -> Mask:
+    width, height = _validated_mask(mask)
+    min_area = max(0, int(math.ceil(min_area_px)))
+    if min_area <= 1:
+        return [list(row) for row in mask]
+
+    visited = [[False] * width for _ in range(height)]
+    cleaned: Mask = [[False] * width for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
+            if visited[y][x] or not mask[y][x]:
+                continue
+            stack = [(x, y)]
+            visited[y][x] = True
+            component: list[Point] = []
+            while stack:
+                px, py = stack.pop()
+                component.append((px, py))
+                for nx, ny in (
+                    (px - 1, py),
+                    (px + 1, py),
+                    (px, py - 1),
+                    (px, py + 1),
+                ):
+                    if (
+                        nx < 0
+                        or ny < 0
+                        or nx >= width
+                        or ny >= height
+                        or visited[ny][nx]
+                        or not mask[ny][nx]
+                    ):
+                        continue
+                    visited[ny][nx] = True
+                    stack.append((nx, ny))
+            if len(component) >= min_area:
+                for px, py in component:
+                    cleaned[py][px] = True
+    return cleaned
+
+
+def prepare_laser_mask(
+    rows: Sequence[Sequence[int]],
+    threshold: int,
+    *,
+    adaptive: bool = True,
+    edge_enhance: bool = False,
+    min_area_px: float = 0,
+    adaptive_radius: int = 8,
+    adaptive_bias: int = 10,
+    edge_threshold: int = 28,
+) -> Mask:
+    """Build a laser extraction mask from grayscale rows.
+
+    The legacy path is a single global threshold. This helper keeps that base
+    but can also recover mid-tone shapes from bright backgrounds and emphasize
+    contrast edges before the G-code conversion stage.
+    """
+    width, height = _validated_rows(rows)
+    limit = max(0, min(255, int(threshold)))
+    mask: Mask = [[int(value) <= limit for value in row] for row in rows]
+
+    if adaptive:
+        radius = max(1, int(adaptive_radius))
+        bias = max(0, int(adaptive_bias))
+        integral = _build_integral_rows(rows)
+        for y, row in enumerate(rows):
+            y0 = max(0, y - radius)
+            y1 = min(height - 1, y + radius)
+            for x, value in enumerate(row):
+                local_mean = _window_mean(
+                    integral,
+                    max(0, x - radius),
+                    y0,
+                    min(width - 1, x + radius),
+                    y1,
+                )
+                lightness = int(value)
+                if lightness <= local_mean - bias and lightness <= 245:
+                    mask[y][x] = True
+
+    if edge_enhance:
+        edges = _edge_mask(rows, edge_threshold=edge_threshold)
+        for y in range(height):
+            for x in range(width):
+                if edges[y][x]:
+                    mask[y][x] = True
+
+    return _remove_small_components(mask, min_area_px)
+
+
+def trace_dark_runs_from_mask(mask: Sequence[Sequence[bool]]) -> list[list[tuple[int, int]]]:
+    """Return inclusive horizontal dark runs from a prepared boolean mask."""
+    _validated_mask(mask)
+    traced: list[list[tuple[int, int]]] = []
+    for row in mask:
+        runs: list[tuple[int, int]] = []
+        start: int | None = None
+        for x, is_dark in enumerate(row):
             if is_dark and start is None:
                 start = x
             elif not is_dark and start is not None:
@@ -72,9 +238,16 @@ def trace_vector_contours(
     rows: Sequence[Sequence[int]], threshold: int, min_area_px: float = 4.0
 ) -> list[Contour]:
     """Trace clockwise closed boundaries around thresholded dark regions."""
-    width, height = _validated_rows(rows)
     limit = max(0, min(255, int(threshold)))
     dark = [[int(value) <= limit for value in row] for row in rows]
+    return trace_vector_contours_from_mask(dark, min_area_px=min_area_px)
+
+
+def trace_vector_contours_from_mask(
+    dark: Sequence[Sequence[bool]], min_area_px: float = 4.0
+) -> list[Contour]:
+    """Trace clockwise closed boundaries around prepared dark regions."""
+    width, height = _validated_mask(dark)
     edges: set[tuple[Point, Point]] = set()
 
     for y in range(height):
@@ -261,16 +434,15 @@ def vector_contours_to_gcode(
     return "\n".join(lines) + "\n"
 
 
-def raster_rows_to_gcode(
-    rows: Sequence[Sequence[int]],
-    threshold: int,
+def _raster_runs_to_gcode(
+    runs_by_row: Sequence[Sequence[tuple[int, int]]],
+    image_width: int,
+    image_height: int,
     width_mm: float,
     speed_mm_min: int,
     height_mm: float | None = None,
     power_s: int = 1000,
 ) -> str:
-    """Convert grayscale rows into a bounded horizontal line-segment toolpath."""
-    width, height = _validated_rows(rows)
     if width_mm <= 0:
         raise ValueError("width_mm must be greater than zero")
     if height_mm is not None and height_mm <= 0:
@@ -279,16 +451,16 @@ def raster_rows_to_gcode(
         raise ValueError("speed_mm_min must be greater than zero")
     mark_power = max(0, min(1000, int(power_s)))
 
-    x_step = width_mm / width
+    x_step = width_mm / image_width
     if height_mm is not None:
-        x_step = min(x_step, height_mm / height)
+        x_step = min(x_step, height_mm / image_height)
     y_step = x_step
     lines = [
         "G90",
         "M3 S0",
         f"F{int(speed_mm_min)}",
     ]
-    for y, runs in enumerate(trace_dark_runs(rows, threshold)):
+    for y, runs in enumerate(runs_by_row):
         ordered = runs if y % 2 == 0 else list(reversed(runs))
         for start, end in ordered:
             if y % 2 == 0:
@@ -302,3 +474,44 @@ def raster_rows_to_gcode(
             lines.append(f"G1 X{x1:.3f} Y{y_mm:.3f}")
     lines.extend(("M5", "M30"))
     return "\n".join(lines) + "\n"
+
+
+def raster_mask_to_gcode(
+    mask: Sequence[Sequence[bool]],
+    width_mm: float,
+    speed_mm_min: int,
+    height_mm: float | None = None,
+    power_s: int = 1000,
+) -> str:
+    """Convert a prepared dark mask into horizontal laser scan segments."""
+    width, height = _validated_mask(mask)
+    return _raster_runs_to_gcode(
+        trace_dark_runs_from_mask(mask),
+        width,
+        height,
+        width_mm,
+        speed_mm_min,
+        height_mm=height_mm,
+        power_s=power_s,
+    )
+
+
+def raster_rows_to_gcode(
+    rows: Sequence[Sequence[int]],
+    threshold: int,
+    width_mm: float,
+    speed_mm_min: int,
+    height_mm: float | None = None,
+    power_s: int = 1000,
+) -> str:
+    """Convert grayscale rows into a bounded horizontal line-segment toolpath."""
+    width, height = _validated_rows(rows)
+    return _raster_runs_to_gcode(
+        trace_dark_runs(rows, threshold),
+        width,
+        height,
+        width_mm,
+        speed_mm_min,
+        height_mm=height_mm,
+        power_s=power_s,
+    )

@@ -95,6 +95,28 @@ class UiContractTests(unittest.TestCase):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
         )
 
+    def test_builtin_prompt_templates_follow_conversion_mode(self) -> None:
+        page = GcodePage()
+
+        scanline_prompt = page._compose_generation_prompt("一只皮卡丘")
+        self.assertIn("一只皮卡丘", scanline_prompt)
+        self.assertIn("扫描填充", scanline_prompt)
+        self.assertIn("明暗层次", scanline_prompt)
+        self.assertIn("允许灰度", scanline_prompt)
+
+        page.extract_mode.setCurrentIndex(page.extract_mode.findData("vector"))
+        vector_prompt = page._compose_generation_prompt("一只皮卡丘")
+        self.assertIn("轮廓矢量", vector_prompt)
+        self.assertIn("主体边界清晰", vector_prompt)
+        self.assertIn("主要内轮廓", vector_prompt)
+        self.assertNotIn("黑白线稿", vector_prompt)
+
+    def test_raw_prompt_template_keeps_user_prompt_unchanged(self) -> None:
+        page = GcodePage()
+        page.prompt_preset_combo.setCurrentIndex(page.prompt_preset_combo.findData("raw"))
+
+        self.assertEqual(page._compose_generation_prompt("生成一只皮卡丘"), "生成一只皮卡丘")
+
     def test_imported_image_converts_into_the_existing_editor_flow(self) -> None:
         page = GcodePage()
         image = QImage(4, 2, QImage.Format.Format_RGB32)
@@ -161,6 +183,57 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(b"S350", emitted[-1][1])
         self.assertNotIn(b"S1000", emitted[-1][1])
         self.assertIn("S350", page.image_status.text())
+
+    def test_outline_scan_payload_builds_two_loop_low_power_job(self) -> None:
+        page = GcodePage()
+        image = QImage(8, 8, QImage.Format.Format_RGB32)
+        image.fill(QColor("white"))
+        for y in range(2, 6):
+            for x in range(2, 6):
+                image.setPixelColor(x, y, QColor("black"))
+
+        page.extract_mode.setCurrentIndex(page.extract_mode.findData("vector"))
+        page.set_image("outline.png", image)
+        page.btn_convert.click()
+
+        payload = page.build_outline_scan_payload()
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        path, data = payload
+        self.assertTrue(path.endswith(".outline_scan.gcode"))
+        text = data.decode("utf-8")
+        self.assertIn("F10000", text)
+        self.assertIn("M3 S80", text)
+        self.assertEqual(text.count("\nG1 "), 8)
+        self.assertTrue(text.endswith("M30\n"))
+        self.assertIn("2圈", page.image_status.text())
+
+    def test_outline_scan_button_lives_on_job_control_page(self) -> None:
+        page = JobPage()
+
+        self.assertTrue(hasattr(page, "btn_outline_scan"))
+        self.assertEqual(page.btn_outline_scan.text(), "扫描外框")
+        self.assertFalse(hasattr(GcodePage(), "btn_outline_scan"))
+
+    def test_outline_scan_request_uses_existing_upload_execute_worker(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        captured: list[tuple[object, tuple[object, ...]]] = []
+        window.client.is_open = lambda: True
+        window._run_job_worker = lambda fn, *args: captured.append((fn, args))
+        window.page_gcode.set_content(
+            "shape.gcode",
+            b"G90\nM5\nG0 X0 Y0\nM3 S80\nG1 X1 Y0\nG1 X1 Y1\nG1 X0 Y1\nG1 X0 Y0\nM5\n",
+        )
+
+        window._on_outline_scan_requested()
+
+        self.assertTrue(captured)
+        self.assertEqual(captured[-1][0].__name__, "_upload_exec_worker")
+        self.assertIn(b"F10000", captured[-1][1][0])
+        self.assertEqual(captured[-1][1][3], 0)
+        self.assertTrue(window.state.gcode_path.endswith(".outline_scan.gcode"))
 
     def test_command_port_uses_single_stateful_connect_button(self) -> None:
         page = ConnectionPage()
