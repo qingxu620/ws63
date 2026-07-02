@@ -23,7 +23,7 @@
 #define LV_STDARG_INCLUDE       <stdarg.h>
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
-    #define LV_MEM_SIZE (48 * 1024U)
+    #define LV_MEM_SIZE (96 * 1024U)
     #define LV_MEM_POOL_EXPAND_SIZE 0
     #define LV_MEM_ADR 0
     #if LV_MEM_ADR == 0

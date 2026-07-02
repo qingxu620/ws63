@@ -45,6 +45,8 @@ elseif(DEFINED CONFIG_ENABLE_LVGL_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../deprecated/ws63_screen_panel_lvgl ws63_screen_panel_lvgl)
 elseif(DEFINED CONFIG_ENABLE_LVGL_PANEL)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_screen_panel_lvgl_refactor ws63_screen_panel_lvgl_refactor)
+elseif(DEFINED CONFIG_ENABLE_SD_CARD_TEST)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ws63_sd_card_test ws63_sd_card_test)
 endif()
 
 

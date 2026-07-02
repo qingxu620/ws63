@@ -11,7 +11,6 @@
 typedef enum {
     PAGE_HOME = 0,
     PAGE_SETTINGS,
-    PAGE_ALERT_SOUND,
     PAGE_DIAGNOSTICS,
     PAGE_JOB_MONITOR,
     PAGE_CONTROL,

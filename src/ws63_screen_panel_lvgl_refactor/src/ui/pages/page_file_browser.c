@@ -1,6 +1,6 @@
 /**
  * @file page_file_browser.c
- * @brief Offline TF file browser page.
+ * @brief Offline SD file browser page.
  */
 #include "page_file_browser.h"
 #include "panel_theme.h"
@@ -30,15 +30,24 @@ static uint32_t g_rendered_seq = UINT32_MAX;
 static int8_t g_rendered_selected_index = INT8_MIN;
 static bool g_rendered_busy = false;
 
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
+
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[FILE_PAGE] back -> home\r\n");
     ui_manager_switch_page(PAGE_HOME);
 }
 
 static void refresh_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[FILE_PAGE] refresh click\r\n");
     panel_file_manager_refresh();
     page_file_browser_update();
 }
@@ -52,8 +61,12 @@ static void file_row_cb(lv_event_t *e)
     uint8_t index = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
     const panel_file_entry_t *entry = panel_file_manager_get_entry(index);
     if (entry == NULL) {
+        osal_printk("[FILE_PAGE] click invalid index=%u\r\n", (unsigned int)index);
         return;
     }
+
+    osal_printk("[FILE_PAGE] click file index=%u name=%s size=%lu\r\n",
+                (unsigned int)index, entry->name, (unsigned long)entry->size_bytes);
 
     if (!panel_file_manager_select(index)) {
         osal_printk("[FILE_PAGE] reject non-job file index=%u name=%s\r\n",
@@ -62,6 +75,8 @@ static void file_row_cb(lv_event_t *e)
     }
 
     panel_model_select_offline_file(entry->name, entry->size_bytes, entry->line_count);
+    osal_printk("[FILE_PAGE] selected file index=%u name=%s\r\n",
+                (unsigned int)index, entry->name);
     page_file_browser_update();
 }
 
@@ -73,11 +88,12 @@ static void start_btn_cb(lv_event_t *e)
         return;
     }
 
+    osal_printk("[FILE_PAGE] start selected offline job\r\n");
     if (panel_offline_job_start_selected() != ERRCODE_SUCC) {
         osal_printk("[FILE_PAGE] start rejected: offline job busy or invalid\r\n");
         return;
     }
-    ui_manager_switch_page(PAGE_JOB_MONITOR);
+    osal_printk("[FILE_PAGE] offline job queued\r\n");
 }
 
 static void monitor_btn_cb(lv_event_t *e)
@@ -96,14 +112,14 @@ static lv_obj_t *create_header_btn(lv_obj_t *parent, const char *text, lv_event_
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_border_color(btn, COLOR_BORDER, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_ext_click_area(btn, 6);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    bind_click(btn, cb, NULL);
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl, COLOR_LASER_BLUE, 0);
     lv_obj_center(lbl);
+    bind_click(lbl, cb, NULL);
     return btn;
 }
 
@@ -116,14 +132,14 @@ static lv_obj_t *create_action_btn(lv_obj_t *parent, const char *text, lv_color_
     lv_obj_set_style_bg_color(btn, color, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(btn, 8, 0);
-    lv_obj_set_ext_click_area(btn, 6);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    bind_click(btn, cb, NULL);
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
     lv_obj_center(lbl);
+    bind_click(lbl, cb, NULL);
     if (out_label != NULL) {
         *out_label = lbl;
     }
@@ -148,12 +164,14 @@ static void create_file_row(lv_obj_t *parent, uint8_t index)
     lv_obj_t *col = lv_obj_create(btn);
     lv_obj_set_size(col, 270, 32);
     lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(col, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(col, 0, 0);
     lv_obj_set_style_pad_all(col, 0, 0);
     lv_obj_set_style_pad_gap(col, 2, 0);
+    lv_obj_add_event_cb(col, file_row_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)index);
 
     g_rows[index].btn = btn;
     g_rows[index].name = lv_label_create(col);
@@ -162,15 +180,23 @@ static void create_file_row(lv_obj_t *parent, uint8_t index)
     lv_obj_set_style_text_color(g_rows[index].name, COLOR_TEXT_BRIGHT, 0);
     lv_obj_set_width(g_rows[index].name, 268);
     lv_label_set_long_mode(g_rows[index].name, LV_LABEL_LONG_DOT);
+    lv_obj_add_flag(g_rows[index].name, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_rows[index].name, file_row_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)index);
 
     g_rows[index].meta = lv_label_create(col);
     lv_label_set_text(g_rows[index].meta, "--");
     lv_obj_set_style_text_font(g_rows[index].meta, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_rows[index].meta, COLOR_TEXT_MUTED, 0);
+    lv_obj_add_flag(g_rows[index].meta, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_rows[index].meta, file_row_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)index);
 }
 
 void page_file_browser_create(lv_obj_t *parent)
 {
+    g_rendered_seq = UINT32_MAX;
+    g_rendered_selected_index = INT8_MIN;
+    g_rendered_busy = false;
+
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_screen, 0);
@@ -205,9 +231,10 @@ void page_file_browser_create(lv_obj_t *parent)
     lv_label_set_text(back_lbl, LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "TF文件");
+    lv_label_set_text(title, "SD任务");
     lv_obj_set_style_text_font(title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(title, COLOR_TEXT_BRIGHT, 0);
 
@@ -231,7 +258,7 @@ void page_file_browser_create(lv_obj_t *parent)
     lv_obj_add_style(status_card, &style_card, 0);
 
     g_lbl_status = lv_label_create(status_card);
-    lv_label_set_text(g_lbl_status, "TF后端未接入");
+    lv_label_set_text(g_lbl_status, "SD任务未扫描");
     lv_obj_set_style_text_font(g_lbl_status, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_status, COLOR_LASER_ORANGE, 0);
 
@@ -297,7 +324,7 @@ void page_file_browser_update(void)
              mgr->mount_label,
              mgr->mounted ? "已挂载" : "未挂载",
              (unsigned int)mgr->count,
-             mgr->real_backend ? "真实TF" : "示例后端");
+             mgr->last_error);
     lv_label_set_text(g_lbl_status, buf);
     lv_obj_set_style_text_color(g_lbl_status,
         mgr->mounted ? COLOR_LASER_ORANGE : COLOR_LASER_RED, 0);
@@ -348,7 +375,7 @@ void page_file_browser_update(void)
             lv_label_set_text(g_lbl_preview, "预览失败");
         }
     } else {
-        lv_label_set_text(g_lbl_preview, "选择 .gcode/.nc/.gco 文件后显示预览");
+        lv_label_set_text(g_lbl_preview, "选择SD任务后显示预览");
     }
 
     g_rendered_seq = mgr->seq;

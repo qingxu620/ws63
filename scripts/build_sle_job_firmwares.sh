@@ -70,6 +70,7 @@ disable_all_samples() {
     set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     set_config_n CONFIG_ENABLE_SCREEN_SAMPLE
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
+    set_config_n CONFIG_ENABLE_LVGL_PANEL
     set_config_n CONFIG_LASER_RX_UNIFIED
 }
 

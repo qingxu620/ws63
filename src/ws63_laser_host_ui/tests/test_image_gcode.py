@@ -96,17 +96,19 @@ class ImageGcodeTests(unittest.TestCase):
             speed_mm_min=3000,
         )
 
-        self.assertEqual(gcode.splitlines()[0], "G90")
+        self.assertEqual(gcode.splitlines()[0], "M4 S0")
         self.assertNotIn("G21", gcode.splitlines())
+        self.assertNotIn("G90", gcode.splitlines())
         self.assertFalse(
             any(line.lstrip().startswith((";", "(")) for line in gcode.splitlines())
         )
         self.assertIn("F3000", gcode)
-        self.assertIn("M3 S0", gcode)
         self.assertIn("S1000", gcode)
+        self.assertNotIn("M3", gcode)
+        self.assertNotIn("M30", gcode)
         self.assertIn("G0 X0.000 Y0.000", gcode)
         self.assertIn("G1 X50.000 Y0.000", gcode)
-        self.assertTrue(gcode.endswith("M5\nM30\n"))
+        self.assertTrue(gcode.endswith("S0\nM5\n"))
 
     def test_raster_mask_to_gcode_emits_scaled_segments(self) -> None:
         mask = [
@@ -124,7 +126,7 @@ class ImageGcodeTests(unittest.TestCase):
         self.assertIn("G1 X50.000 Y0.000", gcode)
         self.assertIn("G0 X75.000 Y25.000", gcode)
         self.assertIn("G1 X25.000 Y25.000", gcode)
-        self.assertTrue(gcode.endswith("M5\nM30\n"))
+        self.assertTrue(gcode.endswith("S0\nM5\n"))
 
     def test_raster_rows_to_gcode_rejects_ragged_rows(self) -> None:
         with self.assertRaisesRegex(ValueError, "same width"):
@@ -214,13 +216,15 @@ class ImageGcodeTests(unittest.TestCase):
             for value in re.findall(r"[XY](-?\d+(?:\.\d+)?)", gcode)
         ]
 
-        self.assertEqual(gcode.splitlines()[0], "G90")
-        self.assertIn("M3 S0", gcode)
+        self.assertEqual(gcode.splitlines()[0], "M4 S0")
         self.assertIn("S1000", gcode)
+        self.assertNotIn("G90", gcode.splitlines())
+        self.assertNotIn("M3", gcode)
+        self.assertNotIn("M30", gcode)
         self.assertTrue(coordinates)
         self.assertGreaterEqual(min(coordinates), 0.0)
         self.assertLessEqual(max(coordinates), 60.0)
-        self.assertTrue(gcode.endswith("M5\nM30\n"))
+        self.assertTrue(gcode.endswith("S0\nM5\n"))
 
 
 if __name__ == "__main__":

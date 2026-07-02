@@ -96,6 +96,7 @@ disable_all_samples() {
     set_config_n CONFIG_ENABLE_SCREEN_SAMPLE
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE
     set_config_n CONFIG_ENABLE_LVGL_PANEL
+    set_config_n CONFIG_ENABLE_SD_CARD_TEST
     set_config_n CONFIG_LASER_RX_UNIFIED
 }
 

@@ -15,6 +15,7 @@
 #include "service/panel_model.h"
 #include "service/panel_transport_sle.h"
 #include "service/panel_offline_job.h"
+#include "service/panel_file_manager.h"
 #include "ui/ui_manager.h"
 #include <stdbool.h>
 
@@ -24,6 +25,8 @@
 #define LVGL_TASK_STACK_SIZE 0x6000
 #define LVGL_TASK_PRIORITY   25
 #define LVGL_HANDLER_MS      10
+#define PANEL_POWER_STABLE_MS 500
+#define PANEL_FILE_BOOT_SCAN_DELAY_TICKS (200 / LVGL_HANDLER_MS)
 #define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
 #define PANEL_FAKE_PROGRESS_PERIOD_TICKS (100 / LVGL_HANDLER_MS)
 #define PANEL_JOB_TIME_PERIOD_TICKS (1000 / LVGL_HANDLER_MS)
@@ -40,6 +43,9 @@ static void lv_tick_timer_cb(uintptr_t data)
 static int panel_task(void *arg)
 {
     (void)arg;
+
+    spi_bus_park_pins_for_boot();
+    osal_msleep(PANEL_POWER_STABLE_MS);
 
     /* HAL init */
     errcode_t ret = spi_bus_init();
@@ -79,6 +85,7 @@ static int panel_task(void *arg)
     }
 
     uint32_t tick_count = 0;
+    bool file_scan_done = false;
     bool sle_started = false;
 
     /* Set initial scene */
@@ -87,9 +94,20 @@ static int panel_task(void *arg)
     while (1) {
         lv_timer_handler();
         ui_manager_update();
+
+        /* LVGL drawing is synchronous in this port; always leave LCD deselected. */
+        spi_bus_lcd_cs_high();
+
         osal_msleep(LVGL_HANDLER_MS);
 
         tick_count++;
+
+        /* Mount SD and scan the root G-code files after the first visible UI frame. */
+        if (!file_scan_done && tick_count >= PANEL_FILE_BOOT_SCAN_DELAY_TICKS) {
+            osal_printk("[PANEL] boot SD scan trigger\r\n");
+            panel_file_manager_refresh();
+            file_scan_done = true;
+        }
 
         /*
          * Start the SLE status mirror after the first UI frame has settled.

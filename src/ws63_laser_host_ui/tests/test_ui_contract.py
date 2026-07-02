@@ -131,7 +131,8 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(page.tabs.currentIndex(), 0)
         self.assertTrue(emitted)
         self.assertEqual(emitted[-1][0], "sample.scanline.generated.gcode")
-        self.assertIn(b"M30", emitted[-1][1])
+        self.assertIn(b"M4 S0", emitted[-1][1])
+        self.assertNotIn(b"M30", emitted[-1][1])
         self.assertTrue(page.btn_preview_converted.isEnabled())
         self.assertTrue(page.btn_preview_converted.isChecked())
         converted_preview_key = page.preview_label.pixmap().cacheKey()
@@ -163,8 +164,9 @@ class UiContractTests(unittest.TestCase):
 
         self.assertTrue(emitted)
         self.assertEqual(emitted[-1][0], "outline.vector.generated.gcode")
-        self.assertIn(b"M3 S0", emitted[-1][1])
+        self.assertIn(b"M4 S0", emitted[-1][1])
         self.assertIn(b"S1000", emitted[-1][1])
+        self.assertNotIn(b"M3", emitted[-1][1])
         self.assertIn("轮廓矢量", page.image_status.text())
         self.assertIn("路径", page.image_status.text())
 
@@ -204,9 +206,10 @@ class UiContractTests(unittest.TestCase):
         self.assertTrue(path.endswith(".outline_scan.gcode"))
         text = data.decode("utf-8")
         self.assertIn("F10000", text)
-        self.assertIn("M3 S80", text)
+        self.assertIn("M4 S0", text)
+        self.assertIn("S80", text)
         self.assertEqual(text.count("\nG1 "), 8)
-        self.assertTrue(text.endswith("M30\n"))
+        self.assertTrue(text.endswith("S0\nM5\n"))
         self.assertIn("2圈", page.image_status.text())
 
     def test_outline_scan_button_lives_on_job_control_page(self) -> None:
@@ -271,10 +274,11 @@ class UiContractTests(unittest.TestCase):
         for mode in ("scanline", "vector"):
             page.extract_mode.setCurrentIndex(page.extract_mode.findData(mode))
             page.btn_convert.click()
-            self.assertEqual(emitted[-1][1], b"G90\nM5\nM30\n")
+            self.assertEqual(emitted[-1][1], b"M4 S0\nM5\n")
             self.assertNotIn(b"G0 ", emitted[-1][1])
             self.assertNotIn(b"G1 ", emitted[-1][1])
             self.assertNotIn(b"M3 S", emitted[-1][1])
+            self.assertNotIn(b"M30", emitted[-1][1])
             self.assertIn("0×0 mm", page.image_status.text())
 
     def test_extreme_portrait_image_is_bounded_before_conversion(self) -> None:
@@ -557,9 +561,9 @@ class UiContractTests(unittest.TestCase):
                 pass
 
         window.client = FakeClient()
-        large_job = b"G1 X1\n" * 700
+        large_job = (b"G1 X1\n" * 700) + b"S0\n" + (b"G1 X2\n" * 100)
         window._upload_exec_worker(large_job, 6, 20.0, 4096)
-        self.assertEqual(uploads[-1]["preroll_bytes"], 4096)
+        self.assertEqual(uploads[-1]["preroll_bytes"], 4203)
         self.assertTrue(uploads[-1]["start_on_preroll"])
         self.assertNotIn("wait_ready", uploads[-1])
         self.assertEqual(controls, [])
@@ -571,7 +575,7 @@ class UiContractTests(unittest.TestCase):
         self.assertFalse(uploads[-1]["start_on_preroll"])
         self.assertEqual(controls, ["@EXEC_START 7"])
 
-    def test_upload_execute_forces_preroll_for_jobs_larger_than_cache(self) -> None:
+    def test_upload_execute_does_not_force_preroll_for_jobs_larger_than_cache(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
         uploads: list[dict[str, object]] = []
@@ -593,10 +597,10 @@ class UiContractTests(unittest.TestCase):
 
         window._upload_exec_worker(large_job, 8, 20.0, 0)
 
-        self.assertEqual(uploads[-1]["preroll_bytes"], JOB_PREROLL_BYTES)
-        self.assertTrue(uploads[-1]["start_on_preroll"])
+        self.assertEqual(uploads[-1]["preroll_bytes"], 0)
+        self.assertFalse(uploads[-1]["start_on_preroll"])
         self.assertFalse(uploads[-1]["enforce_job_size_limit"])
-        self.assertEqual(controls, [])
+        self.assertEqual(controls, ["@EXEC_START 8"])
 
     def test_upload_execute_worker_releases_after_exec_start_ack(self) -> None:
         window = MainWindow()

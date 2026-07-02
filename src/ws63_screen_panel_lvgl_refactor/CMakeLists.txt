@@ -5,6 +5,7 @@
 set(LVGL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_lvgl/src/lvgl)
 
 add_definitions(-DLV_CONF_INCLUDE_SIMPLE)
+add_definitions(-DSCREEN_PANEL_ENABLE_SD=1 -DSCREEN_SD_TEST_BITBANG_ONLY=0)
 
 file(GLOB_RECURSE LVGL_SOURCES ${LVGL_DIR}/src/*.c)
 
@@ -12,6 +13,8 @@ set(SOURCES
     ${SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/spi_bus.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/sd_spi.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/fat_reader.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/lcd_driver.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/touch_driver.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/board/screen_board.c
@@ -25,7 +28,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ui_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/home_page.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_settings.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_alert_sound.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_diagnostics.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_job_monitor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_control.c

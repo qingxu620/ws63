@@ -31,6 +31,7 @@ TX_UART_RESYNC_BYTE = 0x18
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
 JOB_PREROLL_BYTES = 4096
+JOB_PREROLL_SAFE_MAX_BYTES = 8192
 
 RX_STATUS_RE = re.compile(
     r"@STATUS state=(\d+) status=(\d+) job=(\d+) rx=(\d+) total=(\d+) free=(\d+) lines=(\d+)"
@@ -58,6 +59,14 @@ class RxStatus:
     received_size: int
     job_total: int
     cache_free: int
+
+
+@dataclass(frozen=True)
+class PrerollPlan:
+    requested: int
+    effective: int
+    safe_line_end: int
+    reason: str
 
 
 def parse_rx_status(line: str) -> Optional[RxStatus]:
@@ -99,6 +108,63 @@ def crc16_ccitt(data: bytes, initial: int = 0xFFFF) -> int:
 
 def normalize_gcode_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _line_final_laser_state_is_off(line: bytes) -> bool:
+    text = line.decode("utf-8", errors="ignore")
+    code = text.split(";", 1)[0].split("(", 1)[0]
+    saw_laser_state = False
+    laser_off = False
+    for token in code.replace("\t", " ").split():
+        upper = token.upper()
+        if upper == "M5":
+            saw_laser_state = True
+            laser_off = True
+        elif upper.startswith("S") and len(upper) > 1:
+            try:
+                value = float(upper[1:])
+            except ValueError:
+                continue
+            saw_laser_state = True
+            laser_off = value <= 0.0
+    return saw_laser_state and laser_off
+
+
+def plan_safe_preroll(gcode: bytes, requested: int) -> PrerollPlan:
+    """Pick a Host-side preroll threshold that lands on a complete G-code line."""
+    total = len(gcode)
+    if requested <= 0 or total <= requested:
+        return PrerollPlan(requested=requested, effective=0, safe_line_end=0, reason="disabled")
+
+    fallback_after = max(requested, JOB_PREROLL_SAFE_MAX_BYTES)
+    line_start = 0
+    fallback_line_end = 0
+    for index, byte in enumerate(gcode):
+        if byte != 0x0A:
+            continue
+        line_end = index + 1
+        line = gcode[line_start:index].rstrip(b"\r")
+        line_start = line_end
+        if line_end < requested:
+            continue
+        if _line_final_laser_state_is_off(line):
+            return PrerollPlan(
+                requested=requested,
+                effective=line_end if line_end < total else 0,
+                safe_line_end=line_end,
+                reason="laser_off_line" if line_end < total else "near_eof",
+            )
+        if fallback_line_end == 0 and line_end >= fallback_after:
+            fallback_line_end = line_end
+
+    if fallback_line_end > 0:
+        return PrerollPlan(
+            requested=requested,
+            effective=fallback_line_end if fallback_line_end < total else 0,
+            safe_line_end=fallback_line_end,
+            reason="fallback_line" if fallback_line_end < total else "near_eof",
+        )
+    return PrerollPlan(requested=requested, effective=0, safe_line_end=0, reason="no_line_boundary")
 
 
 def prepare_gcode_for_rx(data: bytes) -> tuple[bytes, int]:
@@ -217,17 +283,21 @@ class SleJobSerialClient:
         if not self.is_open() or self._serial is None:
             raise RuntimeError("串口未连接")
         total = 0
-        with self._write_lock:
-            for off in range(0, len(payload), SERIAL_WRITE_BURST_SIZE):
-                part = payload[off:off + SERIAL_WRITE_BURST_SIZE]
-                written = self._serial.write(part)
-                total += written
-                if written != len(part):
-                    break
-                if off + len(part) < len(payload):
-                    self._serial.flush()
-                    time.sleep(SERIAL_WRITE_BURST_GAP_S)
-            self._serial.flush()
+        try:
+            with self._write_lock:
+                for off in range(0, len(payload), SERIAL_WRITE_BURST_SIZE):
+                    part = payload[off:off + SERIAL_WRITE_BURST_SIZE]
+                    written = self._serial.write(part)
+                    total += written
+                    if written != len(part):
+                        break
+                    if off + len(part) < len(payload):
+                        self._serial.flush()
+                        time.sleep(SERIAL_WRITE_BURST_GAP_S)
+                self._serial.flush()
+        except Exception as exc:
+            self.close()
+            raise RuntimeError(f"串口写入失败，已断开，请检查端口占用或重新插拔后重连: {exc}") from exc
         if total != len(payload):
             raise RuntimeError(f"串口写入不完整: {total}/{len(payload)} bytes")
 
@@ -341,6 +411,11 @@ class SleJobSerialClient:
 
                 while offset < total:
                     end = min(offset + JOB_DATA_CHUNK_SIZE, total)
+                    if (
+                        start_on_preroll and preroll_bytes > 0 and not preroll_done
+                        and offset < preroll_bytes < end
+                    ):
+                        end = preroll_bytes
                     chunk = gcode[offset:end]
                     self.write_bytes(chunk, f"<chunk> off={offset} len={len(chunk)}")
                     ack = self.wait_for(

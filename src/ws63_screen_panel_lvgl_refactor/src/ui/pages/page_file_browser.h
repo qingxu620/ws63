@@ -1,6 +1,6 @@
 /**
  * @file page_file_browser.h
- * @brief Offline TF file browser page.
+ * @brief Offline SD file browser page.
  */
 #ifndef PAGE_FILE_BROWSER_H
 #define PAGE_FILE_BROWSER_H

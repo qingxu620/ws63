@@ -234,7 +234,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
         g_model.mode = PANEL_MODE_OFFLINE;
         g_model.sd_mounted = true;
         g_model.job_id = 2;
-        snprintf(g_model.job_name, sizeof(g_model.job_name), "SD_DEMO_001");
+        snprintf(g_model.job_name, sizeof(g_model.job_name), "R-C.nc");
         break;
     case PANEL_SCENE_SCREEN_SENDING:
         g_model.view_mode = PANEL_VIEW_OFFLINE;
@@ -246,7 +246,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
         g_model.progress = 28;
         g_model.total_size = PANEL_FAKE_TOTAL_SIZE;
         g_model.total_lines = PANEL_FAKE_TOTAL_LINES;
-        snprintf(g_model.job_name, sizeof(g_model.job_name), "SD_DEMO_001");
+        snprintf(g_model.job_name, sizeof(g_model.job_name), "R-C.nc");
         break;
     case PANEL_SCENE_SCREEN_RUNNING:
         g_model.view_mode = PANEL_VIEW_OFFLINE;
@@ -259,7 +259,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
         g_model.total_size = PANEL_FAKE_TOTAL_SIZE;
         g_model.total_lines = PANEL_FAKE_TOTAL_LINES;
         g_model.laser_output_active = true;
-        snprintf(g_model.job_name, sizeof(g_model.job_name), "SD_DEMO_001");
+        snprintf(g_model.job_name, sizeof(g_model.job_name), "R-C.nc");
         break;
     case PANEL_SCENE_SCREEN_DONE:
         g_model.view_mode = PANEL_VIEW_OFFLINE;
@@ -271,7 +271,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
         g_model.progress = 100;
         g_model.total_size = PANEL_FAKE_TOTAL_SIZE;
         g_model.total_lines = PANEL_FAKE_TOTAL_LINES;
-        snprintf(g_model.job_name, sizeof(g_model.job_name), "SD_DEMO_001");
+        snprintf(g_model.job_name, sizeof(g_model.job_name), "R-C.nc");
         break;
     case PANEL_SCENE_REQUESTING_STOP:
         g_model.state = SYS_STATE_REQUESTING_STOP;
@@ -396,7 +396,7 @@ void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint
     g_model.progress = 0;
     g_model.live_status_active = false;
     snprintf(g_model.job_name, sizeof(g_model.job_name), "%s",
-             (name != NULL && name[0] != '\0') ? name : "TF_JOB");
+             (name != NULL && name[0] != '\0') ? name : "SD_JOB");
     snprintf(g_model.last_error, sizeof(g_model.last_error), "无");
 
 }
@@ -440,7 +440,7 @@ void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uin
     g_model.progress = 0;
     g_model.live_status_active = true;
     snprintf(g_model.job_name, sizeof(g_model.job_name), "%s",
-             (name != NULL && name[0] != '\0') ? name : "TF_JOB");
+             (name != NULL && name[0] != '\0') ? name : "SD_JOB");
     snprintf(g_model.last_error, sizeof(g_model.last_error), "无");
     update_progress_fields();
 }
@@ -450,7 +450,9 @@ void panel_model_offline_upload_progress(uint32_t received_size)
     if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
         return;
     }
-    g_model.state = SYS_STATE_SENDING;
+    if (g_model.state != SYS_STATE_RUNNING) {
+        g_model.state = SYS_STATE_SENDING;
+    }
     g_model.received_size = clamp_u32(received_size, 0, g_model.total_size);
     g_model.progress = (g_model.total_size > 0U) ?
         (int)(((uint64_t)g_model.received_size * 100U) / g_model.total_size) : 0;
@@ -504,7 +506,7 @@ void panel_model_offline_error(const char *error)
     g_model.focus_active = false;
     g_model.laser_output_active = false;
     g_model.live_status_active = true;
-    snprintf(g_model.job_name, sizeof(g_model.job_name), "TF_JOB");
+    snprintf(g_model.job_name, sizeof(g_model.job_name), "SD_JOB");
     snprintf(g_model.last_error, sizeof(g_model.last_error), "%s",
              (error != NULL && error[0] != '\0') ? error : "OFFLINE_ERR");
 }
@@ -517,6 +519,25 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
 {
     system_state_t prev_state = g_model.state;
     uint32_t prev_job_id = g_model.job_id;
+    bool keep_local_offline_selection =
+        (g_model.view_mode == PANEL_VIEW_OFFLINE &&
+         g_model.owner == PANEL_OWNER_SCREEN &&
+         g_model.mode == PANEL_MODE_OFFLINE &&
+         g_model.state == SYS_STATE_READY &&
+         owner == 0U && mode == 0U && job_state == 0U && job_id == 0U);
+
+    if (keep_local_offline_selection) {
+        g_model.live_status_active = true;
+        g_model.rx_connected = (flags & 0x08U) != 0U;
+        g_model.sle_connected = g_model.rx_connected;
+        g_model.tx_connected = (flags & 0x04U) != 0U;
+        g_model.focus_active = (flags & 0x01U) != 0U;
+        g_model.laser_output_active = (flags & 0x02U) != 0U;
+        g_model.cache_free = clamp_u32(cache_free, 0, PANEL_FAKE_CACHE_SIZE);
+        g_model.seq++;
+        g_model.event_id++;
+        return;
+    }
 
     g_model.scene = PANEL_SCENE_IDLE_NONE;
     g_model.live_status_active = true;

@@ -406,6 +406,21 @@ static void handle_data_byte(uint8_t ch)
         }
     }
 
+    if (g_preroll_bytes > 0 && !g_preroll_signaled &&
+        g_job_offset >= g_preroll_bytes && g_job_offset < g_job_total) {
+        if (flush_job_chunk() != ERRCODE_SUCC) {
+            osal_printk("[JOB_TX] preroll chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
+            (void)abort_rx_and_clear_transaction("preroll-chunk-send-fail");
+            host_sendf("@ERR chunk_send_fail_abort\r\n");
+            return;
+        }
+        g_preroll_signaled = true;
+        g_data_mode = false;
+        host_sendf("@ACK type=%u seq=0 status=%u offset=%u preroll=1\r\n",
+                   PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
+        return;
+    }
+
     if (g_job_chunk_len >= JOB_TX_DATA_CHUNK_MAX || g_job_offset >= g_job_total) {
         if (flush_job_chunk() != ERRCODE_SUCC) {
             osal_printk("[JOB_TX] chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
@@ -413,19 +428,8 @@ static void handle_data_byte(uint8_t ch)
             host_sendf("@ERR chunk_send_fail_abort\r\n");
             return;
         }
-        {
-            bool will_preroll = (g_preroll_bytes > 0 && !g_preroll_signaled &&
-                                 g_job_offset >= g_preroll_bytes && g_job_offset < g_job_total);
-            if (will_preroll) {
-                g_preroll_signaled = true;
-                g_data_mode = false;
-                host_sendf("@ACK type=%u seq=0 status=%u offset=%u preroll=1\r\n",
-                           PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
-                return;
-            }
-            host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
-                       PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
-        }
+        host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
+                   PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
     }
 
     if (g_job_offset >= g_job_total) {

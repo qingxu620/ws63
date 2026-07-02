@@ -12,11 +12,13 @@
 #define TOUCH_SCROLL_LIMIT_PX       6
 #define TOUCH_SCROLL_THROW_PERCENT 15
 #define TOUCH_READ_FAIL_HOLD_COUNT  1
+#define TOUCH_BOOT_IGNORE_MS        800U
 
 static bool g_pressed = false;
 static int16_t g_last_x = 0;
 static int16_t g_last_y = 0;
 static uint8_t g_read_fail_count = 0;
+static uint32_t g_touch_init_tick = 0;
 
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -24,6 +26,14 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 
     ft6336_touch_data_t touch;
     errcode_t ret = ft6336_read_touch(&touch);
+
+    if (lv_tick_elaps(g_touch_init_tick) < TOUCH_BOOT_IGNORE_MS) {
+        g_pressed = false;
+        data->point.x = g_last_x;
+        data->point.y = g_last_y;
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
 
     if (ret == ERRCODE_SUCC && touch.count > 0) {
         int32_t raw_x = touch.point[0].x;
@@ -70,6 +80,7 @@ errcode_t touch_driver_init(void)
     lv_indev_set_read_cb(indev, touch_read_cb);
     lv_indev_set_scroll_limit(indev, TOUCH_SCROLL_LIMIT_PX);
     lv_indev_set_scroll_throw(indev, TOUCH_SCROLL_THROW_PERCENT);
+    g_touch_init_tick = lv_tick_get();
     return ERRCODE_SUCC;
 }
 

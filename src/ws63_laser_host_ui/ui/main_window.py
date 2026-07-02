@@ -23,7 +23,7 @@ from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
-    JOB_MAX_SIZE, JOB_PREROLL_BYTES,
+    JOB_MAX_SIZE, JOB_PREROLL_BYTES, plan_safe_preroll,
 )
 from workers.doubao_image_worker import DoubaoImageWorker
 from workers.serial_worker import WorkerManager
@@ -645,19 +645,23 @@ class MainWindow(QMainWindow):
         self._focus_off_before_job()
         crc = crc16_ccitt(gcode)
         total = len(gcode)
-        effective_preroll = preroll
-        if total > JOB_MAX_SIZE and (effective_preroll <= 0 or effective_preroll >= total):
-            effective_preroll = min(JOB_PREROLL_BYTES, total - 1)
+        requested_preroll = preroll
+        effective_preroll = 0
+        if requested_preroll > 0 and total > requested_preroll:
+            plan = plan_safe_preroll(gcode, requested_preroll)
+            effective_preroll = plan.effective
             self.worker.log.emit(
                 "status",
-                f"[EXEC_FLOW] 大文件超过64K，强制启用 preroll={effective_preroll}",
+                "[EXEC_FLOW] preroll plan "
+                f"requested={plan.requested} effective={plan.effective} "
+                f"safe_line={plan.safe_line_end} reason={plan.reason}",
             )
         self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传并执行 job={job_id} size={total} crc=0x{crc:04x} preroll={effective_preroll}")
 
-        # Determine small-file vs large-file path
+        # Upload+execute is controlled by the execution preroll setting.
         use_preroll = effective_preroll > 0 and total > effective_preroll
-        if effective_preroll > 0 and total <= effective_preroll:
-            self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 ({total} <= {effective_preroll}), 使用 normal upload 路径")
+        if requested_preroll > 0 and not use_preroll:
+            self.worker.log.emit("status", f"[EXEC_FLOW] 未找到可用 preroll 边界，使用 normal upload 路径")
         self.worker.log.emit("status", f"[EXEC_FLOW] use_preroll={use_preroll} path={'preroll' if use_preroll else 'normal'}")
 
         # Reset execution state. Completion is received asynchronously from RX.

@@ -22,10 +22,19 @@ static lv_obj_t *g_lbl_pos_x;
 static lv_obj_t *g_lbl_pos_y;
 static lv_obj_t *g_lbl_feed;
 static lv_obj_t *g_lbl_power;
+static uint32_t g_rendered_seq = UINT32_MAX;
+
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
 
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[MONITOR] back -> home\r\n");
     ui_manager_switch_page(PAGE_HOME);
 }
 
@@ -56,6 +65,8 @@ static lv_obj_t *create_stat_row(lv_obj_t *parent, const char *label,
 
 void page_job_monitor_create(lv_obj_t *parent)
 {
+    g_rendered_seq = UINT32_MAX;
+
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_screen, 0);
@@ -90,6 +101,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     g_lbl_title = lv_label_create(header);
     lv_label_set_text(g_lbl_title, "任务监控");
@@ -241,7 +253,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_add_style(cache_card, &style_card, 0);
 
     lv_obj_t *cache_lbl = lv_label_create(cache_card);
-    lv_label_set_text(cache_lbl, LV_SYMBOL_SD_CARD " 缓存剩余");
+    lv_label_set_text(cache_lbl, "缓存剩余");
     lv_obj_set_style_text_font(cache_lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(cache_lbl, COLOR_TEXT_MUTED, 0);
 
@@ -253,11 +265,10 @@ void page_job_monitor_create(lv_obj_t *parent)
 
 void page_job_monitor_update(void)
 {
-    static uint32_t s_rendered_seq = UINT32_MAX;
     /* Update with demo data from model */
     char buf[24];
 
-    if (s_rendered_seq == g_model.seq) {
+    if (g_rendered_seq == g_model.seq) {
         return;
     }
 
@@ -295,5 +306,5 @@ void page_job_monitor_update(void)
 
     snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
     lv_label_set_text(g_lbl_cache_free, buf);
-    s_rendered_seq = g_model.seq;
+    g_rendered_seq = g_model.seq;
 }

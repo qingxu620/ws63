@@ -13,9 +13,17 @@ static lv_obj_t *g_arc_focus;
 static lv_obj_t *g_lbl_focus_val;
 static lv_obj_t *g_lbl_focus_state;
 
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
+
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[CONTROL] back -> home\r\n");
     ui_manager_switch_page(PAGE_HOME);
 }
 
@@ -65,6 +73,7 @@ static lv_obj_t *create_jog_btn(lv_obj_t *parent, const char *symbol, const char
     lv_obj_center(lbl);
 
     lv_obj_add_event_cb(btn, jog_cb, LV_EVENT_CLICKED, (void *)dir);
+    bind_click(lbl, jog_cb, (void *)dir);
     return btn;
 }
 
@@ -104,6 +113,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "手动控制");
@@ -178,6 +188,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(lbl_on, lv_color_white(), 0);
     lv_obj_center(lbl_on);
     lv_obj_add_event_cb(btn_on, focus_on_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(lbl_on, focus_on_cb, NULL);
 
     lv_obj_t *btn_off = lv_button_create(btns);
     lv_obj_set_size(btn_off, 72, 24);
@@ -189,6 +200,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(lbl_off, lv_color_white(), 0);
     lv_obj_center(lbl_off);
     lv_obj_add_event_cb(btn_off, focus_off_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(lbl_off, focus_off_cb, NULL);
 
     /* Right: focus power arc */
     g_arc_focus = lv_arc_create(focus_card);

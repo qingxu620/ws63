@@ -4,16 +4,17 @@
  *
  * Layout (320x240 landscape):
  *   status_bar   (0,0)   320x32
- *   body         (0,32)  320x160
+ *   body         (0,32)  320x152
  *     progress_block  (8,32)   114x152
  *     info_block       (130,32) 174x152
- *   action_bar   (0,192) 320x48
+ *   action_bar   (0,184) 320x56
  */
 #include "home_page.h"
 #include "panel_theme.h"
 #include "ui_manager.h"
 #include "../service/panel_file_manager.h"
 #include "../service/panel_model.h"
+#include "../service/panel_offline_job.h"
 #include "soc_osal.h"
 #include <stdio.h>
 #include <string.h>
@@ -66,9 +67,17 @@ static lv_obj_t *create_card(lv_obj_t *parent, lv_coord_t w, lv_coord_t h)
     return card;
 }
 
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 4);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
+
 static void status_bar_click_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[HOME] status click -> diagnostics\r\n");
     ui_manager_switch_page(PAGE_DIAGNOSTICS);
 }
 
@@ -156,6 +165,7 @@ static void create_progress_block(lv_obj_t *parent)
 static void sd_file_card_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        osal_printk("[HOME] sd file click -> file browser\r\n");
         ui_manager_switch_page(PAGE_FILE_BROWSER);
     }
 }
@@ -195,7 +205,7 @@ static void create_info_block(lv_obj_t *parent)
 
     g_lbl_job_name = create_label(job_card, PANEL_FONT_CN, COLOR_LASER_BLUE);
     lv_label_set_text(g_lbl_job_name, "暂无任务");
-    lv_label_set_long_mode(g_lbl_job_name, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_long_mode(g_lbl_job_name, LV_LABEL_LONG_DOT);
     lv_obj_set_width(g_lbl_job_name, 160);
 
     lv_obj_t *safety_card = create_card(block, 174, 32);
@@ -212,19 +222,19 @@ static void create_info_block(lv_obj_t *parent)
     lv_obj_set_flex_flow(file_card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(file_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(file_card, 6, 0);
-    lv_obj_add_flag(file_card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(file_card, 4);
-    lv_obj_add_event_cb(file_card, sd_file_card_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(file_card, sd_file_card_cb, NULL);
 
     lv_obj_t *file_lbl = create_label(file_card, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(file_lbl, "SD文件");
+    lv_label_set_text(file_lbl, "SD任务");
     lv_obj_set_width(file_lbl, 48);
     lv_label_set_long_mode(file_lbl, LV_LABEL_LONG_CLIP);
+    bind_click(file_lbl, sd_file_card_cb, NULL);
 
     g_lbl_sd_file = create_label(file_card, PANEL_FONT_CN, COLOR_LASER_BLUE);
     lv_obj_set_width(g_lbl_sd_file, 104);
-    lv_label_set_long_mode(g_lbl_sd_file, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_long_mode(g_lbl_sd_file, LV_LABEL_LONG_DOT);
     lv_label_set_text(g_lbl_sd_file, "点击选择");
+    bind_click(g_lbl_sd_file, sd_file_card_cb, NULL);
 }
 
 static void set_focus_visual_state(bool on)
@@ -244,6 +254,9 @@ static void btn_event_cb(lv_event_t *e)
     panel_model_get_button_permissions(&perms);
 
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
+    osal_printk("[HOME] action click idx=%u owner=%d mode=%d state=%d start=%d stop=%d abort=%d\r\n",
+                (unsigned int)idx, g_model.owner, g_model.mode, g_model.state,
+                perms.can_start, perms.can_stop, perms.can_abort);
     switch (idx) {
     case 0:
         if (!perms.can_start) {
@@ -259,7 +272,12 @@ static void btn_event_cb(lv_event_t *e)
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
             g_model.owner == PANEL_OWNER_SCREEN &&
             g_model.state == SYS_STATE_READY) {
-            panel_model_start_offline_selected();
+            errcode_t ret = panel_offline_job_start_selected();
+            if (ret != ERRCODE_SUCC) {
+                osal_printk("[PANEL_CMD] offline start failed: 0x%x\r\n", ret);
+                break;
+            }
+            osal_printk("[PANEL_CMD] offline job queued\r\n");
             break;
         }
         panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING);
@@ -285,7 +303,10 @@ static void btn_event_cb(lv_event_t *e)
         }
         panel_model_request_focus_off();
         break;
-    case 4: ui_manager_switch_page(PAGE_SETTINGS); break;
+    case 4:
+        osal_printk("[HOME] settings click -> settings\r\n");
+        ui_manager_switch_page(PAGE_SETTINGS);
+        break;
     }
 }
 
@@ -294,7 +315,7 @@ static lv_obj_t *create_action_btn(lv_obj_t *parent, const char *text,
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, 58, 40);
+    lv_obj_set_size(btn, 58, 44);
     lv_obj_set_style_bg_color(btn, bg_color, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(btn, 10, 0);
@@ -314,8 +335,8 @@ static lv_obj_t *create_action_btn(lv_obj_t *parent, const char *text,
 static void create_action_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, 320, 48);
-    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, 192);
+    lv_obj_set_size(bar, 320, 56);
+    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, 184);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -330,19 +351,24 @@ static void create_action_bar(lv_obj_t *parent)
     lv_obj_set_style_radius(bar, 0, 0);
 
     g_btn_start = create_action_btn(bar, "启动", COLOR_LASER_GREEN, &g_lbl_start);
-    lv_obj_add_event_cb(g_btn_start, btn_event_cb, LV_EVENT_CLICKED, (void *)0);
+    bind_click(g_btn_start, btn_event_cb, (void *)0);
+    bind_click(g_lbl_start, btn_event_cb, (void *)0);
 
     g_btn_stop = create_action_btn(bar, "停止", COLOR_LASER_RED, &g_lbl_stop);
-    lv_obj_add_event_cb(g_btn_stop, btn_event_cb, LV_EVENT_CLICKED, (void *)1);
+    bind_click(g_btn_stop, btn_event_cb, (void *)1);
+    bind_click(g_lbl_stop, btn_event_cb, (void *)1);
 
     g_btn_abort = create_action_btn(bar, "中止", COLOR_LASER_ORANGE, &g_lbl_abort);
-    lv_obj_add_event_cb(g_btn_abort, btn_event_cb, LV_EVENT_CLICKED, (void *)2);
+    bind_click(g_btn_abort, btn_event_cb, (void *)2);
+    bind_click(g_lbl_abort, btn_event_cb, (void *)2);
 
     g_btn_focus = create_action_btn(bar, "调焦", COLOR_LASER_BLUE, &g_lbl_focus);
-    lv_obj_add_event_cb(g_btn_focus, btn_event_cb, LV_EVENT_CLICKED, (void *)3);
+    bind_click(g_btn_focus, btn_event_cb, (void *)3);
+    bind_click(g_lbl_focus, btn_event_cb, (void *)3);
 
     g_btn_settings = create_action_btn(bar, "设置", COLOR_TEXT_MUTED, &g_lbl_settings);
-    lv_obj_add_event_cb(g_btn_settings, btn_event_cb, LV_EVENT_CLICKED, (void *)4);
+    bind_click(g_btn_settings, btn_event_cb, (void *)4);
+    bind_click(g_lbl_settings, btn_event_cb, (void *)4);
 }
 
 static void apply_state(void)
@@ -555,7 +581,7 @@ void home_page_create(lv_obj_t *parent)
     create_status_bar(scr);
 
     lv_obj_t *body = lv_obj_create(scr);
-    lv_obj_set_size(body, 320, 160);
+    lv_obj_set_size(body, 320, 152);
     lv_obj_align(body, LV_ALIGN_TOP_LEFT, 0, 32);
     lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);

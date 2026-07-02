@@ -414,23 +414,25 @@ def vector_contours_to_gcode(
         ordered.append(rotated)
         current = rotated[-1]
 
-    lines = ["G90", "M3 S0", f"F{int(speed_mm_min)}"]
+    lines = ["M4 S0", f"F{int(speed_mm_min)}"]
+    current_power = 0
+
+    def emit_power(power: int) -> None:
+        nonlocal current_power
+        if current_power != power:
+            lines.append(f"S{power}")
+            current_power = power
+
     for contour in ordered:
         start_x = contour[0][0] * step
         start_y = contour[0][1] * step
-        lines.append(f"M5")  # Ensure laser off before rapid move
+        emit_power(0)
         lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f}")
-        first_mark = True
+        emit_power(mark_power)
         for x, y in contour[1:]:
-            if first_mark:
-                lines.append(f"M3 S{mark_power}")
-                lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
-                first_mark = False
-            else:
-                lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
-        lines.append(f"M5")  # Turn off laser after contour
-        lines.append(f"G0 X{contour[-1][0] * step:.3f} Y{contour[-1][1] * step:.3f}")
-    lines.extend(("M5", "M30"))
+            lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
+        emit_power(0)
+    lines.append("M5")
     return "\n".join(lines) + "\n"
 
 
@@ -455,11 +457,15 @@ def _raster_runs_to_gcode(
     if height_mm is not None:
         x_step = min(x_step, height_mm / image_height)
     y_step = x_step
-    lines = [
-        "G90",
-        "M3 S0",
-        f"F{int(speed_mm_min)}",
-    ]
+    lines = ["M4 S0", f"F{int(speed_mm_min)}"]
+    current_power = 0
+
+    def emit_power(power: int) -> None:
+        nonlocal current_power
+        if current_power != power:
+            lines.append(f"S{power}")
+            current_power = power
+
     for y, runs in enumerate(runs_by_row):
         ordered = runs if y % 2 == 0 else list(reversed(runs))
         for start, end in ordered:
@@ -468,11 +474,12 @@ def _raster_runs_to_gcode(
             else:
                 x0, x1 = (end + 1) * x_step, start * x_step
             y_mm = y * y_step
-            lines.append(f"M5")  # Ensure laser off before rapid move
+            emit_power(0)
             lines.append(f"G0 X{x0:.3f} Y{y_mm:.3f}")
-            lines.append(f"M3 S{mark_power}")
+            emit_power(mark_power)
             lines.append(f"G1 X{x1:.3f} Y{y_mm:.3f}")
-    lines.extend(("M5", "M30"))
+    emit_power(0)
+    lines.append("M5")
     return "\n".join(lines) + "\n"
 
 

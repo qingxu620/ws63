@@ -55,6 +55,8 @@
 #define PANEL_SLE_UUID_LEN_2 2
 #define PANEL_SLE_CONNECT_RETRY_MS 1000U
 #define PANEL_SLE_WRITE_CFM_TIMEOUT_MS 1000U
+#define PANEL_SLE_FAST_CONN_INTERVAL 0x14U
+#define PANEL_SLE_FAST_CONN_TIMEOUT  0x1F4U
 
 static uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
 static uint8_t g_server_id = 0;
@@ -101,6 +103,21 @@ static uint8_t g_scan_rsp_data[] = {
     sizeof(SLE_PANEL_SERVER_NAME) - 1,
     'w', 's', '6', '3', '_', 'p', 'a', 'n', 'e', 'l'
 };
+
+static void request_fast_rx_conn_params(uint16_t conn_id)
+{
+    sle_connection_param_update_t param = {0};
+    param.conn_id = conn_id;
+    param.interval_min = PANEL_SLE_FAST_CONN_INTERVAL;
+    param.interval_max = PANEL_SLE_FAST_CONN_INTERVAL;
+    param.max_latency = 0;
+    param.supervision_timeout = PANEL_SLE_FAST_CONN_TIMEOUT;
+
+    errcode_t ret = sle_update_connect_param(&param);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_CLI] fast conn param update fail: 0x%x\r\n", ret);
+    }
+}
 
 static void sle_uuid_set_base(sle_uuid_t *out)
 {
@@ -393,6 +410,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
         if (g_client_connecting) {
             g_rx_conn_id = conn_id;
             g_client_connecting = false;
+            request_fast_rx_conn_params(conn_id);
             ssap_exchange_info_t info = {0};
             info.mtu_size = 512;
             info.version = 1;

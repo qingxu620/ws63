@@ -1,9 +1,6 @@
 /**
  * @file panel_file_manager.h
- * @brief TF/SD card file manager facade for the panel UI.
- *
- * Current backend is a deterministic fake list. Real TF card support should
- * replace only this service layer after SPI-SD/FATFS is validated.
+ * @brief SD/FAT G-code file manager facade for the panel UI.
  */
 #ifndef PANEL_FILE_MANAGER_H
 #define PANEL_FILE_MANAGER_H
@@ -44,7 +41,7 @@ typedef struct {
     uint8_t count;
     int8_t selected_index;
     char mount_label[16];
-    char last_error[32];
+    char last_error[48];
     panel_file_entry_t entries[PANEL_FILE_MAX_COUNT];
 } panel_file_manager_t;
 

@@ -21,23 +21,30 @@ typedef struct {
 
 static tone_entry_t g_tones[3];
 
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
+
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[SOUND] back -> settings\r\n");
     ui_manager_switch_page(PAGE_SETTINGS);
 }
 
 static void toggle_cb(lv_event_t *e)
 {
-    lv_obj_t *btn = lv_event_get_target(e);
     tone_entry_t *entry = (tone_entry_t *)lv_event_get_user_data(e);
     entry->enabled = !entry->enabled;
 
     if (entry->enabled) {
-        lv_obj_set_style_bg_color(btn, entry->accent, 0);
+        lv_obj_set_style_bg_color(entry->btn_toggle, entry->accent, 0);
         lv_label_set_text(entry->lbl_toggle, LV_SYMBOL_OK " 开");
     } else {
-        lv_obj_set_style_bg_color(btn, COLOR_BG_CARD, 0);
+        lv_obj_set_style_bg_color(entry->btn_toggle, COLOR_BG_CARD, 0);
         lv_label_set_text(entry->lbl_toggle, LV_SYMBOL_CLOSE " 关");
     }
 }
@@ -95,6 +102,7 @@ static void create_tone_row(lv_obj_t *parent, int idx, const char *name,
     lv_obj_set_style_text_color(t->lbl_toggle, lv_color_white(), 0);
     lv_obj_center(t->lbl_toggle);
     lv_obj_add_event_cb(t->btn_toggle, toggle_cb, LV_EVENT_CLICKED, t);
+    bind_click(t->lbl_toggle, toggle_cb, t);
 
     /* Right: volume arc + label */
     lv_obj_t *right = lv_obj_create(card);
@@ -162,6 +170,7 @@ void page_alert_sound_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "提示音设置");

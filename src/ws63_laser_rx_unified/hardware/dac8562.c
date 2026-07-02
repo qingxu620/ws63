@@ -7,14 +7,26 @@
 #include "gpio.h"
 #include "pinctrl.h"
 #include "spi.h"
+#include "soc_osal.h"
 #include "tcxo.h"
+
+#ifndef DAC8562_ENABLE_SPI_DMA
+#define DAC8562_ENABLE_SPI_DMA 0
+#endif
+
+#if DAC8562_ENABLE_SPI_DMA
+#include "dma.h"
+#endif
 
 #define DAC_POWER_SETTLE_MS 30
 #define DAC_RESET_SETTLE_MS 5
 #define DAC_REF_SETTLE_MS 20
 #define DAC_CMD_SETTLE_US 10
+#define DAC_SPI_DMA_WIDTH 0U
 
-void dac8562_write_channel(uint8_t cmd, uint16_t value)
+static bool g_dac_spi_dma_ready;
+
+static void dac8562_write_channel_raw(uint8_t cmd, uint16_t value, bool settle)
 {
     uint8_t buf[3] = {
         cmd,
@@ -27,9 +39,25 @@ void dac8562_write_channel(uint8_t cmd, uint16_t value)
     xfer.tx_bytes = sizeof(buf);
 
     uapi_gpio_set_val(DAC_CS_PIN, GPIO_LEVEL_LOW);
-    uapi_spi_master_write(DAC_SPI_BUS, &xfer, 1000);
+    errcode_t ret = uapi_spi_master_write(DAC_SPI_BUS, &xfer, 1000);
     uapi_gpio_set_val(DAC_CS_PIN, GPIO_LEVEL_HIGH);
-    (void)uapi_tcxo_delay_us(DAC_CMD_SETTLE_US);
+#if DAC8562_ENABLE_SPI_DMA
+    if (ret != ERRCODE_SUCC && g_dac_spi_dma_ready) {
+        osal_printk("[DAC8562] spi DMA write failed ret=0x%x, disable dma\r\n", ret);
+        (void)uapi_spi_set_dma_mode(DAC_SPI_BUS, false, NULL);
+        g_dac_spi_dma_ready = false;
+    }
+#else
+    unused(ret);
+#endif
+    if (settle) {
+        (void)uapi_tcxo_delay_us(DAC_CMD_SETTLE_US);
+    }
+}
+
+void dac8562_write_channel(uint8_t cmd, uint16_t value)
+{
+    dac8562_write_channel_raw(cmd, value, true);
 }
 
 static void dac8562_configure_device(void)
@@ -73,6 +101,31 @@ errcode_t dac8562_init(void)
         return ret;
     }
 
+#if DAC8562_ENABLE_SPI_DMA && defined(CONFIG_SPI_SUPPORT_DMA) && (CONFIG_SPI_SUPPORT_DMA == 1)
+    ret = uapi_dma_init();
+    if (ret == ERRCODE_SUCC) {
+        ret = uapi_dma_open();
+    }
+    if (ret == ERRCODE_SUCC) {
+        spi_dma_config_t dma_cfg = {
+            .src_width = DAC_SPI_DMA_WIDTH,
+            .dest_width = DAC_SPI_DMA_WIDTH,
+            .burst_length = 0,
+            .priority = 0,
+        };
+        ret = uapi_spi_set_dma_mode(DAC_SPI_BUS, true, &dma_cfg);
+    }
+    if (ret == ERRCODE_SUCC) {
+        g_dac_spi_dma_ready = true;
+        osal_printk("[DAC8562] spi DMA enabled\r\n");
+    } else {
+        g_dac_spi_dma_ready = false;
+        osal_printk("[DAC8562] spi DMA unavailable: 0x%x, fallback polling\r\n", ret);
+    }
+#else
+    g_dac_spi_dma_ready = false;
+#endif
+
     (void)uapi_tcxo_delay_ms(1);
     dac8562_configure_device();
 
@@ -86,6 +139,6 @@ void dac8562_recover(void)
 
 void dac8562_write_xy(uint16_t x_val, uint16_t y_val)
 {
-    dac8562_write_channel(DAC_CMD_SETA_UPDATEA, x_val);
-    dac8562_write_channel(DAC_CMD_SETB_UPDATEB, y_val);
+    dac8562_write_channel_raw(DAC_CMD_SETA_UPDATEA, x_val, false);
+    dac8562_write_channel_raw(DAC_CMD_SETB_UPDATEB, y_val, false);
 }

@@ -167,3 +167,14 @@ config ENABLE_LVGL_PANEL
 if ENABLE_LVGL_PANEL
 source "deprecated/ws63_screen_panel_lvgl/Kconfig"
 endif
+
+config ENABLE_SD_CARD_TEST
+    bool
+    prompt "WS63 MSP3223 TF卡独立读取测试（不启动屏幕）"
+    default n
+    depends on SAMPLE_ENABLE
+    select SPI_SUPPORT_MASTER
+    help
+        用途：只初始化共享 SPI 引脚、SD 卡和 FAT 根目录扫描，不启动
+        LCD、LVGL、触摸、SLE 或激光控制，用于排查 MSP3223 板载 TF 卡座、
+        MISO/CS/供电/卡格式等问题。

@@ -114,8 +114,10 @@ errcode_t screen_board_init(void)
     uapi_gpio_set_val(SCREEN_TOUCH_SDA_PIN, GPIO_LEVEL_HIGH);
 #endif
 
+#if defined(SCREEN_PANEL_ENABLE_SD) && SCREEN_PANEL_ENABLE_SD
     /* SD_CS */
     screen_gpio_output(SCREEN_SD_CS_PIN, GPIO_LEVEL_HIGH);
+#endif
 
     return ERRCODE_SUCC;
 }
@@ -239,8 +241,18 @@ errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
 
     errcode_t ret = spi_bus_lock(1000);
     if (ret != ERRCODE_SUCC) {
+        screen_lcd_cs(true);
         return ret;
     }
+
+    /*
+     * Keep the transaction self-contained at board layer so an error path or a
+     * high-level caller cannot leave LCD_CS asserted.
+     */
+#if defined(SCREEN_PANEL_ENABLE_SD) && SCREEN_PANEL_ENABLE_SD
+    spi_bus_sd_cs_high();
+#endif
+    screen_lcd_cs(false);
 
     spi_xfer_data_t xfer = {0};
     xfer.tx_buff = (uint8_t *)data;
@@ -249,6 +261,7 @@ errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
     if (ret != ERRCODE_SUCC && g_lcd_spi_dma_ready) {
         osal_printk("[SCREEN] spi DMA write failed len=%u ret=0x%x\r\n", (unsigned int)len, ret);
     }
+    screen_lcd_cs(true);
     spi_bus_unlock();
     return ret;
 }

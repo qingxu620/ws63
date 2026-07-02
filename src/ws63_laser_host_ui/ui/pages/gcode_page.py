@@ -513,7 +513,7 @@ class GcodePage(QWidget):
         path_count = 0
         point_count = 0
         if size_mm == 0:
-            text = "G90\nM5\nM30\n"
+            text = "M4 S0\nM5\n"
             self._converted_image = QImage(
                 image.width(), image.height(), QImage.Format.Format_RGB32
             )
@@ -621,6 +621,7 @@ class GcodePage(QWidget):
         x = 0.0
         y = 0.0
         laser_power = 0.0
+        laser_modal_on = False
         absolute = True
         bounds: list[float] | None = None
 
@@ -654,9 +655,13 @@ class GcodePage(QWidget):
             if "M" in words:
                 mcode = int(words["M"])
                 if mcode in (3, 4):
+                    laser_modal_on = True
                     laser_power = float(words.get("S", laser_power))
                 elif mcode == 5:
+                    laser_modal_on = False
                     laser_power = 0.0
+            if "S" in words:
+                laser_power = float(words["S"])
             new_x = x
             new_y = y
             has_xy = "X" in words or "Y" in words
@@ -664,7 +669,7 @@ class GcodePage(QWidget):
                 new_x = words["X"] if absolute else x + words["X"]
             if "Y" in words:
                 new_y = words["Y"] if absolute else y + words["Y"]
-            if command == "G1" and has_xy and laser_power > 0:
+            if command == "G1" and has_xy and laser_modal_on and laser_power > 0:
                 include_segment(x, y, new_x, new_y)
             if command in ("G0", "G1") and has_xy:
                 x = new_x
@@ -677,11 +682,10 @@ class GcodePage(QWidget):
     @staticmethod
     def _build_outline_scan_gcode(bounds: _MarkBounds) -> str:
         lines = [
-            "G90",
-            "M5",
+            "M4 S0",
             f"F{OUTLINE_SCAN_FEED_MM_MIN}",
             f"G0 X{bounds.min_x:.3f} Y{bounds.min_y:.3f}",
-            f"M3 S{OUTLINE_SCAN_POWER_S}",
+            f"S{OUTLINE_SCAN_POWER_S}",
         ]
         for _ in range(OUTLINE_SCAN_LOOPS):
             lines.extend(
@@ -692,7 +696,7 @@ class GcodePage(QWidget):
                     f"G1 X{bounds.min_x:.3f} Y{bounds.min_y:.3f}",
                 ]
             )
-        lines.extend(("M5", "M30"))
+        lines.extend(("S0", "M5"))
         return "\n".join(lines) + "\n"
 
     @staticmethod

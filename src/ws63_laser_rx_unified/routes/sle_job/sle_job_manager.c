@@ -404,7 +404,7 @@ static int job_exec_task(void *arg)
                 g_exec_active = false;
                 return 0;
             }
-            osal_yield();
+            osal_msleep(1);
             continue;
         }
         wait_start_ms = 0;
@@ -455,9 +455,20 @@ static int job_exec_task(void *arg)
         g_state = SLE_JOB_STATE_IDLE;
         int32_t x_um = (int32_t)(sle_job_motion_executor_get_x() * 1000.0);
         int32_t y_um = (int32_t)(sle_job_motion_executor_get_y() * 1000.0);
-        osal_printk("[JOB_EXEC] done job=%u lines=%u x_um=%d y_um=%d\r\n",
+        osal_printk("[JOB_EXEC] done job=%u lines=%u x_um=%d y_um=%d "
+                    "seg=%lu short=%lu late=%lu missed=%lu max_late_us=%lu "
+                    "q=%u min_mark_us=%u sample_us=%u profile=%u\r\n",
                     (unsigned int)sle_job_cache_job_id(), (unsigned int)g_executed_lines,
-                    (int)x_um, (int)y_um);
+                    (int)x_um, (int)y_um,
+                    sle_job_motion_executor_motion_segment_count(),
+                    sle_job_motion_executor_short_segment_count(),
+                    sle_job_motion_executor_late_sample_count(),
+                    sle_job_motion_executor_missed_sample_count(),
+                    sle_job_motion_executor_max_sample_late_us(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)SLE_JOB_MOTION_MIN_MARK_SEGMENT_US,
+                    (unsigned int)SLE_JOB_MOTION_SAMPLE_PERIOD_US,
+                    (unsigned int)SLE_JOB_MOTION_SPEED_PROFILE);
         sle_job_cache_clear();
     }
     g_exec_active = false;

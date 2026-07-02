@@ -46,18 +46,13 @@ void panel_page_body_setup(lv_obj_t *body, int32_t row_gap)
     lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(body, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_ACTIVE);
-    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE |
-                          LV_OBJ_FLAG_SCROLL_ELASTIC |
-                          LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLL_ELASTIC |
+                             LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_set_style_pad_hor(body, 0, 0);
     lv_obj_set_style_pad_ver(body, 4, 0);
     lv_obj_set_style_pad_gap(body, row_gap, 0);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(body, 0, 0);
-
-    lv_obj_set_style_width(body, 3, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_color(body, COLOR_LASER_BLUE, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(body, LV_OPA_60, LV_PART_SCROLLBAR);
-    lv_obj_set_style_radius(body, 2, LV_PART_SCROLLBAR);
 }

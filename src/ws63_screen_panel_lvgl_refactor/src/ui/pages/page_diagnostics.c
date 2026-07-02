@@ -26,10 +26,19 @@ static lv_obj_t *g_lbl_focus;
 static lv_obj_t *g_lbl_laser;
 static lv_obj_t *g_lbl_last_error;
 static lv_obj_t *g_lbl_seq;
+static uint32_t g_rendered_seq = UINT32_MAX;
+
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
 
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[DIAG] back -> home\r\n");
     ui_manager_switch_page(PAGE_HOME);
 }
 
@@ -66,6 +75,8 @@ static lv_obj_t *create_info_row(lv_obj_t *parent, const char *label, const char
 
 void page_diagnostics_create(lv_obj_t *parent)
 {
+    g_rendered_seq = UINT32_MAX;
+
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_screen, 0);
@@ -100,6 +111,7 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "系统诊断");
@@ -128,6 +140,7 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(mode_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(mode_lbl, COLOR_LASER_GREEN, 0);
     lv_obj_center(mode_lbl);
+    bind_click(mode_lbl, mode_toggle_cb, NULL);
 
     /* Body */
     lv_obj_t *body = lv_obj_create(scr);
@@ -198,10 +211,9 @@ void page_diagnostics_create(lv_obj_t *parent)
 
 void page_diagnostics_update(void)
 {
-    static uint32_t s_rendered_seq = UINT32_MAX;
     char buf[32];
 
-    if (s_rendered_seq == g_model.seq) {
+    if (g_rendered_seq == g_model.seq) {
         return;
     }
 
@@ -251,5 +263,5 @@ void page_diagnostics_update(void)
         COLOR_LASER_RED : COLOR_TEXT_LIGHT, 0);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.seq);
     lv_label_set_text(g_lbl_seq, buf);
-    s_rendered_seq = g_model.seq;
+    g_rendered_seq = g_model.seq;
 }

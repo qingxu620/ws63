@@ -14,9 +14,17 @@ static lv_obj_t *g_lbl_brightness_val;
 static uint8_t g_pending_brightness = 80U;
 static uint8_t g_applied_brightness = 80U;
 
+static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, user_data);
+}
+
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[SETTINGS] back -> home\r\n");
     ui_manager_switch_page(PAGE_HOME);
 }
 
@@ -58,15 +66,10 @@ static void brightness_cb(lv_event_t *e)
     }
 }
 
-static void sound_btn_cb(lv_event_t *e)
-{
-    (void)e;
-    ui_manager_switch_page(PAGE_ALERT_SOUND);
-}
-
 static void file_btn_cb(lv_event_t *e)
 {
     (void)e;
+    osal_printk("[SETTINGS] file -> file browser\r\n");
     ui_manager_switch_page(PAGE_FILE_BROWSER);
 }
 
@@ -85,6 +88,7 @@ static lv_obj_t *create_nav_btn(lv_obj_t *parent, const char *symbol,
     lv_obj_t *row = lv_obj_create(btn);
     lv_obj_set_size(row, 270, 24);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    bind_click(row, cb, NULL);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
@@ -95,12 +99,14 @@ static lv_obj_t *create_nav_btn(lv_obj_t *parent, const char *symbol,
     lv_label_set_text_fmt(lbl, "%s %s", symbol, label);
     lv_obj_set_style_text_font(lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl, accent, 0);
+    bind_click(lbl, cb, NULL);
 
     lv_obj_t *arrow = lv_label_create(row);
     lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
     lv_obj_set_style_text_color(arrow, COLOR_TEXT_MUTED, 0);
+    bind_click(arrow, cb, NULL);
 
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    bind_click(btn, cb, NULL);
     return btn;
 }
 
@@ -140,6 +146,7 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(back_lbl, COLOR_TEXT_BRIGHT, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "设置");
@@ -196,9 +203,7 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_slider_brightness, brightness_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(g_slider_brightness, brightness_cb, LV_EVENT_PRESS_LOST, NULL);
 
-    /* Sound navigation button */
-    create_nav_btn(body, LV_SYMBOL_DIRECTORY, "TF文件管理", COLOR_LASER_BLUE, file_btn_cb);
-    create_nav_btn(body, LV_SYMBOL_VOLUME_MAX, "提示音", COLOR_LASER_GREEN, sound_btn_cb);
+    create_nav_btn(body, LV_SYMBOL_DIRECTORY, "SD任务", COLOR_LASER_BLUE, file_btn_cb);
 
     /* About card */
     lv_obj_t *about_card = lv_obj_create(body);
