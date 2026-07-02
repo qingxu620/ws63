@@ -236,7 +236,7 @@ For `src/ws63_laser_rx_unified/`:
    python3 build.py -c ws63-liteos-app -ninja -j24
    ```
 
-   For normal TX/RX firmware builds, prefer `./scripts/build_sle_job_firmwares.sh --both` because it builds and archives TX/RX outputs separately. Use raw `build.py` only for menuconfig or low-level SDK debugging.
+   For normal TX/RX firmware builds, prefer `./scripts/build_sle_job_firmwares.sh --both` because it builds TX, then builds and archives unified RX through `scripts/build_rx_unified_firmware.sh`. Use raw `build.py` only for menuconfig or low-level SDK debugging.
 
    For screen firmware builds, prefer `./scripts/build_screen_firmware.sh` because it switches to the correct config (`CONFIG_ENABLE_LVGL_SAMPLE=y`, `CONFIG_ENABLE_LVGL_PANEL=y`, or `CONFIG_ENABLE_SCREEN_SAMPLE=y`), disables all competing samples, builds, and archives the output. Use raw `build.py` only for menuconfig or low-level SDK debugging.
 
@@ -310,25 +310,36 @@ python main.py
 - `logs/` 目录不同步、不覆盖、不删除；
 - Host 源码在 WSL2 中修改，实际运行在 Win11。
 
-### 2. TX/RX 固件一键编译与归档脚本
+### 2. TX + Unified RX 固件一键编译与归档脚本
 
 **路径：** `/root/fbb_ws63/scripts/build_sle_job_firmwares.sh`
 
-**用途：** 自动切换 TX/RX 配置，串行编译，且每次编译后立即归档到 `fwstage`，避免唯一 `ws63-liteos-app_all.fwpkg` 产物被下一次编译覆盖。
+**用途：** 自动编译 TX，并在默认 `--both` 模式下继续调用 `scripts/build_rx_unified_firmware.sh` 编译 unified RX。每次编译后立即归档到 `fwstage`，避免唯一 `ws63-liteos-app_all.fwpkg` 产物被下一次编译覆盖。
+
+**命名规则：** 从现在开始，文档、脚本提示和烧录说明里的 **RX** 只指 unified RX 固件：
+
+```text
+/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg
+```
+
+旧 `src/ws63_laser_sle_job/receiver/` standalone receiver 只能称为 **legacy standalone SLE receiver**，不得再简称为 RX，也不得归档为 `ws63-liteos-app_rx_all.fwpkg`。
 
 **使用命令：**
 
 ```bash
 cd /root/fbb_ws63
 
-# 编译 TX + RX（默认）
+# 编译 TX + unified RX（默认）
 ./scripts/build_sle_job_firmwares.sh --both
 
 # 只编译 TX
 ./scripts/build_sle_job_firmwares.sh --tx-only
 
-# 只编译 RX
-./scripts/build_sle_job_firmwares.sh --rx-only
+# 单独编译 unified RX
+./scripts/build_rx_unified_firmware.sh
+
+# 只在历史对比测试时编译旧 standalone SLE receiver
+./scripts/build_sle_job_firmwares.sh --legacy-receiver-only
 ```
 
 **归档目录：**
@@ -341,7 +352,7 @@ cd /root/fbb_ws63
 
 ```text
 /root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_tx_all.fwpkg
-/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_all.fwpkg
+/root/fbb_ws63/src/output/ws63/fwstage/latest/ws63-liteos-app_rx_unified_all.fwpkg
 ```
 
 **关键规则：**
@@ -349,7 +360,8 @@ cd /root/fbb_ws63
 - `src/output/ws63/fwpkg/ws63-liteos-app/ws63-liteos-app_all.fwpkg` 是唯一临时产物；
 - 多固件构建必须串行执行；
 - 每个功能固件编译成功后必须立即复制到 `fwstage/latest/`；
-- 归档文件必须按功能命名，例如 `tx`、`rx`、`screen`，不要直接依赖 raw fwpkg 目录里的文件。
+- 归档文件必须按功能命名，例如 `tx`、`rx_unified`、`screen`，不要直接依赖 raw fwpkg 目录里的文件。
+- 禁止生成、推荐、烧录或文档化 `ws63-liteos-app_rx_all.fwpkg` 作为 RX 固件；如确实需要历史 standalone receiver，只能使用 `ws63-liteos-app_sle_receiver_legacy_all.fwpkg`。
 - 脚本会自动关闭所有竞争 sample（`LASER_RX_UNIFIED`、`SCREEN_SAMPLE`、`LVGL_SAMPLE` 等），避免配置残留导致编译出错误固件。
 
 ### 3. 屏幕固件编译与归档脚本
@@ -394,9 +406,9 @@ cd /root/fbb_ws63
 
 - BurnTool 在 Win11 手动使用，不自动调用。
 - `ws63-liteos-app_tx_all.fwpkg` 烧录到 TX 板。
-- `ws63-liteos-app_rx_all.fwpkg` 烧录到 RX 板。
+- `ws63-liteos-app_rx_unified_all.fwpkg` 烧录到 RX 板。
 - `ws63-liteos-app_screen_all.fwpkg` 烧录到屏幕节点板。
-- `ws63-liteos-app_rx_unified_all.fwpkg` 烧录到统一 RX 板。
+- `ws63-liteos-app_sle_receiver_legacy_all.fwpkg` 只允许用于历史 standalone SLE receiver 对比测试，不作为产品 RX 烧录包。
 
 ### 5. Unified RX 固件编译与归档规则
 
@@ -436,12 +448,12 @@ vim /root/fbb_ws63/src/ws63_laser_host_ui/main.py
 # 2. WSL2 同步 Host 到 Win11 桌面
 ./scripts/sync_host_to_win.sh
 
-# 3. WSL2 编译 TX/RX 固件
+# 3. WSL2 编译 TX + unified RX 固件
 ./scripts/build_sle_job_firmwares.sh --both
 
 # 4. Win11 烧录固件（手动 BurnTool）
 #    TX: \\wsl.localhost\Ubuntu\root\fbb_ws63\src\output\ws63\fwstage\latest\ws63-liteos-app_tx_all.fwpkg
-#    RX: \\wsl.localhost\Ubuntu\root\fbb_ws63\src\output\ws63\fwstage\latest\ws63-liteos-app_rx_all.fwpkg
+#    RX: \\wsl.localhost\Ubuntu\root\fbb_ws63\src\output\ws63\fwstage\latest\ws63-liteos-app_rx_unified_all.fwpkg
 
 # 5. Win11 启动 Host 并测试
 cd /d C:\Users\ZKX\OneDrive\Desktop\ws63_laser_host_ui

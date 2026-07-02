@@ -24,6 +24,7 @@
 #define TX_PAYLOAD_BUF_SIZE SLE_JOB_PACKET_MAX_PAYLOAD
 #define TX_DATA_RX_LOG_STEP 32U
 #define TX_DATA_MODE_TIMEOUT_TICKS 5000U
+#define TX_FIRMWARE_PACKAGE "ws63-liteos-app_tx_all.fwpkg"
 
 _Static_assert(sizeof(job_data_payload_t) + JOB_TX_DATA_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
                "JOB_TX_DATA_CHUNK_MAX too large for SLE payload");
@@ -723,6 +724,10 @@ static int sle_init_task(void *arg)
 
 static void laser_sle_job_tx_entry(void)
 {
+    osal_printk("[FW_ID] board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u uart=%u\r\n",
+                TX_FIRMWARE_PACKAGE,
+                (unsigned int)JOB_TX_DATA_CHUNK_MAX,
+                (unsigned int)UART_BAUD_RATE);
     if (osal_sem_init(&g_ack_sem, 0) == OSAL_SUCCESS) {
         g_ack_sem_ready = true;
     } else {
@@ -731,6 +736,10 @@ static void laser_sle_job_tx_entry(void)
     if (job_uart_init() != ERRCODE_SUCC) {
         return;
     }
+    host_sendf("@FW board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u uart=%u\r\n",
+               TX_FIRMWARE_PACKAGE,
+               (unsigned int)JOB_TX_DATA_CHUNK_MAX,
+               (unsigned int)UART_BAUD_RATE);
     create_task("job_uart_rx", uart_rx_task, TASK_STACK_SIZE_DEFAULT, TASK_PRIO_JOB_UART);
     create_task("job_sle_init", sle_init_task, TASK_STACK_SIZE_SLE, TASK_PRIO_SLE);
 }

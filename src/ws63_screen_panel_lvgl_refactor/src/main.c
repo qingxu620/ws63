@@ -30,6 +30,7 @@
 #define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
 #define PANEL_FAKE_PROGRESS_PERIOD_TICKS (100 / LVGL_HANDLER_MS)
 #define PANEL_JOB_TIME_PERIOD_TICKS (1000 / LVGL_HANDLER_MS)
+#define SCREEN_FIRMWARE_PACKAGE "ws63-liteos-app_screen_all.fwpkg"
 
 static timer_handle_t g_tick_timer = NULL;
 
@@ -43,6 +44,9 @@ static void lv_tick_timer_cb(uintptr_t data)
 static int panel_task(void *arg)
 {
     (void)arg;
+
+    osal_printk("[FW_ID] board=SCREEN firmware=%s app=ws63_screen_panel_lvgl_refactor role=msp3223-panel-offline-sender lcd=ILI9341 touch=FT6336 sd=enabled\r\n",
+                SCREEN_FIRMWARE_PACKAGE);
 
     spi_bus_park_pins_for_boot();
     osal_msleep(PANEL_POWER_STABLE_MS);
@@ -154,6 +158,9 @@ static int panel_task(void *arg)
 
 static void panel_entry(void)
 {
+    osal_printk("[FW_ID] board=SCREEN firmware=%s app=ws63_screen_panel_lvgl_refactor role=msp3223-panel-offline-sender\r\n",
+                SCREEN_FIRMWARE_PACKAGE);
+
     errcode_t ret = task_create("panel_task", panel_task, NULL,
                                 LVGL_TASK_STACK_SIZE, LVGL_TASK_PRIORITY);
     if (ret != ERRCODE_SUCC) {

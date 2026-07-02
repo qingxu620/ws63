@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# WS63 SLE Job TX/RX Firmware Build & Archive Script
+# WS63 SLE Job TX + Unified RX Firmware Build & Archive Script
 # =============================================================================
 
 ROOT="/root/fbb_ws63"
@@ -18,14 +18,23 @@ BUILD_CMD="python3 build.py -c ws63-liteos-app -ninja -j24"
 BUILD_TARGET="both"
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --both)    BUILD_TARGET="both"; shift ;;
-        --tx-only) BUILD_TARGET="tx";   shift ;;
-        --rx-only) BUILD_TARGET="rx";   shift ;;
+        --both)                 BUILD_TARGET="both";            shift ;;
+        --tx-only)              BUILD_TARGET="tx";              shift ;;
+        --legacy-receiver-only) BUILD_TARGET="legacy_receiver"; shift ;;
+        --with-legacy-receiver) BUILD_TARGET="tx_legacy";       shift ;;
+        --rx-only)
+            echo "ERROR: --rx-only is retired. RX now means unified RX; use scripts/build_rx_unified_firmware.sh" >&2
+            exit 1
+            ;;
         -h|--help)
-            echo "Usage: $0 [--both|--tx-only|--rx-only]"
-            echo "  --both      Build TX then RX (default)"
-            echo "  --tx-only   Build TX only"
-            echo "  --rx-only   Build RX only"
+            echo "Usage: $0 [--both|--tx-only|--legacy-receiver-only|--with-legacy-receiver]"
+            echo "  --both                  Build TX, then build unified RX via build_rx_unified_firmware.sh (default)"
+            echo "  --tx-only               Build TX only"
+            echo "  --legacy-receiver-only  Build old standalone SLE receiver as a legacy test artifact"
+            echo "  --with-legacy-receiver  Build TX and old standalone SLE receiver legacy artifact"
+            echo ""
+            echo "RX now means ws63-liteos-app_rx_unified_all.fwpkg."
+            echo "This script never writes ws63-liteos-app_rx_all.fwpkg."
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -99,8 +108,8 @@ switch_to_tx() {
     verify_tx_config
 }
 
-switch_to_rx() {
-    log "Switching config to RX"
+switch_to_legacy_receiver() {
+    log "Switching config to legacy standalone SLE receiver"
     disable_all_samples
     set_config_y CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE
     sed -i 's/^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$/# CONFIG_LASER_SLE_JOB_TRANSMITTER is not set/' "$CONFIG"
@@ -111,7 +120,7 @@ switch_to_rx() {
     if ! grep -q '^CONFIG_LASER_SLE_JOB_RECEIVER=y$' "$CONFIG"; then
         sed -i '/^CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=y$/a CONFIG_LASER_SLE_JOB_RECEIVER=y' "$CONFIG"
     fi
-    verify_rx_config
+    verify_legacy_receiver_config
 }
 
 verify_tx_config() {
@@ -128,22 +137,22 @@ verify_tx_config() {
     echo "  TX config OK: TRANSMITTER=y, RECEIVER=not set"
 }
 
-verify_rx_config() {
-    log "Verifying RX config"
+verify_legacy_receiver_config() {
+    log "Verifying legacy standalone SLE receiver config"
     local tx_on rx_on
     tx_on=$(grep -c '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG" || true)
     rx_on=$(grep -c '^CONFIG_LASER_SLE_JOB_RECEIVER=y$' "$CONFIG" || true)
     if [[ "$rx_on" -ne 1 ]]; then
-        err "RX config verification failed: CONFIG_LASER_SLE_JOB_RECEIVER=y count=$rx_on (expected 1)"
+        err "Legacy receiver config verification failed: CONFIG_LASER_SLE_JOB_RECEIVER=y count=$rx_on (expected 1)"
     fi
     if [[ "$tx_on" -ne 0 ]]; then
-        err "RX config verification failed: CONFIG_LASER_SLE_JOB_TRANSMITTER=y count=$tx_on (expected 0)"
+        err "Legacy receiver config verification failed: CONFIG_LASER_SLE_JOB_TRANSMITTER=y count=$tx_on (expected 0)"
     fi
-    echo "  RX config OK: RECEIVER=y, TRANSMITTER=not set"
+    echo "  Legacy receiver config OK: RECEIVER=y, TRANSMITTER=not set"
 }
 
 do_build() {
-    local role=$1  # tx or rx
+    local role=$1  # tx or legacy_receiver
     log "Building ${role^^} firmware"
 
     local build_py
@@ -165,11 +174,17 @@ do_build() {
 }
 
 archive() {
-    local role=$1  # tx or rx
+    local role=$1  # tx or legacy_receiver
     local ts_dir="${STAGE_DIR}/${TIMESTAMP}"
     local latest_dir="${STAGE_DIR}/latest"
-    local dest_name="ws63-liteos-app_${role}_all.fwpkg"
+    local dest_name
     local src="${FWPKG_DIR}/${FWPKG_FILE}"
+
+    case "$role" in
+        tx) dest_name="ws63-liteos-app_tx_all.fwpkg" ;;
+        legacy_receiver) dest_name="ws63-liteos-app_sle_receiver_legacy_all.fwpkg" ;;
+        *) err "Unknown archive role: $role" ;;
+    esac
 
     mkdir -p "$ts_dir" "$latest_dir"
 
@@ -183,13 +198,14 @@ archive() {
 generate_manifest() {
     local dir=$1
     local manifest="${dir}/manifest.txt"
-    local git_hash git_status tx_fw rx_fw
+    local git_hash git_status tx_fw legacy_rx_fw unified_rx_fw
 
     git_hash=$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     git_status=$(cd "$ROOT" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 
     tx_fw="${dir}/ws63-liteos-app_tx_all.fwpkg"
-    rx_fw="${dir}/ws63-liteos-app_rx_all.fwpkg"
+    legacy_rx_fw="${dir}/ws63-liteos-app_sle_receiver_legacy_all.fwpkg"
+    unified_rx_fw="${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg"
 
     local diag_log chunk_max
     diag_log=$(grep '^#define JOB_DIAG_LOG ' "${ROOT}/src/ws63_laser_sle_job/common/config.h" | awk '{print $3}' || echo "unknown")
@@ -207,7 +223,11 @@ TX Config:
   CONFIG_LASER_SLE_JOB_TRANSMITTER=y
   CONFIG_LASER_SLE_JOB_RECEIVER is not set
 
-RX Config:
+RX Naming:
+  RX means unified RX only: ws63-liteos-app_rx_unified_all.fwpkg
+  Old standalone SLE receiver is legacy: ws63-liteos-app_sle_receiver_legacy_all.fwpkg
+
+Legacy Standalone SLE Receiver Config:
   CONFIG_LASER_SLE_JOB_RECEIVER=y
   CONFIG_LASER_SLE_JOB_TRANSMITTER is not set
 
@@ -225,13 +245,27 @@ EOF
 
     cat >> "$manifest" <<EOF
 
-RX Firmware:
-  Path:   ${rx_fw}
+Unified RX Firmware:
+  Path:   ${unified_rx_fw}
 EOF
-    if [[ -f "$rx_fw" ]]; then
+    if [[ -f "$unified_rx_fw" ]]; then
         cat >> "$manifest" <<EOF
-  Size:   $(du -b "$rx_fw" | cut -f1) bytes ($(du -h "$rx_fw" | cut -f1))
-  SHA256: $(sha256sum "$rx_fw" | cut -d' ' -f1)
+  Size:   $(du -b "$unified_rx_fw" | cut -f1) bytes ($(du -h "$unified_rx_fw" | cut -f1))
+  SHA256: $(sha256sum "$unified_rx_fw" | cut -d' ' -f1)
+EOF
+    else
+        echo "  (not built by this manifest step; run scripts/build_rx_unified_firmware.sh)" >> "$manifest"
+    fi
+
+    cat >> "$manifest" <<EOF
+
+Legacy Standalone SLE Receiver Firmware:
+  Path:   ${legacy_rx_fw}
+EOF
+    if [[ -f "$legacy_rx_fw" ]]; then
+        cat >> "$manifest" <<EOF
+  Size:   $(du -b "$legacy_rx_fw" | cut -f1) bytes ($(du -h "$legacy_rx_fw" | cut -f1))
+  SHA256: $(sha256sum "$legacy_rx_fw" | cut -d' ' -f1)
 EOF
     else
         echo "  (not built)" >> "$manifest"
@@ -240,9 +274,14 @@ EOF
     echo "  Manifest: ${manifest}"
 }
 
+build_unified_rx() {
+    log "Building unified RX firmware"
+    "${ROOT}/scripts/build_rx_unified_firmware.sh"
+}
+
 # --- Main --------------------------------------------------------------------
 
-log "WS63 SLE Job Firmware Build"
+log "WS63 SLE Job TX + Unified RX Firmware Build"
 echo "  Target:    ${BUILD_TARGET}"
 echo "  Config:    ${CONFIG}"
 echo "  Timestamp: ${TIMESTAMP}"
@@ -256,10 +295,22 @@ case "$BUILD_TARGET" in
         generate_manifest "${STAGE_DIR}/${TIMESTAMP}"
         generate_manifest "${STAGE_DIR}/latest"
         ;;
-    rx)
-        switch_to_rx
-        do_build rx
-        archive rx
+    legacy_receiver)
+        switch_to_legacy_receiver
+        do_build legacy_receiver
+        archive legacy_receiver
+        generate_manifest "${STAGE_DIR}/${TIMESTAMP}"
+        generate_manifest "${STAGE_DIR}/latest"
+        ;;
+    tx_legacy)
+        switch_to_tx
+        do_build tx
+        archive tx
+
+        switch_to_legacy_receiver
+        do_build legacy_receiver
+        archive legacy_receiver
+
         generate_manifest "${STAGE_DIR}/${TIMESTAMP}"
         generate_manifest "${STAGE_DIR}/latest"
         ;;
@@ -267,12 +318,9 @@ case "$BUILD_TARGET" in
         switch_to_tx
         do_build tx
         archive tx
-
-        switch_to_rx
-        do_build rx
-        archive rx
-
         generate_manifest "${STAGE_DIR}/${TIMESTAMP}"
+        generate_manifest "${STAGE_DIR}/latest"
+        build_unified_rx
         generate_manifest "${STAGE_DIR}/latest"
         ;;
 esac
@@ -284,6 +332,9 @@ echo "TX firmware:"
 echo "  ${STAGE_DIR}/latest/ws63-liteos-app_tx_all.fwpkg"
 echo ""
 echo "RX firmware:"
-echo "  ${STAGE_DIR}/latest/ws63-liteos-app_rx_all.fwpkg"
+echo "  ${STAGE_DIR}/latest/ws63-liteos-app_rx_unified_all.fwpkg"
+echo ""
+echo "Legacy standalone SLE receiver firmware, only if explicitly requested:"
+echo "  ${STAGE_DIR}/latest/ws63-liteos-app_sle_receiver_legacy_all.fwpkg"
 echo ""
 echo "Use BurnTool on Windows to flash these two packages manually."
