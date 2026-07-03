@@ -4,6 +4,7 @@
  */
 #include "panel_offline_job.h"
 #include "panel_file_manager.h"
+#include "panel_job_proto.h"
 #include "panel_model.h"
 #include "panel_transport_sle.h"
 #include "task_manager.h"
@@ -51,20 +52,10 @@ static volatile bool g_wait_active;
 static volatile bool g_wait_got_ack;
 static volatile uint16_t g_wait_ack_seq;
 static volatile uint8_t g_wait_status;
-static uint16_t g_tx_seq = 1;
 static volatile bool g_busy;
 static volatile bool g_start_requested;
 static uint8_t g_pending_index;
 static uint8_t g_readahead_buf[PANEL_OFFLINE_READAHEAD_BYTES];
-
-static uint16_t next_seq(void)
-{
-    uint16_t seq = g_tx_seq++;
-    if (g_tx_seq == 0U) {
-        g_tx_seq = 1U;
-    }
-    return seq;
-}
 
 static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t fallback)
 {
@@ -117,7 +108,7 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
 {
     uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
     uint16_t packet_len = 0;
-    uint16_t seq = next_seq();
+    uint16_t seq = panel_job_proto_next_seq();
     uint16_t actual_payload_len = payload_len_for_type(type, payload, payload_len);
 
     if (!sle_packet_encode(type, 0, seq, payload, actual_payload_len,
@@ -132,15 +123,14 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         return ERRCODE_SLE_TIMEOUT;
     }
 
-    while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
-    }
-
     g_wait_ack_seq = seq;
-    g_wait_status = JOB_STATUS_INTERNAL_ERROR;
-    g_wait_got_ack = false;
     g_wait_active = true;
 
     for (uint32_t retry = 0; retry <= PANEL_OFFLINE_RETRY_MAX; retry++) {
+        while (g_ack_sem_ready && osal_sem_down_timeout(&g_ack_sem, 0) == OSAL_SUCCESS) {
+        }
+        g_wait_status = JOB_STATUS_INTERNAL_ERROR;
+        g_wait_got_ack = false;
         errcode_t ret = panel_transport_sle_send_rx_packet(packet, packet_len);
         if (ret == ERRCODE_SLE_SUCCESS &&
             osal_sem_down_timeout(&g_ack_sem, PANEL_OFFLINE_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
@@ -162,7 +152,7 @@ static errcode_t send_packet_no_ack(uint8_t type, const void *payload, uint16_t 
 {
     uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
     uint16_t packet_len = 0;
-    uint16_t seq = next_seq();
+    uint16_t seq = panel_job_proto_next_seq();
     if (!sle_packet_encode(type, 0, seq, payload, payload_len,
                            packet, sizeof(packet), &packet_len)) {
         return ERRCODE_FAIL;

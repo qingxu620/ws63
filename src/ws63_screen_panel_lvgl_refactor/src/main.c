@@ -15,6 +15,7 @@
 #include "service/panel_model.h"
 #include "service/panel_transport_sle.h"
 #include "service/panel_offline_job.h"
+#include "service/panel_rx_commands.h"
 #include "service/panel_file_manager.h"
 #include "ui/ui_manager.h"
 #include <stdbool.h>
@@ -86,6 +87,10 @@ static int panel_task(void *arg)
     ret = panel_offline_job_init();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[PANEL] offline job task start failed: 0x%x\r\n", ret);
+    }
+    ret = panel_rx_commands_init();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[PANEL] RX command task start failed: 0x%x\r\n", ret);
     }
 
     uint32_t tick_count = 0;

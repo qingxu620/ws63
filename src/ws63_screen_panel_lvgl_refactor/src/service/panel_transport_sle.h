@@ -20,6 +20,7 @@ errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len);
 
 typedef void (*panel_transport_rx_response_cb_t)(const uint8_t *data, uint16_t len);
 void panel_transport_sle_set_rx_response_cb(panel_transport_rx_response_cb_t cb);
+void panel_transport_sle_set_cmd_response_cb(panel_transport_rx_response_cb_t cb);
 
 #ifdef __cplusplus
 }

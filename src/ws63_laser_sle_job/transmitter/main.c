@@ -57,6 +57,7 @@ static uint16_t g_job_chunk_len = 0;
 static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
 static char g_line[TX_LINE_MAX];
 static uint16_t g_line_len = 0;
+static bool g_uart_control_frame_active = false;
 
 static void clear_local_job_state(void)
 {
@@ -71,6 +72,7 @@ static void clear_local_job_state(void)
     g_data_log_next = TX_DATA_RX_LOG_STEP;
     g_diag_data_count = 0;
     g_line_len = 0;
+    g_uart_control_frame_active = false;
 }
 
 static uint16_t next_seq(void)
@@ -107,12 +109,32 @@ static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t
     return fallback;
 }
 
+static bool tx_should_log_timing(uint8_t type, uint32_t data_index, uint32_t total_ms)
+{
+#if JOB_TX_TIMING_LOG
+    if (type != PKT_JOB_DATA) {
+        return true;
+    }
+    return data_index <= JOB_TX_TIMING_FIRST_PACKETS ||
+           (JOB_TX_TIMING_EVERY_PACKETS > 0U && (data_index % JOB_TX_TIMING_EVERY_PACKETS) == 0U) ||
+           total_ms >= JOB_TX_TIMING_SLOW_MS;
+#else
+    unused(type);
+    unused(data_index);
+    unused(total_ms);
+    return false;
+#endif
+}
+
 static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_t payload_len)
 {
     uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
     uint16_t packet_len = 0;
     uint16_t seq = next_seq();
     uint16_t actual_payload_len = payload_len_for_type(type, payload, payload_len);
+    uint32_t dbg_off = 0;
+    uint16_t dbg_dlen = 0;
+    uint32_t dbg_data_index = 0;
 
     if (!sle_packet_encode(type, 0, seq, payload, actual_payload_len,
                            packet, sizeof(packet), &packet_len)) {
@@ -128,13 +150,12 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     g_wait_active = true;
 
     {
-        uint32_t dbg_off = 0;
-        uint16_t dbg_dlen = 0;
         if (type == PKT_JOB_DATA && payload != NULL && payload_len >= sizeof(job_data_payload_t)) {
             const job_data_payload_t *dp = (const job_data_payload_t *)payload;
             dbg_off = dp->offset;
             dbg_dlen = dp->data_len;
             g_diag_data_count++;
+            dbg_data_index = g_diag_data_count;
         }
         if (JOB_DIAG_LOG && g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA) {
             osal_printk("[TX_SEND] t=%u seq=%u type=0x%02x off=%u dlen=%u plen=%u\r\n",
@@ -181,11 +202,12 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         }
         uint32_t t_send = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = sle_job_client_send_packet(packet, packet_len);
+        uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
         if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ret != ERRCODE_SLE_SUCCESS)) {
             osal_printk("[TX_CFM] t=%u seq=%u ret=0x%x cost=%u\r\n",
                         (unsigned int)uapi_systick_get_ms(), seq,
                         (unsigned int)ret,
-                        (unsigned int)((uint32_t)uapi_systick_get_ms() - t_send));
+                        (unsigned int)send_ms);
         }
         if (JOB_DIAG_LOG) {
             osal_printk("[JOB_TX_FRAME] type=0x%02x seq=%u len=%u try=%u ret=0x%x\r\n",
@@ -196,6 +218,17 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
             g_wait_start_ms = t_ack;
             if (osal_sem_down_timeout(&g_ack_sem, JOB_TX_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
                 g_wait_got_ack) {
+                uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
+                uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+                if (tx_should_log_timing(type, dbg_data_index, total_ms)) {
+                    osal_printk("[TX_TIMING] type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                                "send_ms=%u ack_ms=%u total_ms=%u retry=%u status=%u\r\n",
+                                type, seq, (unsigned int)dbg_data_index,
+                                (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                                (unsigned int)send_ms, (unsigned int)ack_ms,
+                                (unsigned int)total_ms, (unsigned int)retry,
+                                (unsigned int)g_wait_status);
+                }
                 if (g_wait_status == JOB_STATUS_OK) {
                     g_wait_active = false;
                     g_wait_ack_seq = 0;
@@ -446,10 +479,50 @@ static void handle_data_byte(uint8_t ch)
     }
 }
 
-static void send_simple_control(uint8_t type)
+static errcode_t send_simple_control(uint8_t type)
 {
-    if (send_packet_wait_ack(type, NULL, 0) == ERRCODE_SUCC) {
+    errcode_t ret = send_packet_wait_ack(type, NULL, 0);
+    if (ret == ERRCODE_SUCC) {
         host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)type);
+    }
+    return ret;
+}
+
+static void send_focus_off_control(void)
+{
+    focus_ctrl_payload_t fp = {0};
+    fp.on = 0;
+    fp.power = 0;
+    if (send_packet_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp)) == ERRCODE_SUCC) {
+        host_sendf("@OK focus_off\r\n");
+    } else {
+        host_sendf("@NACK focus_reject\r\n");
+    }
+}
+
+static void handle_uart_control_frame(uint8_t code)
+{
+    switch (code) {
+        case JOB_TX_UART_CONTROL_EXEC_STOP:
+            (void)send_simple_control(PKT_EXEC_STOP);
+            return;
+        case JOB_TX_UART_CONTROL_EXEC_RESUME:
+            (void)send_simple_control(PKT_EXEC_RESUME);
+            return;
+        case JOB_TX_UART_CONTROL_ABORT:
+            if (abort_rx_and_clear_transaction("uart-control-abort") == ERRCODE_SUCC) {
+                host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)PKT_JOB_ABORT);
+            } else {
+                host_sendf("@ERR abort_failed rx=unconfirmed\r\n");
+            }
+            return;
+        case JOB_TX_UART_CONTROL_FOCUS_OFF:
+            send_focus_off_control();
+            return;
+        default:
+            osal_printk("[JOB_TX_CTRL_FRAME] unsupported code=0x%02x\r\n", code);
+            host_sendf("@ERR bad_control_frame\r\n");
+            return;
     }
 }
 
@@ -546,6 +619,10 @@ static void handle_command_line(char *line)
         send_simple_control(PKT_EXEC_STOP);
         return;
     }
+    if (strcmp(line, "@EXEC_RESUME") == 0) {
+        send_simple_control(PKT_EXEC_RESUME);
+        return;
+    }
     if (strcmp(line, "@ABORT") == 0) {
         if (abort_rx_and_clear_transaction("host-abort") == ERRCODE_SUCC) {
             host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)PKT_JOB_ABORT);
@@ -598,14 +675,7 @@ static void handle_command_line(char *line)
         return;
     }
     if (strcmp(line, "@FOCUS_OFF") == 0) {
-        focus_ctrl_payload_t fp = {0};
-        fp.on = 0;
-        fp.power = 0;
-        if (send_packet_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp)) == ERRCODE_SUCC) {
-            host_sendf("@OK focus_off\r\n");
-        } else {
-            host_sendf("@NACK focus_reject\r\n");
-        }
+        send_focus_off_control();
         return;
     }
 
@@ -666,6 +736,17 @@ static int uart_rx_task(void *arg)
         /* ASCII CAN is an out-of-band transaction reset in every parser mode. */
         if (ch == JOB_TX_UART_RESYNC_BYTE) {
             handle_uart_resync();
+            continue;
+        }
+
+        if (g_uart_control_frame_active) {
+            g_uart_control_frame_active = false;
+            handle_uart_control_frame(ch);
+            continue;
+        }
+
+        if (ch == JOB_TX_UART_CONTROL_BYTE) {
+            g_uart_control_frame_active = true;
             continue;
         }
 

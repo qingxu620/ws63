@@ -67,13 +67,17 @@
 **States:**
 | State | Arc | Info Panel | Action Buttons |
 |-------|-----|------------|----------------|
-| IDLE | Hidden | "Ready" | FOCUS, Settings |
-| RECEIVING | Hidden + spinner | "Downloading..." | ABORT |
-| READY | Hidden | Job summary | START, ABORT, FOCUS |
-| EXECUTING | Animated progress | Live stats | STOP only |
-| DONE | 100% green | Summary + time | ABORT (reset), FOCUS |
-| ERROR | Red pulse | Error message | ABORT, Settings |
-| LINK_LOST | Hidden | "SLE LOST" | None (alert mode) |
+| 空闲 | 0% | 待机模式 | FOCUS_OFF, Settings |
+| 数据传输中 | Download % | 正在下载任务数据 | 暂停, 放弃, FOCUS_OFF |
+| 任务就绪 | 0% | 代码已读取并校验 | 执行, 放弃, FOCUS_OFF |
+| 正在执行 | Live % / spinner | 等待 RX 完成 | 暂停, 放弃, FOCUS_OFF |
+| 执行完成 | 100% green | 任务完成，控制已释放 | 放弃/复位, FOCUS_OFF |
+| 错误 | Red pulse | 警报/故障 | 放弃, Settings |
+| 链路断开 | Hidden | SLE/RX 链路断开 | alert mode |
+
+State names intentionally mirror `src/ws63_laser_host_ui/app/state_models.py`
+and `ui/pages/job_page.py`; Screen-specific offline upload still maps into the
+same visible vocabulary instead of inventing a separate state language.
 
 **Navigation:**
 - Settings icon → Settings page

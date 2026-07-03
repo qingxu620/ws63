@@ -10,7 +10,9 @@ from transports.sle_tx_transport import (
     JOB_DATA_CHUNK_SIZE,
     JOB_MAX_SIZE,
     SleJobSerialClient,
+    TX_UART_CONTROL_BYTE,
     TX_UART_RESYNC_BYTE,
+    UploadInterrupted,
     WaitResult,
     parse_rx_status,
     plan_safe_preroll,
@@ -75,6 +77,23 @@ class StatusParsingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "0x18"):
             client.upload_job(1, b"G1 X1\x18Y1\n", 1.0)
+
+    def test_upload_rejects_reserved_uart_control_byte(self) -> None:
+        client = SleJobSerialClient(lambda channel, message: None)
+
+        with self.assertRaisesRegex(RuntimeError, "0x19"):
+            client.upload_job(1, b"G1 X1\x19Y1\n", 1.0)
+
+    def test_wait_for_can_ignore_stale_unknown_command(self) -> None:
+        client = SleJobSerialClient(lambda channel, message: None)
+        client._lines.put("@ERR unknown_command")
+        client._lines.put("@OK resync rx=aborted")
+
+        result = client.wait_for(
+            "@OK resync rx=aborted", 1.0, ignore_unknown_command=True
+        )
+
+        self.assertEqual(result.line, "@OK resync rx=aborted")
 
     def test_preroll_plan_uses_host_side_safe_line(self) -> None:
         gcode = (b"G1 X1\n" * 700) + b"S0\n" + (b"G1 X2\n" * 100)
@@ -168,6 +187,160 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(waits[1], ("@DATA_READY job=1", 8.0))
         self.assertEqual(waits[2][1], DATA_ACK_TIMEOUT_MIN_S)
         self.assertEqual(waits[3], ("@JOB_READY job=1", JOB_COMMIT_TIMEOUT_MIN_S))
+
+    def test_priority_control_is_sent_between_data_chunks(self) -> None:
+        writes: list[bytes] = []
+        commands: list[str] = []
+        payload = b"A" * (JOB_DATA_CHUNK_SIZE * 2)
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def send_line(self, line: str) -> None:
+                commands.append(line)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK resync" in pattern:
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    return WaitResult("@DATA_READY job=1 size=428", 1)
+                if "@ACK type=4" in pattern:
+                    return WaitResult("@ACK type=4 seq=0 status=0", 1)
+                if f"offset={JOB_DATA_CHUNK_SIZE}" in pattern:
+                    self.request_priority_control("@ABORT", "@ACK type=4", 2.0)
+                    return WaitResult(
+                        f"@ACK type=2 seq=2 status=0 job=1 offset={JOB_DATA_CHUNK_SIZE} credit=1",
+                        1,
+                    )
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        with self.assertRaises(UploadInterrupted):
+            client.upload_job(1, payload, 2.0)
+
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(commands[0].startswith("@BEGIN 1 428 "))
+        self.assertEqual([len(item) for item in writes], [1, JOB_DATA_CHUNK_SIZE, 2])
+        self.assertEqual(writes[-1], bytes((TX_UART_CONTROL_BYTE, ord("A"))))
+
+    def test_upload_unknown_command_after_pause_points_to_old_tx_firmware(self) -> None:
+        payload = b"A" * JOB_DATA_CHUNK_SIZE
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                return None
+
+            def send_line(self, line: str) -> None:
+                return None
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK resync" in pattern:
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    return WaitResult("@DATA_READY job=1 size=214", 1)
+                if "@ACK type=2" in pattern:
+                    raise RuntimeError("收到错误响应: @ERR unknown_command")
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        with self.assertRaisesRegex(RuntimeError, "旧版.*data_mode"):
+            client.upload_job(1, payload, 2.0)
+
+    def test_pause_stops_upload_until_resume(self) -> None:
+        writes: list[bytes] = []
+        commands: list[str] = []
+        payload = b"A" * (JOB_DATA_CHUNK_SIZE * 2)
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def send_line(self, line: str) -> None:
+                commands.append(line)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK resync" in pattern:
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    return WaitResult("@DATA_READY job=1 size=428", 1)
+                if "@ACK type=19" in pattern:
+                    self.request_priority_control(
+                        "@EXEC_RESUME", "@ACK type=17", 2.0, interrupt_upload=False
+                    )
+                    return WaitResult("@ACK type=19 seq=0 status=0", 1)
+                if "@ACK type=17" in pattern:
+                    return WaitResult("@ACK type=17 seq=0 status=0", 1)
+                if f"offset={JOB_DATA_CHUNK_SIZE}" in pattern:
+                    self.request_priority_control(
+                        "@EXEC_STOP", "@ACK type=19", 2.0, interrupt_upload=False
+                    )
+                    return WaitResult(
+                        f"@ACK type=2 seq=2 status=0 job=1 offset={JOB_DATA_CHUNK_SIZE} credit=1",
+                        1,
+                    )
+                if f"offset={len(payload)}" in pattern:
+                    return WaitResult(
+                        f"@ACK type=2 seq=3 status=0 job=1 offset={len(payload)} credit=1",
+                        1,
+                    )
+                if "@JOB_READY" in pattern:
+                    return WaitResult("@JOB_READY job=1 size=428", 1)
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        client.upload_job(1, payload, 2.0)
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual([len(item) for item in writes], [1, JOB_DATA_CHUNK_SIZE, 2, 2, JOB_DATA_CHUNK_SIZE])
+        self.assertEqual(writes[2], bytes((TX_UART_CONTROL_BYTE, ord("S"))))
+        self.assertEqual(writes[3], bytes((TX_UART_CONTROL_BYTE, ord("R"))))
+
+    def test_resume_can_replace_unsent_pause_control(self) -> None:
+        writes: list[bytes] = []
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@ACK type=17" in pattern:
+                    return WaitResult("@ACK type=17 seq=0 status=0", 1)
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        self.assertTrue(client.request_priority_control("@EXEC_STOP", "@ACK type=19", 2.0, interrupt_upload=False))
+        self.assertTrue(client.request_priority_control("@EXEC_RESUME", "@ACK type=17", 2.0, interrupt_upload=False))
+
+        client._dispatch_priority_control_locked()
+
+        self.assertEqual(writes, [bytes((TX_UART_CONTROL_BYTE, ord("R")))])
+
+    def test_focus_off_replaces_unsent_resume_but_not_pause(self) -> None:
+        writes: list[bytes] = []
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK focus_off" in pattern:
+                    return WaitResult("@OK focus_off", 1)
+                if "@ACK type=19" in pattern:
+                    return WaitResult("@ACK type=19 seq=0 status=0", 1)
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        self.assertTrue(client.request_priority_control("@EXEC_RESUME", "@ACK type=17", 2.0, interrupt_upload=False))
+        self.assertTrue(client.request_priority_control("@FOCUS_OFF", "@OK focus_off", 2.0, interrupt_upload=False))
+        client._dispatch_priority_control_locked()
+        self.assertEqual(writes[-1], bytes((TX_UART_CONTROL_BYTE, ord("F"))))
+
+        client = FakeClient(lambda channel, message: None)
+        self.assertTrue(client.request_priority_control("@EXEC_STOP", "@ACK type=19", 2.0, interrupt_upload=False))
+        self.assertFalse(client.request_priority_control("@FOCUS_OFF", "@OK focus_off", 2.0, interrupt_upload=False))
+        client._dispatch_priority_control_locked()
+        self.assertEqual(writes[-1], bytes((TX_UART_CONTROL_BYTE, ord("S"))))
 
     def test_upload_resyncs_before_begin_and_after_failure(self) -> None:
         writes: list[bytes] = []

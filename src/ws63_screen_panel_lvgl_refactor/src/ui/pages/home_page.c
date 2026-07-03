@@ -15,6 +15,7 @@
 #include "../service/panel_file_manager.h"
 #include "../service/panel_model.h"
 #include "../service/panel_offline_job.h"
+#include "../service/panel_rx_commands.h"
 #include "soc_osal.h"
 #include <stdio.h>
 #include <string.h>
@@ -102,7 +103,8 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
-    lv_label_set_text(title, "WS63 激光面板");
+    lv_label_set_text(title, "● WS63 激光主控");
+    lv_obj_set_style_text_color(title, COLOR_LASER_BLUE, 0);
 
     lv_obj_t *spacer = lv_obj_create(bar);
     lv_obj_set_size(spacer, 1, 1);
@@ -136,7 +138,7 @@ static void create_status_bar(lv_obj_t *parent)
     g_lbl_sle = create_label(caps, PANEL_FONT_CN, COLOR_LASER_BLUE);
     lv_obj_set_width(g_lbl_sle, 36);
     lv_obj_set_style_text_align(g_lbl_sle, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(g_lbl_sle, "联机");
+    lv_label_set_text(g_lbl_sle, "SLE");
 }
 
 static void create_progress_block(lv_obj_t *parent)
@@ -149,16 +151,16 @@ static void create_progress_block(lv_obj_t *parent)
     lv_obj_t *progress_title = create_label(block, PANEL_FONT_CN, COLOR_TEXT_MUTED);
     lv_label_set_text(progress_title, "任务进度");
 
-    g_lbl_pct = create_label(block, &lv_font_montserrat_28, lv_color_white());
+    g_lbl_pct = create_label(block, &lv_font_montserrat_28, COLOR_TEXT_BRIGHT);
     lv_label_set_text(g_lbl_pct, "0%");
 
-    g_lbl_substate = create_label(block, PANEL_FONT_CN, lv_color_white());
-    lv_label_set_text(g_lbl_substate, "待机");
+    g_lbl_substate = create_label(block, PANEL_FONT_CN, COLOR_TEXT_MUTED);
+    lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
     lv_obj_set_width(g_lbl_substate, 100);
     lv_obj_set_style_text_align(g_lbl_substate, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(g_lbl_substate, LV_LABEL_LONG_CLIP);
 
-    g_lbl_state_badge = create_label(block, PANEL_FONT_CN, lv_color_white());
+    g_lbl_state_badge = create_label(block, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
     lv_label_set_text(g_lbl_state_badge, "无任务");
 }
 
@@ -213,7 +215,7 @@ static void create_info_block(lv_obj_t *parent)
     lv_obj_set_flex_align(safety_card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *safety_lbl = create_label(safety_card, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(safety_lbl, "激光状态");
+    lv_label_set_text(safety_lbl, "调焦/激光");
 
     g_lbl_safety_val = create_label(safety_card, PANEL_FONT_CN, COLOR_LASER_YELLOW);
     lv_label_set_text(g_lbl_safety_val, "已锁定");
@@ -287,21 +289,33 @@ static void btn_event_cb(lv_event_t *e)
             osal_printk("[PANEL_CMD] stop rejected: state=%d\r\n", g_model.state);
             break;
         }
-        panel_model_request_stop();
+        if (panel_rx_commands_request_exec_stop() == ERRCODE_SUCC) {
+            panel_model_request_stop();
+        } else {
+            osal_printk("[PANEL_CMD] stop queue failed\r\n");
+        }
         break;
     case 2:
         if (!perms.can_abort) {
             osal_printk("[PANEL_CMD] abort rejected: state=%d\r\n", g_model.state);
             break;
         }
-        panel_model_request_abort();
+        if (panel_rx_commands_request_abort() == ERRCODE_SUCC) {
+            panel_model_request_abort();
+        } else {
+            osal_printk("[PANEL_CMD] abort queue failed\r\n");
+        }
         break;
     case 3:
         if (!perms.can_focus_off) {
             osal_printk("[PANEL_CMD] focus_off rejected by UI state\r\n");
             break;
         }
-        panel_model_request_focus_off();
+        if (panel_rx_commands_request_focus_off() == ERRCODE_SUCC) {
+            panel_model_request_focus_off();
+        } else {
+            osal_printk("[PANEL_CMD] focus_off queue failed\r\n");
+        }
         break;
     case 4:
         osal_printk("[HOME] settings click -> settings\r\n");
@@ -350,19 +364,19 @@ static void create_action_bar(lv_obj_t *parent)
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_radius(bar, 0, 0);
 
-    g_btn_start = create_action_btn(bar, "启动", COLOR_LASER_GREEN, &g_lbl_start);
+    g_btn_start = create_action_btn(bar, "执行", COLOR_LASER_GREEN, &g_lbl_start);
     bind_click(g_btn_start, btn_event_cb, (void *)0);
     bind_click(g_lbl_start, btn_event_cb, (void *)0);
 
-    g_btn_stop = create_action_btn(bar, "停止", COLOR_LASER_RED, &g_lbl_stop);
+    g_btn_stop = create_action_btn(bar, "暂停", COLOR_LASER_ORANGE, &g_lbl_stop);
     bind_click(g_btn_stop, btn_event_cb, (void *)1);
     bind_click(g_lbl_stop, btn_event_cb, (void *)1);
 
-    g_btn_abort = create_action_btn(bar, "中止", COLOR_LASER_ORANGE, &g_lbl_abort);
+    g_btn_abort = create_action_btn(bar, "放弃", COLOR_LASER_RED, &g_lbl_abort);
     bind_click(g_btn_abort, btn_event_cb, (void *)2);
     bind_click(g_lbl_abort, btn_event_cb, (void *)2);
 
-    g_btn_focus = create_action_btn(bar, "调焦", COLOR_LASER_BLUE, &g_lbl_focus);
+    g_btn_focus = create_action_btn(bar, "关光", COLOR_LASER_BLUE, &g_lbl_focus);
     bind_click(g_btn_focus, btn_event_cb, (void *)3);
     bind_click(g_lbl_focus, btn_event_cb, (void *)3);
 
@@ -382,16 +396,16 @@ static void apply_state(void)
     switch (g_model.state) {
     case SYS_STATE_NO_JOB:
         lv_label_set_text(g_lbl_pct, "0%");
-        lv_label_set_text(g_lbl_state_badge, "无任务");
-        lv_obj_set_style_text_color(g_lbl_state_badge, lv_color_white(), 0);
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
         break;
 
     case SYS_STATE_BROWSING:
         lv_label_set_text(g_lbl_pct, "0%");
-        lv_label_set_text(g_lbl_substate, "暂无任务");
-        lv_label_set_text(g_lbl_state_badge, "暂无任务");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
@@ -403,8 +417,8 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "接收中");
-        lv_label_set_text(g_lbl_state_badge, "正在接收");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
@@ -416,8 +430,8 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "任务发送");
-        lv_label_set_text(g_lbl_state_badge, "发送中");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_BLUE, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
@@ -425,7 +439,7 @@ static void apply_state(void)
 
     case SYS_STATE_READY:
         lv_label_set_text(g_lbl_pct, "0%");
-        lv_label_set_text(g_lbl_state_badge, "就绪");
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_GREEN, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
@@ -437,8 +451,8 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "加工中");
-        lv_label_set_text(g_lbl_state_badge, "运行中");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_RED, 0);
         lv_label_set_text(g_lbl_safety_val,
             g_model.laser_output_active ? "激光中" : "关闭");
@@ -448,8 +462,8 @@ static void apply_state(void)
 
     case SYS_STATE_DONE:
         lv_label_set_text(g_lbl_pct, "100%");
-        lv_label_set_text(g_lbl_substate, "已完成");
-        lv_label_set_text(g_lbl_state_badge, "完成");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_GREEN, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
@@ -461,8 +475,8 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "停止中");
-        lv_label_set_text(g_lbl_state_badge, "STOP中");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
         lv_label_set_text(g_lbl_safety_val, "待执行");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
@@ -474,8 +488,8 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "中止中");
-        lv_label_set_text(g_lbl_state_badge, "ABORT中");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
         lv_label_set_text(g_lbl_safety_val, "待执行");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
@@ -487,17 +501,30 @@ static void apply_state(void)
             snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
             lv_label_set_text(g_lbl_pct, buf);
         }
-        lv_label_set_text(g_lbl_substate, "关光中");
-        lv_label_set_text(g_lbl_state_badge, "关光中");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
         lv_label_set_text(g_lbl_safety_val, "待执行");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_YELLOW, 0);
         break;
 
+    case SYS_STATE_TERMINATED:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_RED, 0);
+        lv_label_set_text(g_lbl_safety_val, "关闭");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
+        break;
+
     case SYS_STATE_ERROR:
         lv_label_set_text(g_lbl_pct, "0%");
-        lv_label_set_text(g_lbl_substate, "告警");
-        lv_label_set_text(g_lbl_state_badge, "错误");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_RED, 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_RED, 0);
@@ -506,8 +533,8 @@ static void apply_state(void)
 
     case SYS_STATE_LINK_LOST:
         lv_label_set_text(g_lbl_pct, "0%");
-        lv_label_set_text(g_lbl_substate, "链路断开");
-        lv_label_set_text(g_lbl_state_badge, "RX断开");
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_TEXT_MUTED, 0);
         lv_label_set_text(g_lbl_safety_val, "未知");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_TEXT_MUTED, 0);
@@ -538,7 +565,7 @@ static void apply_state(void)
         g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE :
         (g_model.sle_connected ? COLOR_LASER_BLUE : COLOR_TEXT_MUTED), 0);
     lv_label_set_text(g_lbl_sle,
-        g_model.view_mode == PANEL_VIEW_OFFLINE ? "离线" : "联机");
+        g_model.view_mode == PANEL_VIEW_OFFLINE ? "离线" : panel_model_mode_label(g_model.mode));
 
     const panel_file_entry_t *selected = panel_file_manager_get_selected();
     if (selected != NULL) {
@@ -559,9 +586,9 @@ static void apply_state(void)
     lv_obj_set_style_bg_opa(g_btn_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
 
-    lv_label_set_text(g_lbl_start, perms.can_start ? "启动" : "启动");
-    lv_label_set_text(g_lbl_stop, perms.requesting_stop ? "停止中" : "停止");
-    lv_label_set_text(g_lbl_abort, perms.requesting_abort ? "中止中" : "中止");
+    lv_label_set_text(g_lbl_start, perms.can_start ? "执行" : "执行");
+    lv_label_set_text(g_lbl_stop, perms.requesting_stop ? "暂停中" : "暂停");
+    lv_label_set_text(g_lbl_abort, perms.requesting_abort ? "取消中" : "放弃");
     if (perms.requesting_focus_off) {
         lv_label_set_text(g_lbl_focus, "关光中");
     } else if (g_model.focus_active) {

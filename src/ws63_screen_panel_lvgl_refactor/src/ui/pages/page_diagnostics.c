@@ -136,7 +136,7 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_add_event_cb(mode_btn, mode_toggle_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *mode_lbl = lv_label_create(mode_btn);
-    lv_label_set_text(mode_lbl, "Mode");
+    lv_label_set_text(mode_lbl, "视图");
     lv_obj_set_style_text_font(mode_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(mode_lbl, COLOR_LASER_GREEN, 0);
     lv_obj_center(mode_lbl);
@@ -175,15 +175,15 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_add_style(sle_card, &style_card, 0);
 
     lv_obj_t *sle_title = lv_label_create(sle_card);
-    lv_label_set_text(sle_title, "Task Owner");
+    lv_label_set_text(sle_title, "任务状态");
     lv_obj_set_style_text_font(sle_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(sle_title, COLOR_LASER_ORANGE, 0);
 
-    g_lbl_view = create_info_row(sle_card, "Screen视图", "--", COLOR_TEXT_LIGHT);
-    g_lbl_owner = create_info_row(sle_card, "Owner", "--", COLOR_TEXT_LIGHT);
-    g_lbl_mode = create_info_row(sle_card, "RX Mode", "--", COLOR_TEXT_LIGHT);
-    g_lbl_job_state = create_info_row(sle_card, "Job状态", "--", COLOR_TEXT_LIGHT);
-    g_lbl_job_id = create_info_row(sle_card, "Job ID", "--", COLOR_TEXT_LIGHT);
+    g_lbl_view = create_info_row(sle_card, "屏幕视图", "--", COLOR_TEXT_LIGHT);
+    g_lbl_owner = create_info_row(sle_card, "控制源", "--", COLOR_TEXT_LIGHT);
+    g_lbl_mode = create_info_row(sle_card, "通信模式", "--", COLOR_TEXT_LIGHT);
+    g_lbl_job_state = create_info_row(sle_card, "RX状态", "--", COLOR_TEXT_LIGHT);
+    g_lbl_job_id = create_info_row(sle_card, "任务ID", "--", COLOR_TEXT_LIGHT);
     g_lbl_progress = create_info_row(sle_card, "进度", "--", COLOR_TEXT_LIGHT);
     g_lbl_bytes = create_info_row(sle_card, "接收字节", "--", COLOR_TEXT_LIGHT);
     g_lbl_lines = create_info_row(sle_card, "执行行数", "--", COLOR_TEXT_LIGHT);
@@ -198,14 +198,14 @@ void page_diagnostics_create(lv_obj_t *parent)
     lv_obj_add_style(sys_card, &style_card, 0);
 
     lv_obj_t *sys_title = lv_label_create(sys_card);
-    lv_label_set_text(sys_title, "RX Status");
+    lv_label_set_text(sys_title, "RX 真相源");
     lv_obj_set_style_text_font(sys_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(sys_title, COLOR_LASER_YELLOW, 0);
 
-    g_lbl_cache = create_info_row(sys_card, "Cache剩余", "--", COLOR_TEXT_LIGHT);
-    g_lbl_focus = create_info_row(sys_card, "Focus", "--", COLOR_TEXT_LIGHT);
-    g_lbl_laser = create_info_row(sys_card, "Laser", "--", COLOR_TEXT_LIGHT);
-    g_lbl_last_error = create_info_row(sys_card, "Last error", "--", COLOR_TEXT_LIGHT);
+    g_lbl_cache = create_info_row(sys_card, "缓存剩余", "--", COLOR_TEXT_LIGHT);
+    g_lbl_focus = create_info_row(sys_card, "调焦", "--", COLOR_TEXT_LIGHT);
+    g_lbl_laser = create_info_row(sys_card, "激光输出", "--", COLOR_TEXT_LIGHT);
+    g_lbl_last_error = create_info_row(sys_card, "最近错误", "--", COLOR_TEXT_LIGHT);
     g_lbl_seq = create_info_row(sys_card, "PANEL seq", "--", COLOR_TEXT_LIGHT);
 }
 
@@ -230,12 +230,12 @@ void page_diagnostics_update(void)
     lv_obj_set_style_text_color(g_lbl_sle,
         g_model.sle_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
 
-    lv_label_set_text(g_lbl_view, panel_model_view_mode_text(g_model.view_mode));
+    lv_label_set_text(g_lbl_view, panel_model_view_mode_label(g_model.view_mode));
     lv_obj_set_style_text_color(g_lbl_view,
         g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE : COLOR_LASER_BLUE, 0);
-    lv_label_set_text(g_lbl_owner, panel_model_owner_text(g_model.owner));
-    lv_label_set_text(g_lbl_mode, panel_model_mode_text(g_model.mode));
-    lv_label_set_text(g_lbl_job_state, panel_model_state_text(g_model.state));
+    lv_label_set_text(g_lbl_owner, panel_model_owner_label(g_model.owner));
+    lv_label_set_text(g_lbl_mode, panel_model_mode_label(g_model.mode));
+    lv_label_set_text(g_lbl_job_state, panel_model_state_label(g_model.state));
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.job_id);
     lv_label_set_text(g_lbl_job_id, buf);
     snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
@@ -251,10 +251,10 @@ void page_diagnostics_update(void)
 
     snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
     lv_label_set_text(g_lbl_cache, buf);
-    lv_label_set_text(g_lbl_focus, g_model.focus_active ? "ON" : "OFF");
+    lv_label_set_text(g_lbl_focus, g_model.focus_active ? "开启" : "关闭");
     lv_obj_set_style_text_color(g_lbl_focus,
         g_model.focus_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
-    lv_label_set_text(g_lbl_laser, g_model.laser_output_active ? "ON" : "OFF");
+    lv_label_set_text(g_lbl_laser, g_model.laser_output_active ? "开启" : "关闭");
     lv_obj_set_style_text_color(g_lbl_laser,
         g_model.laser_output_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
     lv_label_set_text(g_lbl_last_error, g_model.last_error);

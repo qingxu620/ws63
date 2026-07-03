@@ -73,6 +73,20 @@ static void file_btn_cb(lv_event_t *e)
     ui_manager_switch_page(PAGE_FILE_BROWSER);
 }
 
+static void monitor_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    osal_printk("[SETTINGS] monitor -> job monitor\r\n");
+    ui_manager_switch_page(PAGE_JOB_MONITOR);
+}
+
+static void diagnostics_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    osal_printk("[SETTINGS] diagnostics -> diagnostics\r\n");
+    ui_manager_switch_page(PAGE_DIAGNOSTICS);
+}
+
 static lv_obj_t *create_nav_btn(lv_obj_t *parent, const char *symbol,
                                  const char *label, lv_color_t accent,
                                  lv_event_cb_t cb)
@@ -149,7 +163,7 @@ void page_settings_create(lv_obj_t *parent)
     bind_click(back_lbl, back_btn_cb, NULL);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "设置");
+    lv_label_set_text(title, "系统设置");
     lv_obj_set_style_text_font(title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(title, COLOR_TEXT_BRIGHT, 0);
 
@@ -203,7 +217,9 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_slider_brightness, brightness_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(g_slider_brightness, brightness_cb, LV_EVENT_PRESS_LOST, NULL);
 
+    create_nav_btn(body, LV_SYMBOL_PLAY, "任务控制", COLOR_LASER_GREEN, monitor_btn_cb);
     create_nav_btn(body, LV_SYMBOL_DIRECTORY, "SD任务", COLOR_LASER_BLUE, file_btn_cb);
+    create_nav_btn(body, LV_SYMBOL_WARNING, "诊断日志", COLOR_LASER_ORANGE, diagnostics_btn_cb);
 
     /* About card */
     lv_obj_t *about_card = lv_obj_create(body);
@@ -215,17 +231,17 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_add_style(about_card, &style_card, 0);
 
     lv_obj_t *about_title = lv_label_create(about_card);
-    lv_label_set_text(about_title, LV_SYMBOL_WARNING " 关于设备");
+    lv_label_set_text(about_title, LV_SYMBOL_WARNING " 运行基线");
     lv_obj_set_style_text_font(about_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(about_title, COLOR_LASER_ORANGE, 0);
 
     lv_obj_t *fw_ver = lv_label_create(about_card);
-    lv_label_set_text(fw_ver, "固件：ws63-panel v0.1");
+    lv_label_set_text(fw_ver, "模式：SLE / RX真相源");
     lv_obj_set_style_text_font(fw_ver, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(fw_ver, COLOR_TEXT_LIGHT, 0);
 
     lv_obj_t *hw_info = lv_label_create(about_card);
-    lv_label_set_text(hw_info, "硬件：MSP3223 ILI9341V 320x240");
+    lv_label_set_text(hw_info, "安全：STOP/ABORT/FOCUS_OFF");
     lv_obj_set_style_text_font(hw_info, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(hw_info, COLOR_TEXT_MUTED, 0);
 }

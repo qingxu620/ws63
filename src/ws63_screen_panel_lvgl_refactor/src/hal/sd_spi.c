@@ -22,6 +22,7 @@
 #define SD_ACMD41_ATTEMPTS      200U
 #define SD_POWER_STABLE_MS      250U
 #define SD_RETRY_STABLE_MS      120U
+#define SD_BLOCK_READ_CHUNK     32U
 
 #define SD_R1_IDLE              0x01U
 #define SD_R1_ILLEGAL_CMD       0x04U
@@ -46,7 +47,7 @@ static bool g_sd_high_capacity;
 static bool g_sd_bitbang_mode;
 static char g_sd_last_error[48] = "未初始化";
 static uint32_t g_sd_spi_error_logs;
-static uint8_t g_sd_dummy_tx[SD_SPI_SECTOR_SIZE];
+static uint8_t g_sd_dummy_tx[SD_BLOCK_READ_CHUNK];
 static bool g_sd_dummy_tx_ready;
 
 static void set_error(const char *text)
@@ -63,7 +64,7 @@ static void sd_prepare_dummy_tx(void)
         return;
     }
 
-    for (uint32_t i = 0; i < SD_SPI_SECTOR_SIZE; i++) {
+    for (uint32_t i = 0; i < SD_BLOCK_READ_CHUNK; i++) {
         g_sd_dummy_tx[i] = 0xFFU;
     }
     g_sd_dummy_tx_ready = true;
@@ -198,10 +199,15 @@ static void sd_send_byte(uint8_t byte)
     (void)sd_read_fifo_byte(NULL, false);
 }
 
-static uint8_t sd_recv_byte(void)
+static bool sd_recv_byte_checked(uint8_t *byte, bool log_error)
 {
+    if (byte == NULL) {
+        return false;
+    }
+
     if (g_sd_bitbang_mode) {
-        return sd_bitbang_xfer_byte(0xFFU);
+        *byte = sd_bitbang_xfer_byte(0xFFU);
+        return true;
     }
 
     uint8_t tx = 0xFFU;
@@ -210,19 +216,34 @@ static uint8_t sd_recv_byte(void)
     xfer.tx_buff = &tx;
     xfer.tx_bytes = 1;
     errcode_t ret = uapi_spi_master_write(SCREEN_LCD_SPI_BUS, &xfer, SD_CMD_TIMEOUT_MS);
-    if (ret == ERRCODE_SUCC && !sd_read_fifo_byte(&rx, true)) {
-        rx = 0xFFU;
+    if (ret != ERRCODE_SUCC) {
+        if (log_error && g_sd_spi_error_logs < 8U) {
+            g_sd_spi_error_logs++;
+            osal_printk("[SD] spi clock fail ret=0x%x\r\n", ret);
+        }
+        return false;
     }
-    if (ret != ERRCODE_SUCC && g_sd_spi_error_logs < 8U) {
+    if (!sd_read_fifo_byte(&rx, log_error)) {
+        return false;
+    }
+
+    *byte = rx;
+    return true;
+}
+
+static uint8_t sd_recv_byte(void)
+{
+    uint8_t rx = 0xFFU;
+    if (!sd_recv_byte_checked(&rx, true) && g_sd_spi_error_logs < 8U) {
         g_sd_spi_error_logs++;
-        osal_printk("[SD] spi clock fail ret=0x%x\r\n", ret);
+        osal_printk("[SD] spi recv byte failed\r\n");
     }
     return rx;
 }
 
-static bool sd_recv_block(uint8_t *buf, uint32_t len)
+static bool sd_recv_chunk(uint8_t *buf, uint32_t len)
 {
-    if (buf == NULL || len == 0U) {
+    if (buf == NULL || len == 0U || len > SD_BLOCK_READ_CHUNK) {
         return false;
     }
 
@@ -233,25 +254,55 @@ static bool sd_recv_block(uint8_t *buf, uint32_t len)
         return true;
     }
 
-    if (len > SD_SPI_SECTOR_SIZE) {
-        return false;
-    }
     sd_prepare_dummy_tx();
 
     spi_xfer_data_t xfer = {0};
     xfer.tx_buff = g_sd_dummy_tx;
     xfer.tx_bytes = len;
-    xfer.rx_buff = buf;
-    xfer.rx_bytes = len;
-
-    errcode_t ret = uapi_spi_master_writeread(SCREEN_LCD_SPI_BUS, &xfer, SD_CMD_TIMEOUT_MS);
+    errcode_t ret = uapi_spi_master_write(SCREEN_LCD_SPI_BUS, &xfer, SD_CMD_TIMEOUT_MS);
     if (ret != ERRCODE_SUCC) {
         if (g_sd_spi_error_logs < 8U) {
             g_sd_spi_error_logs++;
-            osal_printk("[SD] spi block read fail len=%lu ret=0x%x\r\n",
+            osal_printk("[SD] spi chunk clock fail len=%lu ret=0x%x\r\n",
                         (unsigned long)len, ret);
         }
         return false;
+    }
+
+    for (uint32_t i = 0; i < len; i++) {
+        if (!sd_read_fifo_byte(&buf[i], true)) {
+            if (g_sd_spi_error_logs < 8U) {
+                g_sd_spi_error_logs++;
+                osal_printk("[SD] spi chunk read fail offset=%lu/%lu\r\n",
+                            (unsigned long)i, (unsigned long)len);
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool sd_recv_block(uint8_t *buf, uint32_t len)
+{
+    if (buf == NULL || len == 0U) {
+        return false;
+    }
+
+    for (uint32_t offset = 0; offset < len;) {
+        uint32_t chunk = len - offset;
+        if (chunk > SD_BLOCK_READ_CHUNK) {
+            chunk = SD_BLOCK_READ_CHUNK;
+        }
+        if (!sd_recv_chunk(&buf[offset], chunk)) {
+            if (g_sd_spi_error_logs < 8U) {
+                g_sd_spi_error_logs++;
+                osal_printk("[SD] spi block chunk read fail offset=%lu len=%lu\r\n",
+                            (unsigned long)offset, (unsigned long)chunk);
+            }
+            return false;
+        }
+        offset += chunk;
     }
     return true;
 }

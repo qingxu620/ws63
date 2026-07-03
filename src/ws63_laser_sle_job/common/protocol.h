@@ -32,6 +32,7 @@ typedef enum {
     PKT_JOB_ABORT = 0x04,
 
     PKT_EXEC_START = 0x10,
+    PKT_EXEC_RESUME   = 0x11,
     PKT_EXEC_STOP     = 0x13,
     PKT_FOCUS_CTRL    = 0x14,
     PKT_ROUTE_SWITCH  = 0x15,

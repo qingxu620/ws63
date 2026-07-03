@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QImage
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QTabWidget
+from PySide6.QtWidgets import QApplication, QLabel, QGroupBox, QScrollArea, QTabWidget
 
 from app.config_store import HostConfig
 from app.state_models import AppState
@@ -319,8 +319,22 @@ class UiContractTests(unittest.TestCase):
     def test_job_page_only_exposes_firmware_backed_controls(self) -> None:
         page = JobPage()
 
-        for removed in ("btn_pause", "btn_resume", "btn_estop", "btn_estop_clear"):
+        for removed in ("btn_pause", "btn_estop", "btn_estop_clear"):
             self.assertFalse(hasattr(page, removed))
+        self.assertTrue(hasattr(page, "btn_resume"))
+        self.assertTrue(hasattr(page, "btn_force_cancel"))
+
+    def test_job_page_splits_manual_and_live_execution_controls(self) -> None:
+        page = JobPage()
+
+        group_titles = {group.title() for group in page.findChildren(QGroupBox)}
+        self.assertIn("仅上传任务控制", group_titles)
+        self.assertIn("上传并执行控制", group_titles)
+        self.assertEqual(page.btn_exec.text(), "开始执行")
+        self.assertEqual(page.btn_abort.text(), "清空已上传队列")
+        self.assertEqual(page.btn_stop.text(), "暂停执行")
+        self.assertEqual(page.btn_resume.text(), "恢复执行")
+        self.assertEqual(page.btn_force_cancel.text(), "强制断光并取消任务")
 
     def test_logs_page_has_mockup_subtitle_and_console_header(self) -> None:
         page = LogsPage()
@@ -514,7 +528,7 @@ class UiContractTests(unittest.TestCase):
         self.addCleanup(window.close)
         window.state.rx_state_code = 3
         window.state.execution_expected = True
-        window._on_task_status("已放弃", -1)
+        window._on_task_status("已取消并清空", -1)
 
         window._parse_rx_line(
             "@STATUS state=0 status=0 job=9 rx=1000 total=1000 free=500 lines=10"
@@ -522,7 +536,29 @@ class UiContractTests(unittest.TestCase):
 
         self.assertFalse(window.state.execution_complete)
         self.assertTrue(window.state.termination_requested)
-        self.assertEqual(window.page_job.lbl_task.text(), "已放弃")
+        self.assertEqual(window.page_job.lbl_task.text(), "已取消并清空")
+
+    def test_late_poll_error_after_abort_is_suppressed(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        logs: list[tuple[str, str]] = []
+        window.worker.log.connect(lambda channel, message: logs.append((channel, message)))
+
+        class FakeClient:
+            def transact_status(self, timeout: float):
+                raise TimeoutError("等待 @STATUS 超时")
+
+            def close(self) -> None:
+                pass
+
+        window.client = FakeClient()
+        window.state.execution_expected = True
+        window.state.termination_requested = True
+        window._exec_poll_timer.stop()
+
+        window._execution_status_poll_worker()
+
+        self.assertNotIn(("error", "[EXEC_POLL] 查询状态失败: 等待 @STATUS 超时"), logs)
 
     def test_upload_only_explicitly_disables_preroll_execution(self) -> None:
         window = MainWindow()

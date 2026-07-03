@@ -53,7 +53,8 @@ static void update_progress_fields(void)
     g_model.total_lines = clamp_u32(g_model.total_lines, 0, PANEL_FAKE_TOTAL_LINES);
 
     if (g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
-        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_REQUESTING_STOP ||
+        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_TERMINATED ||
+        g_model.state == SYS_STATE_REQUESTING_STOP ||
         g_model.state == SYS_STATE_REQUESTING_ABORT || g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF) {
         g_model.received_size = g_model.total_size;
     } else if ((g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING) &&
@@ -72,7 +73,8 @@ static void update_progress_fields(void)
 
     if (g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING ||
         g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
-        g_model.state == SYS_STATE_DONE || state_is_requesting(g_model.state)) {
+        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_TERMINATED ||
+        state_is_requesting(g_model.state)) {
         uint32_t used = (uint32_t)((uint64_t)PANEL_FAKE_CACHE_SIZE * (uint32_t)g_model.progress / 100U);
         g_model.cache_free = PANEL_FAKE_CACHE_SIZE - clamp_u32(used, 0, PANEL_FAKE_CACHE_SIZE);
     } else {
@@ -151,7 +153,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
 
     switch (scene) {
     case PANEL_SCENE_IDLE_NONE:
-        g_model.state = SYS_STATE_NO_JOB;
+            g_model.state = SYS_STATE_TERMINATED;
         break;
     case PANEL_SCENE_HOST_RECEIVING:
         g_model.view_mode = PANEL_VIEW_ONLINE;
@@ -374,6 +376,18 @@ void panel_model_request_focus_off(void)
     panel_model_set_scene(PANEL_SCENE_REQUESTING_FOCUS_OFF);
 }
 
+void panel_model_mark_focus_ack(bool active)
+{
+    g_model.focus_active = active;
+    if (!active) {
+        g_model.laser_output_active = false;
+    } else {
+        g_model.laser_output_active = true;
+    }
+    g_model.seq++;
+    g_model.event_id++;
+}
+
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count)
 {
     panel_view_mode_t view_mode = g_model.view_mode;
@@ -569,7 +583,7 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
         g_model.state = SYS_STATE_RUNNING;
         break;
     case 5:
-        g_model.state = SYS_STATE_NO_JOB;
+        g_model.state = SYS_STATE_TERMINATED;
         break;
     case 6:
         g_model.state = SYS_STATE_ERROR;
@@ -657,6 +671,7 @@ void panel_model_get_button_permissions(panel_button_permissions_t *out)
     bool requesting = state_is_requesting(g_model.state);
     bool active_job = (g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING ||
                        g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
+                       g_model.state == SYS_STATE_TERMINATED ||
                        g_model.state == SYS_STATE_REQUESTING_STOP ||
                        g_model.state == SYS_STATE_REQUESTING_ABORT ||
                        g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF);
@@ -689,6 +704,7 @@ const char *panel_model_state_text(system_state_t state)
     case SYS_STATE_REQUESTING_STOP: return "REQUESTING_STOP";
     case SYS_STATE_REQUESTING_ABORT: return "REQUESTING_ABORT";
     case SYS_STATE_REQUESTING_FOCUS_OFF: return "REQUESTING_FOCUS_OFF";
+    case SYS_STATE_TERMINATED: return "TERMINATED";
     case SYS_STATE_ERROR: return "ERROR";
     case SYS_STATE_LINK_LOST: return "LINK_LOST";
     default: return "UNKNOWN";
@@ -744,5 +760,76 @@ const char *panel_model_scene_text(panel_fake_scene_t scene)
     case PANEL_SCENE_REQUESTING_ABORT: return "REQUESTING_ABORT";
     case PANEL_SCENE_REQUESTING_FOCUS_OFF: return "REQUESTING_FOCUS_OFF";
     default: return "UNKNOWN";
+    }
+}
+
+const char *panel_model_state_label(system_state_t state)
+{
+    switch (state) {
+    case SYS_STATE_NO_JOB: return "空闲";
+    case SYS_STATE_BROWSING: return "空闲";
+    case SYS_STATE_RECEIVING: return "数据传输中";
+    case SYS_STATE_SENDING: return "数据传输中";
+    case SYS_STATE_READY: return "任务就绪";
+    case SYS_STATE_RUNNING: return "正在执行";
+    case SYS_STATE_DONE: return "执行完成";
+    case SYS_STATE_REQUESTING_STOP: return "暂停中";
+    case SYS_STATE_REQUESTING_ABORT: return "取消中";
+    case SYS_STATE_REQUESTING_FOCUS_OFF: return "关光中";
+    case SYS_STATE_TERMINATED: return "已终止";
+    case SYS_STATE_ERROR: return "错误";
+    case SYS_STATE_LINK_LOST: return "链路断开";
+    default: return "未知";
+    }
+}
+
+const char *panel_model_state_detail(system_state_t state)
+{
+    switch (state) {
+    case SYS_STATE_NO_JOB: return "待机模式";
+    case SYS_STATE_BROWSING: return "等待选择任务";
+    case SYS_STATE_RECEIVING: return "正在下载任务数据";
+    case SYS_STATE_SENDING: return "正在发送离线任务";
+    case SYS_STATE_READY: return "代码已读取并校验";
+    case SYS_STATE_RUNNING: return "等待 RX 完成";
+    case SYS_STATE_DONE: return "任务完成，控制已释放";
+    case SYS_STATE_REQUESTING_STOP: return "软件暂停执行中";
+    case SYS_STATE_REQUESTING_ABORT: return "断光并取消任务中";
+    case SYS_STATE_REQUESTING_FOCUS_OFF: return "调焦关光中";
+    case SYS_STATE_TERMINATED: return "任务已终止";
+    case SYS_STATE_ERROR: return "警报/故障";
+    case SYS_STATE_LINK_LOST: return "SLE/RX 链路断开";
+    default: return "状态未知";
+    }
+}
+
+const char *panel_model_owner_label(panel_owner_t owner)
+{
+    switch (owner) {
+    case PANEL_OWNER_NONE: return "无";
+    case PANEL_OWNER_HOST: return "HOST";
+    case PANEL_OWNER_SCREEN: return "SCREEN";
+    default: return "未知";
+    }
+}
+
+const char *panel_model_mode_label(panel_mode_t mode)
+{
+    switch (mode) {
+    case PANEL_MODE_IDLE: return "SLE";
+    case PANEL_MODE_ONLINE: return "SLE";
+    case PANEL_MODE_OFFLINE: return "离线";
+    case PANEL_MODE_ERROR: return "故障";
+    case PANEL_MODE_LINK_LOST: return "断链";
+    default: return "未知";
+    }
+}
+
+const char *panel_model_view_mode_label(panel_view_mode_t view_mode)
+{
+    switch (view_mode) {
+    case PANEL_VIEW_ONLINE: return "在线镜像";
+    case PANEL_VIEW_OFFLINE: return "离线任务";
+    default: return "未知";
     }
 }

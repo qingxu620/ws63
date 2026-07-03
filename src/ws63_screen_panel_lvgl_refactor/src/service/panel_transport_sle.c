@@ -75,7 +75,8 @@ static uint32_t g_last_seek_ms;
 static osal_semaphore g_write_cfm_sem;
 static volatile bool g_write_cfm_sem_ready;
 static volatile errcode_t g_last_write_cfm_status = ERRCODE_SLE_FAIL;
-static panel_transport_rx_response_cb_t g_rx_response_cb;
+static panel_transport_rx_response_cb_t g_offline_response_cb;
+static panel_transport_rx_response_cb_t g_cmd_response_cb;
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
@@ -682,8 +683,11 @@ static void handle_rx_response_packet(const uint8_t *data, uint16_t len)
         apply_panel_status(&st);
     }
 
-    if (g_rx_response_cb != NULL) {
-        g_rx_response_cb(data, len);
+    if (g_offline_response_cb != NULL) {
+        g_offline_response_cb(data, len);
+    }
+    if (g_cmd_response_cb != NULL) {
+        g_cmd_response_cb(data, len);
     }
 }
 
@@ -788,5 +792,10 @@ errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
 
 void panel_transport_sle_set_rx_response_cb(panel_transport_rx_response_cb_t cb)
 {
-    g_rx_response_cb = cb;
+    g_offline_response_cb = cb;
+}
+
+void panel_transport_sle_set_cmd_response_cb(panel_transport_rx_response_cb_t cb)
+{
+    g_cmd_response_cb = cb;
 }

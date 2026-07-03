@@ -15,7 +15,7 @@ static osal_mutex g_spi_bus_mutex;
 static bool g_spi_bus_ready;
 
 #define SCREEN_SD_INIT_SPI_HZ 1000000U
-#define SCREEN_SD_FAST_SPI_HZ 4000000U
+#define SCREEN_SD_FAST_SPI_HZ 8000000U
 
 #ifndef SCREEN_PANEL_ENABLE_SD
 #define SCREEN_PANEL_ENABLE_SD 1

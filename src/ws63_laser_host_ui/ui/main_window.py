@@ -21,7 +21,7 @@ from app.event_bus import EventBus
 from app.gcode_validator import prepare_gcode_for_upload, format_diagnostic
 from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
-    SleJobSerialClient, SerialLogMonitor, available_ports, crc16_ccitt,
+    SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
     JOB_MAX_SIZE, JOB_PREROLL_BYTES, plan_safe_preroll,
 )
@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         self.page_job.upload_exec_requested.connect(self._on_upload_exec)
         self.page_job.exec_start_requested.connect(self._on_exec_start)
         self.page_job.exec_stop_requested.connect(self._on_exec_stop)
+        self.page_job.exec_resume_requested.connect(self._on_exec_resume)
         self.page_job.abort_requested.connect(self._on_abort)
         self.page_job.outline_scan_requested.connect(self._on_outline_scan_requested)
         self.page_job.focus_on_requested.connect(self._on_focus_on)
@@ -270,6 +271,13 @@ class MainWindow(QMainWindow):
             self.state.execution_complete = False
             self.page_job.set_execution_state(True)
             self._start_execution_status_poll()
+        elif status.state == 4:
+            self.state.execution_expected = True
+            self.state.termination_requested = True
+            self.state.execution_complete = False
+            self.page_job.set_execution_state(False)
+            self.page_job.set_task_status("已暂停", -1)
+            self._stop_execution_status_poll()
         elif status.state in (5, 6):
             self.state.execution_expected = False
             self.page_job.set_execution_state(False)
@@ -323,12 +331,18 @@ class MainWindow(QMainWindow):
     def _execution_status_poll_worker(self) -> None:
         try:
             result = self.client.transact_status(2.0)
+            if (not self.state.execution_expected or self.state.execution_complete or
+                    self.state.termination_requested or not self._exec_poll_timer.isActive()):
+                return
             self._exec_poll_failures = 0
             self.worker.log.emit(
                 "status", f"[EXEC_POLL] STATUS {result.elapsed_ms}ms: {result.line}"
             )
             self.status_line_received.emit(result.line)
         except Exception as exc:
+            if (not self.state.execution_expected or self.state.execution_complete or
+                    self.state.termination_requested or not self._exec_poll_timer.isActive()):
+                return
             self._exec_poll_failures += 1
             if self._exec_poll_failures in (1, 3, 10):
                 self.worker.log.emit("error", f"[EXEC_POLL] 查询状态失败: {exc}")
@@ -410,13 +424,13 @@ class MainWindow(QMainWindow):
                     "status",
                     f"[EXEC_TRACK] start job={self.state.rx_job_id} text={text}",
                 )
-        elif text in ("已停止", "已放弃"):
+        elif text in ("已停止", "已暂停", "已放弃", "已取消并清空"):
             self.state.execution_expected = False
             self.state.termination_requested = True
             self.state.execution_complete = False
             self._stop_execution_status_poll()
             self.page_job.set_execution_state(False)
-        elif text in ("停止命令失败", "放弃命令失败"):
+        elif text in ("停止命令失败", "放弃命令失败", "取消命令失败"):
             self.state.termination_requested = False
         elif text == "执行失败":
             self.state.execution_expected = False
@@ -630,13 +644,23 @@ class MainWindow(QMainWindow):
             "status", f"开始仅上传 job={job_id} size={len(gcode)} crc=0x{crc:04x} preroll=disabled"
         )
         self.worker.task_status.emit("上传中...", 0)
-        self.client.upload_job(
-            job_id, gcode, timeout,
-            progress_cb=lambda t: self.worker.progress.emit(t),
-            status_cb=lambda t, p: self.worker.task_status.emit(t, p),
-            preroll_bytes=0,
-            start_on_preroll=False,
-        )
+        try:
+            self.client.upload_job(
+                job_id, gcode, timeout,
+                progress_cb=lambda t: self.worker.progress.emit(t),
+                status_cb=lambda t, p: self.worker.task_status.emit(t, p),
+                preroll_bytes=0,
+                start_on_preroll=False,
+            )
+        except UploadInterrupted as exc:
+            self.worker.log.emit("status", f"[CTRL_FAST] {exc}")
+            if "@ABORT" in str(exc):
+                self.state.termination_requested = True
+                self.state.execution_expected = False
+                self.state.execution_complete = False
+                self._stop_execution_status_poll()
+            self.worker.task_status.emit("控制命令已接管上传", -1)
+            return
         self.worker.task_status.emit("上传完成，RX 任务已就绪", 100)
 
     def _upload_exec_worker(
@@ -673,14 +697,24 @@ class MainWindow(QMainWindow):
             # Upload phase
             self.worker.log.emit("status", f"[EXEC_FLOW] 开始上传阶段")
             self.worker.task_status.emit("上传中...", 0)
-            self.client.upload_job(
-                job_id, gcode, timeout,
-                progress_cb=lambda t: self.worker.progress.emit(t),
-                status_cb=lambda t, p: self.worker.task_status.emit(t, p),
-                preroll_bytes=effective_preroll if use_preroll else 0,
-                start_on_preroll=use_preroll,
-                enforce_job_size_limit=False,
-            )
+            try:
+                self.client.upload_job(
+                    job_id, gcode, timeout,
+                    progress_cb=lambda t: self.worker.progress.emit(t),
+                    status_cb=lambda t, p: self.worker.task_status.emit(t, p),
+                    preroll_bytes=effective_preroll if use_preroll else 0,
+                    start_on_preroll=use_preroll,
+                    enforce_job_size_limit=False,
+                )
+            except UploadInterrupted as exc:
+                self.worker.log.emit("status", f"[CTRL_FAST] {exc}")
+                if "@ABORT" in str(exc):
+                    self.state.termination_requested = True
+                    self.state.execution_expected = False
+                    self.state.execution_complete = False
+                    self._stop_execution_status_poll()
+                self.worker.task_status.emit("控制命令已接管上传", -1)
+                return
             self.worker.log.emit("status", f"[EXEC_FLOW] 上传阶段完成")
 
             # Execution phase
@@ -749,7 +783,20 @@ class MainWindow(QMainWindow):
 
     def _on_exec_stop(self) -> None:
         if self.worker.is_busy():
-            self._enqueue_log("error", "任务进行中")
+            queued = self.client.request_priority_control(
+                "@EXEC_STOP", "@ACK type=19", self.page_job.get_timeout(),
+                interrupt_upload=False,
+            )
+            if queued:
+                self.state.termination_requested = True
+                self.state.execution_complete = False
+            self._enqueue_log(
+                "status",
+                "[CTRL_FAST] 暂停命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                if queued else "[CTRL_FAST] 已有控制命令等待发送",
+            )
+            if queued:
+                self.page_job.set_task_status("暂停命令等待发送", -1)
             return
         timeout = self.page_job.get_timeout()
         self.state.termination_requested = True
@@ -761,12 +808,56 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.worker.task_status.emit("停止命令失败", -1)
                 raise
-            self.worker.task_status.emit("已停止", -1)
+            self.worker.task_status.emit("已暂停", -1)
+        self._run_job_worker(_work)
+
+    def _on_exec_resume(self) -> None:
+        if self.worker.is_busy():
+            queued = self.client.request_priority_control(
+                "@EXEC_RESUME", "@ACK type=17", self.page_job.get_timeout(),
+                interrupt_upload=False,
+            )
+            self._enqueue_log(
+                "status",
+                "[CTRL_FAST] 继续命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                if queued else "[CTRL_FAST] 已有控制命令等待发送",
+            )
+            if queued:
+                self.state.termination_requested = False
+                self.state.execution_expected = True
+                self.state.execution_complete = False
+                self.page_job.set_execution_state(True)
+                self._start_execution_status_poll()
+            self.page_job.set_task_status("继续命令等待发送", -1)
+            return
+        timeout = self.page_job.get_timeout()
+
+        def _work():
+            try:
+                self.client.send_control("@EXEC_RESUME", "@ACK type=17", timeout)
+            except Exception:
+                self.worker.task_status.emit("继续命令失败", -1)
+                raise
+            self.state.termination_requested = False
+            self.state.execution_complete = False
+            self.worker.task_status.emit("执行中，等待 RX 完成", -1)
         self._run_job_worker(_work)
 
     def _on_abort(self) -> None:
         if self.worker.is_busy():
-            self._enqueue_log("error", "任务进行中")
+            queued = self.client.request_priority_control(
+                "@ABORT", "@ACK type=4", self.page_job.get_timeout()
+            )
+            if queued:
+                self.state.termination_requested = True
+                self.state.execution_complete = False
+            self._enqueue_log(
+                "status",
+                "[CTRL_FAST] 取消命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                if queued else "[CTRL_FAST] 已有控制命令等待发送",
+            )
+            if queued:
+                self.page_job.set_task_status("取消命令等待发送", -1)
             return
         timeout = self.page_job.get_timeout()
         self.state.termination_requested = True
@@ -776,9 +867,9 @@ class MainWindow(QMainWindow):
             try:
                 self.client.send_control("@ABORT", "@ACK type=4", timeout)
             except Exception:
-                self.worker.task_status.emit("放弃命令失败", -1)
+                self.worker.task_status.emit("取消命令失败", -1)
                 raise
-            self.worker.task_status.emit("已放弃", -1)
+            self.worker.task_status.emit("已取消并清空", -1)
         self._run_job_worker(_work)
 
     def _on_focus_on(self, power: int) -> None:
@@ -789,6 +880,17 @@ class MainWindow(QMainWindow):
         self._run_job_worker(_work)
 
     def _on_focus_off(self) -> None:
+        if self.worker.is_busy():
+            queued = self.client.request_priority_control(
+                "@FOCUS_OFF", "@OK focus_off", 5.0, interrupt_upload=False
+            )
+            self._enqueue_log(
+                "status",
+                "[CTRL_FAST] 关光命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                if queued else "[CTRL_FAST] 已有控制命令等待发送",
+            )
+            return
+
         def _work():
             self.client.send_control("@FOCUS_OFF", "@OK focus_off", 5.0)
             self.focus_state_changed.emit(False)

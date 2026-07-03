@@ -466,6 +466,17 @@ static void indication_cbk(uint8_t client_id, uint16_t conn_id,
     notification_cbk(client_id, conn_id, data, status);
 }
 
+#if JOB_TX_DATA_USE_WRITE_CMD
+static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
+{
+    const uint8_t *bytes = (const uint8_t *)data;
+    if (bytes == NULL || len < SLE_JOB_PACKET_HEADER_LEN) {
+        return 0;
+    }
+    return bytes[2];
+}
+#endif
+
 /* Public API */
 errcode_t sle_job_client_init(void)
 {
@@ -528,6 +539,18 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
     param.type = SSAP_PROPERTY_TYPE_VALUE;
     param.data_len = len;
     param.data = (uint8_t *)data;
+
+#if JOB_TX_DATA_USE_WRITE_CMD
+    uint8_t pkt_type = packet_type_from_encoded(data, len);
+    if (pkt_type == PKT_JOB_DATA) {
+        errcode_t ret = ssapc_write_cmd(SLE_CLIENT_ID, g_conn_id, &param);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[JOB_SLE_WRITE_CMD_FAIL] ret=0x%x len=%u\r\n",
+                        ret, (unsigned int)len);
+        }
+        return ret;
+    }
+#endif
 
     if (!g_write_cfm_sem_ready) {
         return ERRCODE_SLE_FAIL;

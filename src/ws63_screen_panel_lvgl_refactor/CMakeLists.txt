@@ -23,6 +23,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_model.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_file_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_transport_sle.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_job_proto.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_rx_commands.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service/panel_offline_job.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/panel_theme.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ui_manager.c

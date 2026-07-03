@@ -28,10 +28,24 @@ DATA_ACK_TIMEOUT_MIN_S = 10.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
 TX_RESYNC_TIMEOUT_MIN_S = 12.0
 TX_UART_RESYNC_BYTE = 0x18
+TX_UART_CONTROL_BYTE = 0x19
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
+HOST_TIMING_FIRST_CHUNKS = 8
+HOST_TIMING_EVERY_CHUNKS = 32
+HOST_TIMING_SLOW_CHUNK_MS = 250
 JOB_PREROLL_BYTES = 4096
 JOB_PREROLL_SAFE_MAX_BYTES = 8192
+TX_PRIORITY_CONTROL_CODES = {
+    "@EXEC_STOP": b"S",
+    "@EXEC_RESUME": b"R",
+    "@ABORT": b"A",
+    "@FOCUS_OFF": b"F",
+}
+TX_PRIORITY_CONTROL_OPPOSITES = {
+    "@EXEC_STOP": "@EXEC_RESUME",
+    "@EXEC_RESUME": "@EXEC_STOP",
+}
 
 RX_STATUS_RE = re.compile(
     r"@STATUS state=(\d+) status=(\d+) job=(\d+) rx=(\d+) total=(\d+) free=(\d+) lines=(\d+)"
@@ -49,6 +63,18 @@ RX_EXEC_DONE_RE = re.compile(
 class WaitResult:
     line: str
     elapsed_ms: int
+
+
+@dataclass(frozen=True)
+class PriorityControl:
+    command: str
+    expect: str
+    timeout: float
+    interrupt_upload: bool
+
+
+class UploadInterrupted(RuntimeError):
+    """Raised when a queued control command intentionally stops upload."""
 
 
 @dataclass(frozen=True)
@@ -218,6 +244,9 @@ class SleJobSerialClient:
         self._lines: queue.Queue[str] = queue.Queue()
         self._write_lock = threading.Lock()
         self._command_lock = threading.Lock()
+        self._priority_lock = threading.Lock()
+        self._priority_control: Optional[PriorityControl] = None
+        self._upload_paused = False
 
     def is_open(self) -> bool:
         return self._serial is not None and self._serial.is_open
@@ -308,7 +337,8 @@ class SleJobSerialClient:
         self.write_bytes((clean + "\n").encode("ascii"), clean)
 
     def wait_for(self, pattern: str, timeout: float, *,
-                 regex: bool = False, collect_lines: bool = False) -> WaitResult:
+                 regex: bool = False, collect_lines: bool = False,
+                 ignore_unknown_command: bool = False) -> WaitResult:
         started = time.monotonic()
         deadline = started + timeout
         compiled = re.compile(pattern) if regex else None
@@ -327,6 +357,8 @@ class SleJobSerialClient:
             matched = bool(compiled.search(line)) if compiled else pattern in line
             if matched:
                 return WaitResult(line=line, elapsed_ms=int((time.monotonic() - started) * 1000))
+            if ignore_unknown_command and line == "@ERR unknown_command":
+                continue
             if line.startswith("@ERR") or line.startswith("@NACK"):
                 raise RuntimeError(f"收到错误响应: {line}")
         elapsed = int((time.monotonic() - started) * 1000)
@@ -337,13 +369,108 @@ class SleJobSerialClient:
         with self._command_lock:
             self._drain_lines()
             self.send_line("@STATUS")
-            return self.wait_for("@STATUS", timeout)
+            return self.wait_for("@STATUS", timeout, ignore_unknown_command=True)
 
     def send_control(self, command: str, expect: str, timeout: float) -> WaitResult:
         with self._command_lock:
             self._drain_lines()
             self.send_line(command)
             return self.wait_for(expect, timeout)
+
+    def request_priority_control(
+        self,
+        command: str,
+        expect: str,
+        timeout: float,
+        *,
+        interrupt_upload: bool = True,
+    ) -> bool:
+        """Queue a control command to be sent between upload chunks."""
+        control = PriorityControl(command.strip(), expect, timeout, interrupt_upload)
+        if not control.command:
+            raise RuntimeError("空控制命令")
+        with self._priority_lock:
+            if control.command == "@EXEC_STOP" and self._upload_paused:
+                return False
+            pending = self._priority_control
+            if pending is None:
+                self._priority_control = control
+                return True
+            if pending.command == control.command:
+                return False
+            if pending.command == "@ABORT":
+                return False
+            if control.command == "@ABORT":
+                self._priority_control = control
+                return True
+            if TX_PRIORITY_CONTROL_OPPOSITES.get(control.command) == pending.command:
+                self._priority_control = control
+                return True
+            if pending.command == "@FOCUS_OFF" and control.command == "@EXEC_STOP":
+                self._priority_control = control
+                return True
+            if pending.command == "@EXEC_RESUME" and control.command == "@FOCUS_OFF":
+                self._priority_control = control
+                return True
+            if pending.command == "@EXEC_STOP" and control.command == "@FOCUS_OFF":
+                return False
+            if pending.command == "@FOCUS_OFF" and control.command == "@EXEC_RESUME":
+                return False
+            return False
+
+    def _pop_priority_control(self) -> Optional[PriorityControl]:
+        with self._priority_lock:
+            control = self._priority_control
+            self._priority_control = None
+            return control
+
+    def _set_upload_paused(self, paused: bool) -> None:
+        with self._priority_lock:
+            self._upload_paused = paused
+
+    def _is_upload_paused(self) -> bool:
+        with self._priority_lock:
+            return self._upload_paused
+
+    def _dispatch_priority_control_locked(self) -> Optional[str]:
+        control = self._pop_priority_control()
+        if control is None:
+            return None
+        self._on_log("status", f"[CTRL_FAST] send {control.command}")
+        code = TX_PRIORITY_CONTROL_CODES.get(control.command)
+        if code is None:
+            self.send_line(control.command)
+        else:
+            self.write_bytes(bytes((TX_UART_CONTROL_BYTE,)) + code, f"<control {control.command}>")
+        result = self.wait_for(control.expect, control.timeout)
+        self._on_log("status", f"[CTRL_FAST] ack {result.elapsed_ms}ms: {result.line}")
+        if control.command == "@EXEC_STOP":
+            self._set_upload_paused(True)
+        elif control.command == "@EXEC_RESUME":
+            self._set_upload_paused(False)
+        elif control.command == "@ABORT":
+            self._set_upload_paused(False)
+        if control.interrupt_upload:
+            raise UploadInterrupted(f"控制命令已发送，上传已停止: {control.command}")
+        return control.command
+
+    def _wait_while_upload_paused_locked(
+        self,
+        status_cb: Optional[Callable[[str, float], None]] = None,
+        pct: float = -1,
+    ) -> None:
+        logged = False
+        while self._is_upload_paused():
+            if not logged:
+                self._on_log("status", "[CTRL_FAST] 上传已暂停，等待恢复或取消")
+                if status_cb:
+                    status_cb("上传已暂停，等待恢复或取消", pct)
+                logged = True
+            self._dispatch_priority_control_locked()
+            if self._is_upload_paused():
+                time.sleep(0.05)
+        if logged:
+            self._on_log("status", "[CTRL_FAST] 上传已恢复")
 
     def _resync_tx_locked(self, timeout: float) -> WaitResult:
         """Abort any prior RX job and reset TX parsing in every UART mode.
@@ -355,7 +482,7 @@ class SleJobSerialClient:
         self._drain_lines()
         self._on_log("status", "同步 TX/RX 任务状态")
         self.write_bytes(bytes((TX_UART_RESYNC_BYTE,)), "<resync 0x18>")
-        result = self.wait_for("@OK resync rx=aborted", timeout)
+        result = self.wait_for("@OK resync rx=aborted", timeout, ignore_unknown_command=True)
         self._on_log("status", f"TX/RX 同步完成 {result.elapsed_ms}ms")
         return result
 
@@ -374,6 +501,8 @@ class SleJobSerialClient:
             )
         if TX_UART_RESYNC_BYTE in gcode:
             raise RuntimeError("G-code 包含保留的 UART 同步控制字节 0x18")
+        if TX_UART_CONTROL_BYTE in gcode:
+            raise RuntimeError("G-code 包含保留的 UART 控制帧字节 0x19")
         if preroll_bytes > 0 and not start_on_preroll:
             raise RuntimeError("preroll 只能用于上传并执行，不能用于仅上传")
 
@@ -382,6 +511,7 @@ class SleJobSerialClient:
         t_begin = time.perf_counter()
 
         with self._command_lock:
+            self._set_upload_paused(False)
             resync_timeout = max(timeout, TX_RESYNC_TIMEOUT_MIN_S)
             if recover_tx:
                 self._resync_tx_locked(resync_timeout)
@@ -405,11 +535,18 @@ class SleJobSerialClient:
 
                 offset = 0
                 chunk_count = 0
+                timing_write_ms_total = 0
+                timing_ack_ms_total = 0
+                timing_chunk_ms_total = 0
                 t_data = time.perf_counter()
                 preroll_done = False
                 data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
 
                 while offset < total:
+                    self._dispatch_priority_control_locked()
+                    self._wait_while_upload_paused_locked(
+                        status_cb, offset * 100 // total if total else -1
+                    )
                     end = min(offset + JOB_DATA_CHUNK_SIZE, total)
                     if (
                         start_on_preroll and preroll_bytes > 0 and not preroll_done
@@ -417,22 +554,59 @@ class SleJobSerialClient:
                     ):
                         end = preroll_bytes
                     chunk = gcode[offset:end]
+                    chunk_index = chunk_count + 1
+                    chunk_t0 = time.perf_counter()
+                    write_t0 = chunk_t0
                     self.write_bytes(chunk, f"<chunk> off={offset} len={len(chunk)}")
-                    ack = self.wait_for(
-                        rf"@ACK type=2 .*status=0 .*offset={end}\b",
-                        data_timeout, regex=True,
-                    )
+                    write_ms = int((time.perf_counter() - write_t0) * 1000)
+                    try:
+                        ack = self.wait_for(
+                            rf"@ACK type=2 .*status=0 .*offset={end}\b",
+                            data_timeout, regex=True,
+                        )
+                    except RuntimeError as exc:
+                        if "@ERR unknown_command" in str(exc):
+                            raise RuntimeError(
+                                "TX 在上传数据阶段返回 unknown_command。"
+                                "如果这是暂停执行后出现的，说明当前 TX 固件可能仍是旧版："
+                                "旧版 EXEC_STOP 会退出 data_mode，后续 G-code 被当作命令解析。"
+                                "请烧录最新 ws63-liteos-app_tx_all.fwpkg 后再测试暂停/恢复。"
+                            ) from exc
+                        raise
+                    except TimeoutError:
+                        self._dispatch_priority_control_locked()
+                        raise
+                    chunk_ms = int((time.perf_counter() - chunk_t0) * 1000)
+                    ack_wait_ms = ack.elapsed_ms
+                    timing_write_ms_total += write_ms
+                    timing_ack_ms_total += ack_wait_ms
+                    timing_chunk_ms_total += chunk_ms
                     offset = end
                     chunk_count += 1
                     has_preroll = "preroll=1" in ack.line
                     is_last = offset >= total
                     if chunk_count <= 3 or has_preroll or is_last:
                         self._on_log("status", f"ACK off={offset} preroll={1 if has_preroll else 0}")
+                    if (
+                        chunk_index <= HOST_TIMING_FIRST_CHUNKS
+                        or chunk_index % HOST_TIMING_EVERY_CHUNKS == 0
+                        or chunk_ms >= HOST_TIMING_SLOW_CHUNK_MS
+                        or has_preroll
+                        or is_last
+                    ):
+                        self._on_log(
+                            "status",
+                            f"[HOST_TIMING] chunk={chunk_index} off={offset} len={len(chunk)} "
+                            f"write_ms={write_ms} ack_wait_ms={ack_wait_ms} "
+                            f"total_ms={chunk_ms}",
+                        )
                     pct = offset * 100 // total
                     if status_cb:
                         status_cb(f"上传中 {offset}/{total} bytes", pct)
                     if progress_cb and (chunk_count % 100 == 0 or is_last):
                         progress_cb(f"上传中 {offset}/{total} ({pct}%)")
+                    self._dispatch_priority_control_locked()
+                    self._wait_while_upload_paused_locked(status_cb, pct)
                     if start_on_preroll and preroll_bytes > 0 and not preroll_done and has_preroll:
                         preroll_done = True
                         self._on_log("status", f"PREROLL offset={offset} elapsed={int((time.perf_counter()-t_begin)*1000)}ms")
@@ -449,6 +623,14 @@ class SleJobSerialClient:
                 data_elapsed = time.perf_counter() - t_data
                 rate = total / data_elapsed if data_elapsed > 0 else 0
                 self._on_log("status", f"DATA_DONE {data_elapsed*1000:.0f}ms rate={rate:.0f}B/s chunks={chunk_count}")
+                if chunk_count > 0:
+                    self._on_log(
+                        "status",
+                        f"[HOST_TIMING_SUM] chunks={chunk_count} "
+                        f"avg_write_ms={timing_write_ms_total / chunk_count:.1f} "
+                        f"avg_ack_wait_ms={timing_ack_ms_total / chunk_count:.1f} "
+                        f"avg_chunk_ms={timing_chunk_ms_total / chunk_count:.1f}",
+                    )
 
                 # The final DATA ACK only confirms that TX accepted the UART
                 # bytes. JOB_READY is the transaction commit barrier: TX has
@@ -466,6 +648,8 @@ class SleJobSerialClient:
                     f"JOB_READY commit=confirmed total={total_elapsed*1000:.0f}ms "
                     f"rate={total_rate:.0f}B/s",
                 )
+            except UploadInterrupted:
+                raise
             except Exception:
                 if transaction_started:
                     try:

@@ -122,6 +122,7 @@ class JobPage(QWidget):
     upload_exec_requested = Signal()        # upload + execute
     exec_start_requested = Signal()
     exec_stop_requested = Signal()
+    exec_resume_requested = Signal()
     abort_requested = Signal()
     outline_scan_requested = Signal()
     focus_on_requested = Signal(int)        # power 0-100
@@ -140,7 +141,7 @@ class JobPage(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(24, 16, 24, 16)
 
-        subtitle = QLabel("上传并执行 G-code 雕刻任务，查看接收端状态，控制软件停止及调焦光。")
+        subtitle = QLabel("管理仅上传任务和上传并执行任务，查看接收端状态，控制暂停、恢复、取消及调焦光。")
         subtitle.setObjectName("pageSubtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -318,9 +319,9 @@ class JobPage(QWidget):
 
         right_column.addWidget(prog_group, 0, 1)
 
-        # Card 3: 执行控制
-        exec_group = QGroupBox("执行控制")
-        e_layout = QVBoxLayout(exec_group)
+        # Card 3: 仅上传任务控制
+        manual_group = QGroupBox("仅上传任务控制")
+        e_layout = QVBoxLayout(manual_group)
         e_layout.setSpacing(7)
         e_layout.setContentsMargins(14, 20, 14, 10)
 
@@ -331,22 +332,7 @@ class JobPage(QWidget):
         self.btn_exec.clicked.connect(self.exec_start_requested.emit)
         e_layout.addWidget(self.btn_exec)
 
-        self.btn_outline_scan = QPushButton("扫描外框")
-        self.btn_outline_scan.setObjectName("btnWarn")
-        self.btn_outline_scan.setCursor(self.cursor())
-        self.btn_outline_scan.setMinimumHeight(34)
-        self.btn_outline_scan.setToolTip("按当前 G-code 的实际开光范围低功率高速扫描两圈")
-        self.btn_outline_scan.clicked.connect(self.outline_scan_requested.emit)
-        e_layout.addWidget(self.btn_outline_scan)
-
-        self.btn_stop = QPushButton("停止执行")
-        self.btn_stop.setObjectName("btnWarn")
-        self.btn_stop.setCursor(self.cursor())
-        self.btn_stop.setMinimumHeight(34)
-        self.btn_stop.clicked.connect(self.exec_stop_requested.emit)
-        e_layout.addWidget(self.btn_stop)
-
-        self.btn_abort = QPushButton("放弃队列")
+        self.btn_abort = QPushButton("清空已上传队列")
         self.btn_abort.setObjectName("btnDanger")
         self.btn_abort.setCursor(self.cursor())
         self.btn_abort.setMinimumHeight(34)
@@ -354,9 +340,39 @@ class JobPage(QWidget):
         e_layout.addWidget(self.btn_abort)
 
         e_layout.addStretch(1)
-        right_column.addWidget(exec_group, 1, 0)
+        right_column.addWidget(manual_group, 1, 0)
 
-        # Card 4: 状态查询与调焦
+        # Card 4: 上传并执行控制
+        live_group = QGroupBox("上传并执行控制")
+        live_layout = QVBoxLayout(live_group)
+        live_layout.setSpacing(7)
+        live_layout.setContentsMargins(14, 20, 14, 10)
+
+        self.btn_stop = QPushButton("暂停执行")
+        self.btn_stop.setObjectName("btnWarn")
+        self.btn_stop.setCursor(self.cursor())
+        self.btn_stop.setMinimumHeight(34)
+        self.btn_stop.clicked.connect(self.exec_stop_requested.emit)
+        live_layout.addWidget(self.btn_stop)
+
+        self.btn_resume = QPushButton("恢复执行")
+        self.btn_resume.setObjectName("btnAccent")
+        self.btn_resume.setCursor(self.cursor())
+        self.btn_resume.setMinimumHeight(34)
+        self.btn_resume.clicked.connect(self.exec_resume_requested.emit)
+        live_layout.addWidget(self.btn_resume)
+
+        self.btn_force_cancel = QPushButton("强制断光并取消任务")
+        self.btn_force_cancel.setObjectName("btnDanger")
+        self.btn_force_cancel.setCursor(self.cursor())
+        self.btn_force_cancel.setMinimumHeight(34)
+        self.btn_force_cancel.clicked.connect(self.abort_requested.emit)
+        live_layout.addWidget(self.btn_force_cancel)
+
+        live_layout.addStretch(1)
+        right_column.addWidget(live_group, 1, 1)
+
+        # Card 5: 状态查询与调焦
         safety_group = QGroupBox("状态查询与调焦")
         s_layout = QVBoxLayout(safety_group)
         s_layout.setSpacing(8)
@@ -367,6 +383,14 @@ class JobPage(QWidget):
         self.btn_status.setMinimumHeight(34)
         self.btn_status.clicked.connect(self.status_requested.emit)
         s_layout.addWidget(self.btn_status)
+
+        self.btn_outline_scan = QPushButton("扫描外框")
+        self.btn_outline_scan.setObjectName("btnWarn")
+        self.btn_outline_scan.setCursor(self.cursor())
+        self.btn_outline_scan.setMinimumHeight(34)
+        self.btn_outline_scan.setToolTip("按当前 G-code 的实际开光范围低功率高速扫描两圈")
+        self.btn_outline_scan.clicked.connect(self.outline_scan_requested.emit)
+        s_layout.addWidget(self.btn_outline_scan)
 
         # Divider
         divider = QWidget()
@@ -399,9 +423,9 @@ class JobPage(QWidget):
         focus_layout.addWidget(self.btn_focus, 1)
         s_layout.addLayout(focus_layout)
 
-        right_column.addWidget(safety_group, 1, 1)
+        right_column.addWidget(safety_group, 2, 0)
 
-        # Card 5: 路由切换 (Spans columns 0 and 1)
+        # Card 6: 路由切换
         route_group = QGroupBox("路由切换")
         route_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         r_layout = QVBoxLayout(route_group)
@@ -420,7 +444,7 @@ class JobPage(QWidget):
         self.btn_wifi.clicked.connect(self.switch_wifi_requested.emit)
         r_layout.addWidget(self.btn_wifi)
 
-        right_column.addWidget(route_group, 2, 0, 1, 2)
+        right_column.addWidget(route_group, 2, 1)
 
         dashboard_layout.addLayout(right_column, 1)
 

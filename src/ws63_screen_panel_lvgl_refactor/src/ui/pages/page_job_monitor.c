@@ -104,7 +104,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     bind_click(back_lbl, back_btn_cb, NULL);
 
     g_lbl_title = lv_label_create(header);
-    lv_label_set_text(g_lbl_title, "任务监控");
+    lv_label_set_text(g_lbl_title, "任务控制");
     lv_obj_set_style_text_font(g_lbl_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_title, COLOR_TEXT_BRIGHT, 0);
 
@@ -136,7 +136,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(owner_row, 0, 0);
 
     lv_obj_t *owner_lbl = lv_label_create(owner_row);
-    lv_label_set_text(owner_lbl, "Owner");
+    lv_label_set_text(owner_lbl, "控制源");
     lv_obj_set_style_text_font(owner_lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(owner_lbl, COLOR_TEXT_MUTED, 0);
 
@@ -146,7 +146,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_lbl_owner, COLOR_TEXT_LIGHT, 0);
 
     lv_obj_t *mode_lbl = lv_label_create(owner_row);
-    lv_label_set_text(mode_lbl, "Mode");
+    lv_label_set_text(mode_lbl, "模式");
     lv_obj_set_style_text_font(mode_lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(mode_lbl, COLOR_TEXT_MUTED, 0);
 
@@ -165,7 +165,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(job_row, 0, 0);
 
     lv_obj_t *id_lbl = lv_label_create(job_row);
-    lv_label_set_text(id_lbl, "任务ID");
+    lv_label_set_text(id_lbl, "任务名");
     lv_obj_set_style_text_font(id_lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(id_lbl, COLOR_TEXT_MUTED, 0);
 
@@ -273,17 +273,17 @@ void page_job_monitor_update(void)
     }
 
     if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
-        lv_label_set_text(g_lbl_title, "Offline View");
+        lv_label_set_text(g_lbl_title, "离线任务");
     } else if (g_model.owner == PANEL_OWNER_HOST) {
-        lv_label_set_text(g_lbl_title, "Online Monitor");
+        lv_label_set_text(g_lbl_title, "在线监控");
     } else if (g_model.owner == PANEL_OWNER_SCREEN) {
-        lv_label_set_text(g_lbl_title, "Offline Job Monitor");
+        lv_label_set_text(g_lbl_title, "离线监控");
     } else {
-        lv_label_set_text(g_lbl_title, "任务监控");
+        lv_label_set_text(g_lbl_title, "任务控制");
     }
 
-    lv_label_set_text(g_lbl_owner, panel_model_owner_text(g_model.owner));
-    lv_label_set_text(g_lbl_mode, panel_model_mode_text(g_model.mode));
+    lv_label_set_text(g_lbl_owner, panel_model_owner_label(g_model.owner));
+    lv_label_set_text(g_lbl_mode, panel_model_mode_label(g_model.mode));
     lv_label_set_text(g_lbl_job_id, g_model.job_name);
 
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.executed_lines);

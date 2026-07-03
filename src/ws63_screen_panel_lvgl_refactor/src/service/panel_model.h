@@ -19,6 +19,7 @@ typedef enum {
     SYS_STATE_REQUESTING_STOP,
     SYS_STATE_REQUESTING_ABORT,
     SYS_STATE_REQUESTING_FOCUS_OFF,
+    SYS_STATE_TERMINATED,
     SYS_STATE_ERROR,
     SYS_STATE_LINK_LOST,
     SYS_STATE_COUNT
@@ -114,6 +115,7 @@ void panel_model_tick(void);
 void panel_model_request_stop(void);
 void panel_model_request_abort(void);
 void panel_model_request_focus_off(void);
+void panel_model_mark_focus_ack(bool active);
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count);
 void panel_model_start_offline_selected(void);
 void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uint32_t line_count);
@@ -132,5 +134,10 @@ const char *panel_model_owner_text(panel_owner_t owner);
 const char *panel_model_mode_text(panel_mode_t mode);
 const char *panel_model_view_mode_text(panel_view_mode_t view_mode);
 const char *panel_model_scene_text(panel_fake_scene_t scene);
+const char *panel_model_state_label(system_state_t state);
+const char *panel_model_state_detail(system_state_t state);
+const char *panel_model_owner_label(panel_owner_t owner);
+const char *panel_model_mode_label(panel_mode_t mode);
+const char *panel_model_view_mode_label(panel_view_mode_t view_mode);
 
 #endif

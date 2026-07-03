@@ -6,12 +6,14 @@
 #include "panel_theme.h"
 #include "ui_manager.h"
 #include "../service/panel_model.h"
+#include "../service/panel_rx_commands.h"
 #include "soc_osal.h"
 #include <stdio.h>
 
 static lv_obj_t *g_arc_focus;
 static lv_obj_t *g_lbl_focus_val;
 static lv_obj_t *g_lbl_focus_state;
+static uint32_t g_rendered_seq = UINT32_MAX;
 
 static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
 {
@@ -39,15 +41,40 @@ static void focus_arc_cb(lv_event_t *e)
 static void focus_on_cb(lv_event_t *e)
 {
     (void)e;
-    lv_label_set_text(g_lbl_focus_state, "激光开启");
-    lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+    panel_button_permissions_t perms;
+    panel_model_get_button_permissions(&perms);
+    if (!perms.can_focus_on) {
+        lv_label_set_text(g_lbl_focus_state, "仅空闲允许");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
+        return;
+    }
+    int power = lv_arc_get_value(g_arc_focus);
+    if (power < 0) {
+        power = 0;
+    } else if (power > 100) {
+        power = 100;
+    }
+    if (panel_rx_commands_request_focus_on((uint8_t)power) == ERRCODE_SUCC) {
+        lv_label_set_text(g_lbl_focus_state, "调焦请求");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_BLUE, 0);
+        osal_printk("[CONTROL] focus_on queued s=%u\r\n", (unsigned int)power);
+    } else {
+        lv_label_set_text(g_lbl_focus_state, "发送失败");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+    }
 }
 
 static void focus_off_cb(lv_event_t *e)
 {
     (void)e;
-    lv_label_set_text(g_lbl_focus_state, "激光关闭");
-    lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
+    if (panel_rx_commands_request_focus_off() == ERRCODE_SUCC) {
+        panel_model_request_focus_off();
+        lv_label_set_text(g_lbl_focus_state, "关光请求");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
+    } else {
+        lv_label_set_text(g_lbl_focus_state, "发送失败");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+    }
 }
 
 static void jog_cb(lv_event_t *e)
@@ -79,6 +106,8 @@ static lv_obj_t *create_jog_btn(lv_obj_t *parent, const char *symbol, const char
 
 void page_control_create(lv_obj_t *parent)
 {
+    g_rendered_seq = UINT32_MAX;
+
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_screen, 0);
@@ -154,7 +183,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(fh, 0, 0);
 
     lv_obj_t *ft = lv_label_create(fh);
-    lv_label_set_text(ft, LV_SYMBOL_EYE_OPEN " 调焦功率");
+    lv_label_set_text(ft, LV_SYMBOL_EYE_OPEN " 弱光功率");
     lv_obj_set_style_text_font(ft, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(ft, COLOR_LASER_ORANGE, 0);
 
@@ -164,7 +193,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_lbl_focus_val, COLOR_TEXT_BRIGHT, 0);
 
     g_lbl_focus_state = lv_label_create(fh);
-    lv_label_set_text(g_lbl_focus_state, "激光关闭");
+    lv_label_set_text(g_lbl_focus_state, "调焦关闭");
     lv_obj_set_style_text_font(g_lbl_focus_state, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
 
@@ -183,7 +212,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_bg_color(btn_on, COLOR_LASER_RED, 0);
     lv_obj_set_style_radius(btn_on, 6, 0);
     lv_obj_t *lbl_on = lv_label_create(btn_on);
-    lv_label_set_text(lbl_on, "开启");
+    lv_label_set_text(lbl_on, "调焦ON");
     lv_obj_set_style_text_font(lbl_on, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl_on, lv_color_white(), 0);
     lv_obj_center(lbl_on);
@@ -195,7 +224,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_set_style_bg_color(btn_off, COLOR_LASER_GREEN, 0);
     lv_obj_set_style_radius(btn_off, 6, 0);
     lv_obj_t *lbl_off = lv_label_create(btn_off);
-    lv_label_set_text(lbl_off, "关闭");
+    lv_label_set_text(lbl_off, "FOCUS_OFF");
     lv_obj_set_style_text_font(lbl_off, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl_off, lv_color_white(), 0);
     lv_obj_center(lbl_off);
@@ -226,7 +255,7 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_add_style(jog_card, &style_card, 0);
 
     lv_obj_t *jog_title = lv_label_create(jog_card);
-    lv_label_set_text(jog_title, LV_SYMBOL_LOOP " 手动点动");
+    lv_label_set_text(jog_title, LV_SYMBOL_LOOP " 手动点动（待接入）");
     lv_obj_set_style_text_font(jog_title, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(jog_title, COLOR_LASER_BLUE, 0);
 
@@ -269,4 +298,18 @@ void page_control_create(lv_obj_t *parent)
 
 void page_control_update(void)
 {
+    if (g_rendered_seq == g_model.seq) {
+        return;
+    }
+    if (g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF) {
+        lv_label_set_text(g_lbl_focus_state, "关光请求");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
+    } else if (g_model.focus_active) {
+        lv_label_set_text(g_lbl_focus_state, "调焦开启");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+    } else {
+        lv_label_set_text(g_lbl_focus_state, "调焦关闭");
+        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
+    }
+    g_rendered_seq = g_model.seq;
 }
