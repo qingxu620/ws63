@@ -208,7 +208,7 @@ For `src/ws63_laser_rx_unified/`:
 11. Unified RX firmware archive path and build rules: see **Automation Scripts §5**.
 12. When modifying unified RX build integration or code, compile with `scripts/build_rx_unified_firmware.sh` unless the user explicitly says not to compile.
 13. The build script switches `ws63_liteos_app.config`. To build TX/RX, screen, or LVGL afterward, run that target's own build script or explicitly reconfigure first; do not assume the previous sample selection is still active.
-14. The integrated SLE Job route must keep its cache at 131072 bytes and preserve the stable protocol framing, CRC, ACK/NACK, sequence, duplicate, cache, and preroll behavior. Its Host demo preroll baseline remains 4096.
+14. The integrated SLE Job route must keep its cache at 65536 bytes and preserve the stable protocol framing, CRC, ACK/NACK, sequence, duplicate, cache, and preroll behavior. Its Host demo preroll baseline remains 4096.
 15. R5 has only two operational upper-level modes: `RX_MODE_GRBL_STREAM` and `RX_MODE_SLE_JOB`. R5A read-only mode/status query build and flash validation passed. With `SLE_JOB` active, `@STATUS`, `preroll=4096`, `EXEC_START`, `DATA_RESUME`, `JOB_READY`, `JOB_END`, and `EXEC_DONE` all passed, with final `active=0` and laser OFF. R5A implements snapshots and logs only; it did not add switching, an owner mechanism, or changes to the validated SLE protocol path.
 16. `RX_MODE_GRBL_STREAM` should use one G-code parser, one processor, and one motion executor with UART and WiFi as simultaneous input frontends. Do not start two complete Legacy UART/WiFi execution cores together.
 17. Do not add a GRBL owner mechanism for the current demo. The operator must not send UART and WiFi jobs concurrently; concurrent input behavior is unspecified. A simple response broadcast to UART and WiFi is acceptable for the demo.
@@ -433,7 +433,7 @@ cd /root/fbb_ws63
 
 - R4B 启用 `CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y` 并默认激活 SLE Job route；
 - Legacy UART/WiFi 继续编译用于 symbol coverage，但不得启动 UART RX、SoftAP 或 TCP server；
-- integrated SLE job cache 固定为 131072 字节，Host demo preroll baseline 保持 4096；
+- integrated SLE job cache 固定为 65536 字节，Host demo preroll baseline 保持 4096；
 - 脚本会关闭 `ENABLE_LASER_SINGLE_SAMPLE`、`ENABLE_LASER_WIFI_SAMPLE`、`ENABLE_LASER_SLE_JOB_SAMPLE`、`ENABLE_SCREEN_SAMPLE`、`ENABLE_LVGL_SAMPLE` 等竞争入口；
 - 脚本会修改 `src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config`；
 - 构建 TX/RX、screen、LVGL 或其它固件时，必须使用对应脚本重新切配置；
