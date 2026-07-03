@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.config_store import HostConfig
+from transports.sle_tx_transport import BAUD_DEFAULT, BAUD_LOG_DEFAULT, port_device
 
 
 class ConnectionPage(QWidget):
@@ -83,7 +84,7 @@ class ConnectionPage(QWidget):
         port_row.addWidget(self.btn_refresh)
         cmd_layout.addLayout(port_row)
 
-        self.baud_edit = QLineEdit("115200")
+        self.baud_edit = QLineEdit(str(BAUD_DEFAULT))
         self.baud_edit.setValidator(QIntValidator(9600, 4_000_000, self))
         cmd_layout.addLayout(self._field_row("波特率", self.baud_edit, 110))
         cmd_layout.addStretch(1)
@@ -130,7 +131,7 @@ class ConnectionPage(QWidget):
         self.rx_log_edit = QLineEdit()
         self.rx_log_edit.setPlaceholderText("例如 COM26")
         conn_layout.addLayout(self._field_row("默认接收端日志端口", self.rx_log_edit))
-        self.baud_edit_cfg = QLineEdit("115200")
+        self.baud_edit_cfg = QLineEdit(str(BAUD_DEFAULT))
         self.baud_edit_cfg.setValidator(QIntValidator(9600, 4_000_000, self))
         conn_layout.addLayout(self._field_row("物理波特率", self.baud_edit_cfg))
 
@@ -202,7 +203,7 @@ class ConnectionPage(QWidget):
         try:
             return max(9600, int(self.baud_edit.text().strip()))
         except ValueError:
-            return 115200
+            return BAUD_DEFAULT
 
     def set_connected(self, connected: bool) -> None:
         self.btn_connect.setText("断开连接" if connected else "连接")
@@ -232,8 +233,6 @@ class ConnectionPage(QWidget):
             return
         display = self.cmd_combo.currentText().strip()
         if display:
-            from transports.sle_tx_transport import port_device
-
             self.connect_requested.emit(port_device(display), display, self.get_baud())
 
     def _on_tx_log(self) -> None:
@@ -242,9 +241,7 @@ class ConnectionPage(QWidget):
             return
         display = self.tx_log_combo.currentText().strip()
         if display:
-            from transports.sle_tx_transport import port_device
-
-            self.tx_log_requested.emit(port_device(display), self.get_baud())
+            self.tx_log_requested.emit(port_device(display), BAUD_LOG_DEFAULT)
 
     def _on_rx_log(self) -> None:
         if self.btn_rx_log.text() == "停止监听":
@@ -252,9 +249,7 @@ class ConnectionPage(QWidget):
             return
         display = self.rx_log_combo.currentText().strip()
         if display:
-            from transports.sle_tx_transport import port_device
-
-            self.rx_log_requested.emit(port_device(display), self.get_baud())
+            self.rx_log_requested.emit(port_device(display), BAUD_LOG_DEFAULT)
 
     def _on_save(self) -> None:
         try:

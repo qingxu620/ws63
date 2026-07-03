@@ -254,7 +254,7 @@ For `src/ws63_laser_rx_unified/`:
    - **RX 日志串口**：UART0 debug/log，RX 固件 osal_printk
    Remember the mapping only for the current conversation/debug session. Do not implement persistent `host_config.json` unless the user explicitly asks for it again.
 9. 当前安全波特率基线：
-   - TX 命令串口：**115200**，除非用户明确说 UART1 已经重新编译并烧录为其他波特率；
+   - TX 命令串口 UART1：**115200**，当前已验证稳定基线。460800/921600 只能作为显式实验项，不作为默认值；
    - TX 日志串口：**115200**；
    - RX 日志串口：**115200**。
 10. Do NOT assume WSL2 can directly access COM ports.
@@ -493,14 +493,14 @@ Changing `PKT_FOCUS_CTRL` or `focus_ctrl_payload_t` requires rebuilding and flas
 Before a demo run:
 
 1. Confirm the current Win11 three-port serial role mapping.
-2. Keep all serial ports at **115200**.
+2. Keep TX command UART1 at **115200**; keep TX/RX log UARTs at **115200**.
 3. Verify `@STATUS` responds.
 4. Verify manual focus on/off with `S10` and `S70`.
 5. Run a short G-code job.
 6. Run a large file with `preroll=4096`.
 7. Confirm `EXEC_DONE` is reported.
 8. After job done, confirm the laser is physically off.
-9. Do not test the 921600 demo path unless the user explicitly requests it.
+9. Do not test 460800/921600 command UART paths unless the user explicitly requests it; the current stable command UART baseline is 115200.
 
 ## Response Style
 

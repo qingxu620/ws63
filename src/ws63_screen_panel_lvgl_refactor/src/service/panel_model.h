@@ -16,6 +16,7 @@ typedef enum {
     SYS_STATE_READY,
     SYS_STATE_RUNNING,
     SYS_STATE_DONE,
+    SYS_STATE_PAUSED,
     SYS_STATE_REQUESTING_STOP,
     SYS_STATE_REQUESTING_ABORT,
     SYS_STATE_REQUESTING_FOCUS_OFF,
@@ -121,6 +122,9 @@ void panel_model_start_offline_selected(void);
 void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uint32_t line_count);
 void panel_model_offline_upload_progress(uint32_t received_size);
 void panel_model_offline_execution_started(void);
+void panel_model_offline_paused(void);
+void panel_model_offline_resumed(void);
+void panel_model_offline_aborted(void);
 void panel_model_offline_job_done(void);
 void panel_model_offline_error(const char *error);
 void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,

@@ -72,6 +72,20 @@ set_config_n() {
     printf '# %s is not set\n' "$symbol" >> "$CONFIG"
 }
 
+set_config_int() {
+    local symbol=$1
+    local value=$2
+    if grep -q "^${symbol}=" "$CONFIG"; then
+        sed -i "s/^${symbol}=.*/${symbol}=${value}/" "$CONFIG"
+        return
+    fi
+    if grep -q "^# ${symbol} is not set$" "$CONFIG"; then
+        sed -i "s/^# ${symbol} is not set$/${symbol}=${value}/" "$CONFIG"
+        return
+    fi
+    printf '%s=%s\n' "$symbol" "$value" >> "$CONFIG"
+}
+
 # Disable ALL competing app samples so only one is active per build.
 disable_all_samples() {
     set_config_n CONFIG_ENABLE_LASER_SINGLE_SAMPLE
@@ -105,6 +119,9 @@ switch_to_tx() {
     if ! grep -q '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG"; then
         sed -i '/^CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=y$/a CONFIG_LASER_SLE_JOB_TRANSMITTER=y' "$CONFIG"
     fi
+    set_config_int CONFIG_UART1_BAUDRATE 115200
+    set_config_int CONFIG_LOG_UART_BAUDRATE 115200
+    set_config_int CONFIG_LASER_SLE_JOB_UART_BAUD 115200
     verify_tx_config
 }
 

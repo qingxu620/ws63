@@ -21,6 +21,7 @@ except ImportError:
 
 # ---- Protocol constants (shared with firmware) ----
 BAUD_DEFAULT = 115200
+BAUD_LOG_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 214
 JOB_MAX_SIZE = 65536
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin

@@ -6,6 +6,7 @@
 #include "panel_file_manager.h"
 #include "panel_job_proto.h"
 #include "panel_model.h"
+#include "panel_rx_commands.h"
 #include "panel_transport_sle.h"
 #include "task_manager.h"
 
@@ -45,6 +46,12 @@ typedef struct {
     uint16_t line_len;
     bool triggered;
 } preroll_tracker_t;
+
+typedef enum {
+    PANEL_OFFLINE_FLOW_OK = 0,
+    PANEL_OFFLINE_FLOW_FAIL,
+    PANEL_OFFLINE_FLOW_ABORTED,
+} panel_offline_flow_t;
 
 static osal_semaphore g_ack_sem;
 static volatile bool g_ack_sem_ready;
@@ -349,7 +356,36 @@ static errcode_t send_exec_start(uint32_t job_id)
     return send_packet_wait_ack(PKT_EXEC_START, &start, sizeof(start));
 }
 
-static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *entry, uint16_t crc)
+static panel_offline_flow_t handle_priority_control(bool wait_if_paused)
+{
+    while (1) {
+        panel_rx_command_result_t result = panel_rx_commands_dispatch_pending();
+        if (result.type != PANEL_RX_COMMAND_NONE) {
+            if (result.ret != ERRCODE_SUCC) {
+                osal_printk("[PANEL_OFFLINE] control failed type=%u ret=0x%x\r\n",
+                            (unsigned int)result.type, result.ret);
+                return PANEL_OFFLINE_FLOW_FAIL;
+            }
+            if (result.type == PANEL_RX_COMMAND_ABORT) {
+                panel_model_offline_aborted();
+                return PANEL_OFFLINE_FLOW_ABORTED;
+            }
+            if (result.type == PANEL_RX_COMMAND_EXEC_STOP) {
+                panel_model_offline_paused();
+            } else if (result.type == PANEL_RX_COMMAND_EXEC_RESUME) {
+                panel_model_offline_resumed();
+            }
+        }
+
+        if (!wait_if_paused || !panel_rx_commands_is_offline_upload_paused()) {
+            return PANEL_OFFLINE_FLOW_OK;
+        }
+
+        osal_msleep(50);
+    }
+}
+
+static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file_entry_t *entry, uint16_t crc)
 {
     uint32_t offset = 0;
     uint32_t total_size = entry->size_bytes;
@@ -361,7 +397,7 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
 
     errcode_t ret = send_job_begin(PANEL_OFFLINE_JOB_ID, total_size, crc);
     if (ret != ERRCODE_SUCC) {
-        return ret;
+        return PANEL_OFFLINE_FLOW_FAIL;
     }
 
     osal_printk("[PANEL_OFFLINE] upload pump readahead=%u packet_max=%u\r\n",
@@ -369,17 +405,27 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
                 (unsigned int)PANEL_OFFLINE_CHUNK_MAX);
 
     while (offset < total_size) {
+        panel_offline_flow_t flow = handle_priority_control(true);
+        if (flow != PANEL_OFFLINE_FLOW_OK) {
+            return flow;
+        }
+
         size_t bytes_read = 0;
         bool eof = false;
         uint32_t read_offset = offset;
         if (!panel_file_manager_read_chunk(index, read_offset, g_readahead_buf,
                                            sizeof(g_readahead_buf), &bytes_read, &eof) ||
             bytes_read == 0U) {
-            return ERRCODE_FAIL;
+            return PANEL_OFFLINE_FLOW_FAIL;
         }
 
         size_t read_pos = 0;
         while (read_pos < bytes_read) {
+            flow = handle_priority_control(true);
+            if (flow != PANEL_OFFLINE_FLOW_OK) {
+                return flow;
+            }
+
             size_t remain = bytes_read - read_pos;
             uint16_t chunk_len = (remain > PANEL_OFFLINE_CHUNK_MAX) ?
                 (uint16_t)PANEL_OFFLINE_CHUNK_MAX : (uint16_t)remain;
@@ -387,7 +433,12 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
 
             ret = send_job_data(PANEL_OFFLINE_JOB_ID, offset, chunk, chunk_len);
             if (ret != ERRCODE_SUCC) {
-                return ret;
+                return PANEL_OFFLINE_FLOW_FAIL;
+            }
+
+            flow = handle_priority_control(true);
+            if (flow != PANEL_OFFLINE_FLOW_OK) {
+                return flow;
             }
 
             uint32_t trigger_offset = 0;
@@ -399,7 +450,7 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
                             (unsigned int)preroll.fallback_offset);
                 ret = send_exec_start(PANEL_OFFLINE_JOB_ID);
                 if (ret != ERRCODE_SUCC) {
-                    return ret;
+                    return PANEL_OFFLINE_FLOW_FAIL;
                 }
                 exec_started = true;
                 panel_model_offline_execution_started();
@@ -420,19 +471,28 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
         }
 
         if (eof && offset < total_size) {
-            return ERRCODE_FAIL;
+            return PANEL_OFFLINE_FLOW_FAIL;
         }
+    }
+
+    panel_offline_flow_t flow = handle_priority_control(true);
+    if (flow != PANEL_OFFLINE_FLOW_OK) {
+        return flow;
     }
 
     ret = send_job_end(PANEL_OFFLINE_JOB_ID, total_size, crc);
     if (ret != ERRCODE_SUCC) {
-        return ret;
+        return PANEL_OFFLINE_FLOW_FAIL;
     }
 
     if (!exec_started) {
+        flow = handle_priority_control(true);
+        if (flow != PANEL_OFFLINE_FLOW_OK) {
+            return flow;
+        }
         ret = send_exec_start(PANEL_OFFLINE_JOB_ID);
         if (ret != ERRCODE_SUCC) {
-            return ret;
+            return PANEL_OFFLINE_FLOW_FAIL;
         }
         panel_model_offline_execution_started();
         osal_printk("[PANEL_OFFLINE] exec start after full upload\r\n");
@@ -444,17 +504,32 @@ static errcode_t upload_selected_file(uint8_t index, const panel_file_entry_t *e
                 (unsigned int)total_size, (unsigned int)packet_count,
                 (unsigned int)elapsed, (unsigned int)rate);
 
-    return ERRCODE_SUCC;
+    return PANEL_OFFLINE_FLOW_OK;
 }
 
 static void poll_execution_until_idle(void)
 {
     uint32_t start = (uint32_t)uapi_systick_get_ms();
+    uint32_t last_status = 0;
     bool saw_executing = false;
 
     while ((uint32_t)((uint32_t)uapi_systick_get_ms() - start) < PANEL_OFFLINE_EXEC_TIMEOUT_MS) {
-        (void)send_packet_no_ack(PKT_STATUS_REQ, NULL, 0);
-        osal_msleep(PANEL_OFFLINE_STATUS_MS);
+        panel_offline_flow_t flow = handle_priority_control(true);
+        if (flow == PANEL_OFFLINE_FLOW_ABORTED) {
+            osal_printk("[PANEL_OFFLINE] execution poll aborted by screen control\r\n");
+            return;
+        }
+        if (flow != PANEL_OFFLINE_FLOW_OK) {
+            panel_model_offline_error("CTRL_FAIL");
+            return;
+        }
+
+        uint32_t now = (uint32_t)uapi_systick_get_ms();
+        if (last_status == 0U || (uint32_t)(now - last_status) >= PANEL_OFFLINE_STATUS_MS) {
+            (void)send_packet_no_ack(PKT_STATUS_REQ, NULL, 0);
+            last_status = now;
+        }
+
         if (g_model.state == SYS_STATE_RUNNING) {
             saw_executing = true;
         }
@@ -465,6 +540,7 @@ static void poll_execution_until_idle(void)
         if (g_model.state == SYS_STATE_ERROR || g_model.state == SYS_STATE_LINK_LOST) {
             return;
         }
+        osal_msleep(50);
     }
 
     panel_model_offline_error("EXEC_TIMEOUT");
@@ -500,7 +576,12 @@ static void run_offline_job(uint8_t index)
                 entry->name, (unsigned int)entry->size_bytes, crc,
                 (unsigned int)PANEL_OFFLINE_PREROLL_REQUEST_BYTES);
 
-    if (upload_selected_file(index, entry, crc) != ERRCODE_SUCC) {
+    panel_offline_flow_t flow = upload_selected_file(index, entry, crc);
+    if (flow == PANEL_OFFLINE_FLOW_ABORTED) {
+        osal_printk("[PANEL_OFFLINE] upload aborted by screen control\r\n");
+        return;
+    }
+    if (flow != PANEL_OFFLINE_FLOW_OK) {
         abort_rx_best_effort();
         panel_model_offline_error("UPLOAD_FAIL");
         return;
@@ -522,7 +603,9 @@ static int panel_offline_job_task(void *arg)
 
         g_start_requested = false;
         g_busy = true;
+        panel_rx_commands_set_offline_upload_active(true);
         run_offline_job(g_pending_index);
+        panel_rx_commands_set_offline_upload_active(false);
         g_busy = false;
     }
     return 0;

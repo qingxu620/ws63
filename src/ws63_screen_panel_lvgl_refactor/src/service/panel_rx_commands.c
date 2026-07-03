@@ -23,15 +23,19 @@
 #define PANEL_RX_CMD_TASK_PRIORITY   6
 #define PANEL_RX_CMD_ACK_TIMEOUT_MS  1000U
 #define PANEL_RX_CMD_RETRY_MAX       2U
+#define PANEL_RX_CMD_IDLE_WAIT_MS    50U
 
 #define PANEL_RX_CMD_STOP       0x01U
-#define PANEL_RX_CMD_ABORT      0x02U
-#define PANEL_RX_CMD_FOCUS_ON   0x04U
-#define PANEL_RX_CMD_FOCUS_OFF  0x08U
-#define PANEL_RX_CMD_STATUS     0x10U
+#define PANEL_RX_CMD_RESUME     0x02U
+#define PANEL_RX_CMD_ABORT      0x04U
+#define PANEL_RX_CMD_FOCUS_ON   0x08U
+#define PANEL_RX_CMD_FOCUS_OFF  0x10U
+#define PANEL_RX_CMD_STATUS     0x20U
 
 static osal_semaphore g_ack_sem;
+static osal_semaphore g_cmd_sem;
 static volatile bool g_ack_sem_ready;
+static volatile bool g_cmd_sem_ready;
 static volatile bool g_wait_active;
 static volatile bool g_wait_got_ack;
 static volatile uint16_t g_wait_ack_seq;
@@ -39,6 +43,8 @@ static volatile uint8_t g_wait_status;
 static volatile uint32_t g_pending_mask;
 static volatile uint8_t g_pending_focus_power;
 static volatile bool g_task_started;
+static volatile bool g_offline_upload_active;
+static volatile bool g_offline_upload_paused;
 
 static void cmd_response_cb(const uint8_t *data, uint16_t len)
 {
@@ -127,21 +133,125 @@ static errcode_t send_focus(bool on, uint8_t power)
     return send_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp));
 }
 
-static uint32_t take_pending_mask(void)
+static uint32_t pop_next_pending(void)
 {
     uint32_t lock = osal_irq_lock();
-    uint32_t mask = g_pending_mask;
-    g_pending_mask = 0;
+    uint32_t bit = 0;
+    if ((g_pending_mask & PANEL_RX_CMD_ABORT) != 0U) {
+        bit = PANEL_RX_CMD_ABORT;
+        g_pending_mask = 0;
+    } else if ((g_pending_mask & PANEL_RX_CMD_STOP) != 0U) {
+        bit = PANEL_RX_CMD_STOP;
+        g_pending_mask &= ~PANEL_RX_CMD_STOP;
+    } else if ((g_pending_mask & PANEL_RX_CMD_RESUME) != 0U) {
+        bit = PANEL_RX_CMD_RESUME;
+        g_pending_mask &= ~PANEL_RX_CMD_RESUME;
+    } else if ((g_pending_mask & PANEL_RX_CMD_FOCUS_OFF) != 0U) {
+        bit = PANEL_RX_CMD_FOCUS_OFF;
+        g_pending_mask &= ~PANEL_RX_CMD_FOCUS_OFF;
+    } else if ((g_pending_mask & PANEL_RX_CMD_FOCUS_ON) != 0U) {
+        bit = PANEL_RX_CMD_FOCUS_ON;
+        g_pending_mask &= ~PANEL_RX_CMD_FOCUS_ON;
+    } else if ((g_pending_mask & PANEL_RX_CMD_STATUS) != 0U) {
+        bit = PANEL_RX_CMD_STATUS;
+        g_pending_mask &= ~PANEL_RX_CMD_STATUS;
+    }
     osal_irq_restore(lock);
-    return mask;
+    return bit;
 }
 
 static errcode_t queue_cmd(uint32_t bit)
 {
     uint32_t lock = osal_irq_lock();
-    g_pending_mask |= bit;
+    if (bit == PANEL_RX_CMD_ABORT) {
+        g_pending_mask = PANEL_RX_CMD_ABORT;
+    } else if (bit == PANEL_RX_CMD_STOP) {
+        if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {
+            g_pending_mask &= ~PANEL_RX_CMD_RESUME;
+            g_pending_mask |= PANEL_RX_CMD_STOP;
+        }
+    } else if (bit == PANEL_RX_CMD_RESUME) {
+        if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {
+            g_pending_mask &= ~PANEL_RX_CMD_STOP;
+            g_pending_mask |= PANEL_RX_CMD_RESUME;
+        }
+    } else {
+        if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {
+            g_pending_mask |= bit;
+        }
+    }
     osal_irq_restore(lock);
+    if (g_cmd_sem_ready) {
+        osal_sem_up(&g_cmd_sem);
+    }
     return ERRCODE_SUCC;
+}
+
+static panel_rx_command_result_t dispatch_bit(uint32_t bit)
+{
+    panel_rx_command_result_t result = {
+        .type = PANEL_RX_COMMAND_NONE,
+        .ret = ERRCODE_SUCC,
+    };
+
+    switch (bit) {
+    case PANEL_RX_CMD_STOP:
+        result.type = PANEL_RX_COMMAND_EXEC_STOP;
+        result.ret = send_wait_ack(PKT_EXEC_STOP, NULL, 0);
+        if (result.ret == ERRCODE_SUCC) {
+            g_offline_upload_paused = true;
+        }
+        osal_printk("[PANEL_CMD] EXEC_STOP ret=0x%x\r\n", result.ret);
+        break;
+    case PANEL_RX_CMD_RESUME:
+        result.type = PANEL_RX_COMMAND_EXEC_RESUME;
+        result.ret = send_wait_ack(PKT_EXEC_RESUME, NULL, 0);
+        if (result.ret == ERRCODE_SUCC) {
+            g_offline_upload_paused = false;
+        }
+        osal_printk("[PANEL_CMD] EXEC_RESUME ret=0x%x\r\n", result.ret);
+        break;
+    case PANEL_RX_CMD_ABORT:
+        result.type = PANEL_RX_COMMAND_ABORT;
+        result.ret = send_wait_ack(PKT_JOB_ABORT, NULL, 0);
+        if (result.ret == ERRCODE_SUCC) {
+            g_offline_upload_paused = false;
+        }
+        osal_printk("[PANEL_CMD] JOB_ABORT ret=0x%x\r\n", result.ret);
+        break;
+    case PANEL_RX_CMD_FOCUS_OFF:
+        result.type = PANEL_RX_COMMAND_FOCUS_OFF;
+        result.ret = send_focus(false, 0);
+        if (result.ret == ERRCODE_SUCC) {
+            panel_model_mark_focus_ack(false);
+        }
+        osal_printk("[PANEL_CMD] FOCUS_OFF ret=0x%x\r\n", result.ret);
+        break;
+    case PANEL_RX_CMD_FOCUS_ON:
+        result.type = PANEL_RX_COMMAND_FOCUS_ON;
+        {
+            uint8_t power = g_pending_focus_power;
+            if (power > 100U) {
+                power = 100U;
+            }
+            result.ret = send_focus(true, power);
+            if (result.ret == ERRCODE_SUCC) {
+                panel_model_mark_focus_ack(true);
+            }
+            osal_printk("[PANEL_CMD] FOCUS_ON s=%u ret=0x%x\r\n",
+                        (unsigned int)power, result.ret);
+        }
+        break;
+    case PANEL_RX_CMD_STATUS:
+        result.type = PANEL_RX_COMMAND_STATUS;
+        result.ret = send_status_req();
+        osal_printk("[PANEL_CMD] STATUS_REQ ret=0x%x\r\n", result.ret);
+        break;
+    default:
+        break;
+    }
+
+    return result;
 }
 
 static int panel_rx_cmd_task(void *arg)
@@ -149,43 +259,24 @@ static int panel_rx_cmd_task(void *arg)
     unused(arg);
 
     while (1) {
-        uint32_t mask = take_pending_mask();
-        if (mask == 0U) {
-            osal_msleep(20);
+        if (g_offline_upload_active) {
+            if (g_cmd_sem_ready) {
+                (void)osal_sem_down_timeout(&g_cmd_sem, PANEL_RX_CMD_IDLE_WAIT_MS);
+            } else {
+                osal_msleep(PANEL_RX_CMD_IDLE_WAIT_MS);
+            }
             continue;
         }
-
-        if ((mask & PANEL_RX_CMD_STOP) != 0U) {
-            errcode_t ret = send_wait_ack(PKT_EXEC_STOP, NULL, 0);
-            osal_printk("[PANEL_CMD] EXEC_STOP ret=0x%x\r\n", ret);
-        }
-        if ((mask & PANEL_RX_CMD_ABORT) != 0U) {
-            errcode_t ret = send_wait_ack(PKT_JOB_ABORT, NULL, 0);
-            osal_printk("[PANEL_CMD] JOB_ABORT ret=0x%x\r\n", ret);
-        }
-        if ((mask & PANEL_RX_CMD_FOCUS_OFF) != 0U) {
-            errcode_t ret = send_focus(false, 0);
-            if (ret == ERRCODE_SUCC) {
-                panel_model_mark_focus_ack(false);
+        uint32_t bit = pop_next_pending();
+        if (bit == 0U) {
+            if (g_cmd_sem_ready) {
+                (void)osal_sem_down_timeout(&g_cmd_sem, PANEL_RX_CMD_IDLE_WAIT_MS);
+            } else {
+                osal_msleep(PANEL_RX_CMD_IDLE_WAIT_MS);
             }
-            osal_printk("[PANEL_CMD] FOCUS_OFF ret=0x%x\r\n", ret);
+            continue;
         }
-        if ((mask & PANEL_RX_CMD_FOCUS_ON) != 0U) {
-            uint8_t power = g_pending_focus_power;
-            if (power > 100U) {
-                power = 100U;
-            }
-            errcode_t ret = send_focus(true, power);
-            if (ret == ERRCODE_SUCC) {
-                panel_model_mark_focus_ack(true);
-            }
-            osal_printk("[PANEL_CMD] FOCUS_ON s=%u ret=0x%x\r\n",
-                        (unsigned int)power, ret);
-        }
-        if ((mask & PANEL_RX_CMD_STATUS) != 0U) {
-            errcode_t ret = send_status_req();
-            osal_printk("[PANEL_CMD] STATUS_REQ ret=0x%x\r\n", ret);
-        }
+        (void)dispatch_bit(bit);
     }
     return 0;
 }
@@ -196,6 +287,10 @@ errcode_t panel_rx_commands_init(void)
         return ERRCODE_FAIL;
     }
     g_ack_sem_ready = true;
+    if (!g_cmd_sem_ready && osal_sem_init(&g_cmd_sem, 0) != OSAL_SUCCESS) {
+        return ERRCODE_FAIL;
+    }
+    g_cmd_sem_ready = true;
     panel_transport_sle_set_cmd_response_cb(cmd_response_cb);
 
     if (g_task_started) {
@@ -215,6 +310,11 @@ errcode_t panel_rx_commands_request_exec_stop(void)
     return queue_cmd(PANEL_RX_CMD_STOP);
 }
 
+errcode_t panel_rx_commands_request_exec_resume(void)
+{
+    return queue_cmd(PANEL_RX_CMD_RESUME);
+}
+
 errcode_t panel_rx_commands_request_abort(void)
 {
     return queue_cmd(PANEL_RX_CMD_ABORT);
@@ -226,9 +326,14 @@ errcode_t panel_rx_commands_request_focus_on(uint8_t power)
         power = 100U;
     }
     uint32_t lock = osal_irq_lock();
-    g_pending_focus_power = power;
-    g_pending_mask |= PANEL_RX_CMD_FOCUS_ON;
+    if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {
+        g_pending_focus_power = power;
+        g_pending_mask |= PANEL_RX_CMD_FOCUS_ON;
+    }
     osal_irq_restore(lock);
+    if (g_cmd_sem_ready) {
+        osal_sem_up(&g_cmd_sem);
+    }
     return ERRCODE_SUCC;
 }
 
@@ -240,4 +345,38 @@ errcode_t panel_rx_commands_request_focus_off(void)
 errcode_t panel_rx_commands_request_status(void)
 {
     return queue_cmd(PANEL_RX_CMD_STATUS);
+}
+
+void panel_rx_commands_set_offline_upload_active(bool active)
+{
+    g_offline_upload_active = active;
+    if (!active) {
+        g_offline_upload_paused = false;
+    }
+    if (g_cmd_sem_ready) {
+        osal_sem_up(&g_cmd_sem);
+    }
+}
+
+bool panel_rx_commands_is_offline_upload_paused(void)
+{
+    return g_offline_upload_paused;
+}
+
+bool panel_rx_commands_has_pending(void)
+{
+    return g_pending_mask != 0U;
+}
+
+panel_rx_command_result_t panel_rx_commands_dispatch_pending(void)
+{
+    uint32_t bit = pop_next_pending();
+    if (bit == 0U) {
+        panel_rx_command_result_t result = {
+            .type = PANEL_RX_COMMAND_NONE,
+            .ret = ERRCODE_SUCC,
+        };
+        return result;
+    }
+    return dispatch_bit(bit);
 }

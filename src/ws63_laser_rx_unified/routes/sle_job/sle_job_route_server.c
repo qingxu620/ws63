@@ -373,7 +373,7 @@ static void sle_enable_cbk(errcode_t status)
     }
 
     ssap_exchange_info_t info = {0};
-    info.mtu_size = 512;
+    info.mtu_size = SLE_JOB_MTU_SIZE;
     info.version = 1;
     ret = ssaps_set_info(g_server_id, &info);
     if (ret != ERRCODE_SLE_SUCCESS) {
@@ -394,12 +394,15 @@ static void sle_enable_cbk(errcode_t status)
     param.announce_channel_map = SLE_ADV_CHANNEL_MAP_DEFAULT;
     param.announce_interval_min = 0xC8;
     param.announce_interval_max = 0xC8;
-    param.conn_interval_min = 0x14;
-    param.conn_interval_max = 0x14;
+    param.conn_interval_min = SLE_JOB_CONN_INTERVAL_UNITS;
+    param.conn_interval_max = SLE_JOB_CONN_INTERVAL_UNITS;
     param.conn_max_latency = 0;
     param.conn_supervision_timeout = 0x1F4;
     param.announce_tx_power = 20;
     param.own_addr = addr;
+    osal_printk("[job_rx] sle mtu=%u conn_interval_units=0x%02x\r\n",
+                (unsigned int)SLE_JOB_MTU_SIZE,
+                (unsigned int)SLE_JOB_CONN_INTERVAL_UNITS);
     ret = sle_set_announce_param(SLE_ADV_HANDLE_DEFAULT, &param);
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] set adv param fail: 0x%x\r\n", ret);

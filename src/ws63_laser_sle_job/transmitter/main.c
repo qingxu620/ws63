@@ -86,7 +86,7 @@ static uint16_t next_seq(void)
 
 static void host_sendf(const char *fmt, ...)
 {
-    char buf[128];
+    char buf[192];
     va_list ap;
     va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -805,10 +805,12 @@ static int sle_init_task(void *arg)
 
 static void laser_sle_job_tx_entry(void)
 {
-    osal_printk("[FW_ID] board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u uart=%u\r\n",
+    osal_printk("[FW_ID] board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u mtu=%u uart=%u sle_interval_units=0x%02x\r\n",
                 TX_FIRMWARE_PACKAGE,
                 (unsigned int)JOB_TX_DATA_CHUNK_MAX,
-                (unsigned int)UART_BAUD_RATE);
+                (unsigned int)JOB_SLE_MTU_SIZE,
+                (unsigned int)UART_BAUD_RATE,
+                (unsigned int)JOB_SLE_CONN_INTERVAL_UNITS);
     if (osal_sem_init(&g_ack_sem, 0) == OSAL_SUCCESS) {
         g_ack_sem_ready = true;
     } else {
@@ -817,10 +819,12 @@ static void laser_sle_job_tx_entry(void)
     if (job_uart_init() != ERRCODE_SUCC) {
         return;
     }
-    host_sendf("@FW board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u uart=%u\r\n",
+    host_sendf("@FW board=TX firmware=%s app=ws63_laser_sle_job/transmitter role=host-uart-to-sle payload=%u mtu=%u uart=%u sle_interval_units=0x%02x\r\n",
                TX_FIRMWARE_PACKAGE,
                (unsigned int)JOB_TX_DATA_CHUNK_MAX,
-               (unsigned int)UART_BAUD_RATE);
+               (unsigned int)JOB_SLE_MTU_SIZE,
+               (unsigned int)UART_BAUD_RATE,
+               (unsigned int)JOB_SLE_CONN_INTERVAL_UNITS);
     create_task("job_uart_rx", uart_rx_task, TASK_STACK_SIZE_DEFAULT, TASK_PRIO_JOB_UART);
     create_task("job_sle_init", sle_init_task, TASK_STACK_SIZE_SLE, TASK_PRIO_SLE);
 }

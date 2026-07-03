@@ -204,7 +204,7 @@ class StatusParsingTests(unittest.TestCase):
                 if "@OK resync" in pattern:
                     return WaitResult("@OK resync rx=aborted", 1)
                 if "@DATA_READY" in pattern:
-                    return WaitResult("@DATA_READY job=1 size=428", 1)
+                    return WaitResult(f"@DATA_READY job=1 size={len(payload)}", 1)
                 if "@ACK type=4" in pattern:
                     return WaitResult("@ACK type=4 seq=0 status=0", 1)
                 if f"offset={JOB_DATA_CHUNK_SIZE}" in pattern:
@@ -220,7 +220,7 @@ class StatusParsingTests(unittest.TestCase):
             client.upload_job(1, payload, 2.0)
 
         self.assertEqual(len(commands), 1)
-        self.assertTrue(commands[0].startswith("@BEGIN 1 428 "))
+        self.assertTrue(commands[0].startswith(f"@BEGIN 1 {len(payload)} "))
         self.assertEqual([len(item) for item in writes], [1, JOB_DATA_CHUNK_SIZE, 2])
         self.assertEqual(writes[-1], bytes((TX_UART_CONTROL_BYTE, ord("A"))))
 
@@ -263,7 +263,7 @@ class StatusParsingTests(unittest.TestCase):
                 if "@OK resync" in pattern:
                     return WaitResult("@OK resync rx=aborted", 1)
                 if "@DATA_READY" in pattern:
-                    return WaitResult("@DATA_READY job=1 size=428", 1)
+                    return WaitResult(f"@DATA_READY job=1 size={len(payload)}", 1)
                 if "@ACK type=19" in pattern:
                     self.request_priority_control(
                         "@EXEC_RESUME", "@ACK type=17", 2.0, interrupt_upload=False
@@ -285,7 +285,7 @@ class StatusParsingTests(unittest.TestCase):
                         1,
                     )
                 if "@JOB_READY" in pattern:
-                    return WaitResult("@JOB_READY job=1 size=428", 1)
+                    return WaitResult(f"@JOB_READY job=1 size={len(payload)}", 1)
                 raise AssertionError(pattern)
 
         client = FakeClient(lambda channel, message: None)

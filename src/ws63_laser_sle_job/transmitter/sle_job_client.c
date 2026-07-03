@@ -317,18 +317,18 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         g_connecting = false;
         g_pending_role = SLE_LINK_ROLE_NONE;
 
-        /* Request fast connection interval immediately */
+        /* Request fast connection interval immediately. Unit is 1.25ms. */
         sle_connection_param_update_t parame = {0};
         parame.conn_id = conn_id;
-        parame.interval_min = 0x14;  /* 25ms - match receiver */
-        parame.interval_max = 0x14;
+        parame.interval_min = JOB_SLE_CONN_INTERVAL_UNITS;
+        parame.interval_max = JOB_SLE_CONN_INTERVAL_UNITS;
         parame.max_latency = 0;
         parame.supervision_timeout = 0x1F4;
         (void)sle_update_connect_param(&parame);
 
         /* Start service discovery */
         ssap_exchange_info_t info = {0};
-        info.mtu_size = 512;
+        info.mtu_size = JOB_SLE_MTU_SIZE;
         info.version = 1;
         ssapc_exchange_info_req(SLE_CLIENT_ID, conn_id, &info);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {

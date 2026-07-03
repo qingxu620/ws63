@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import unittest
 
@@ -472,6 +473,17 @@ class UiContractTests(unittest.TestCase):
 
         self.assertTrue(window.state.execution_complete)
         self.assertFalse(window.page_job.arc._spinning)
+
+    def test_late_log_after_file_close_is_ignored(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        log_file = io.StringIO()
+        window._log_file = log_file
+        log_file.close()
+
+        window._on_log_message("host", "late log after close")
+
+        self.assertIs(window._log_file, log_file)
 
     def test_stale_execution_status_cannot_restart_completed_spinner(self) -> None:
         window = MainWindow()

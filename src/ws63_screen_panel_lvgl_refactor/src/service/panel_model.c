@@ -53,7 +53,8 @@ static void update_progress_fields(void)
     g_model.total_lines = clamp_u32(g_model.total_lines, 0, PANEL_FAKE_TOTAL_LINES);
 
     if (g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
-        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_TERMINATED ||
+        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_PAUSED ||
+        g_model.state == SYS_STATE_TERMINATED ||
         g_model.state == SYS_STATE_REQUESTING_STOP ||
         g_model.state == SYS_STATE_REQUESTING_ABORT || g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF) {
         g_model.received_size = g_model.total_size;
@@ -73,7 +74,8 @@ static void update_progress_fields(void)
 
     if (g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING ||
         g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
-        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_TERMINATED ||
+        g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_PAUSED ||
+        g_model.state == SYS_STATE_TERMINATED ||
         state_is_requesting(g_model.state)) {
         uint32_t used = (uint32_t)((uint64_t)PANEL_FAKE_CACHE_SIZE * (uint32_t)g_model.progress / 100U);
         g_model.cache_free = PANEL_FAKE_CACHE_SIZE - clamp_u32(used, 0, PANEL_FAKE_CACHE_SIZE);
@@ -135,6 +137,7 @@ void panel_model_set_state(system_state_t state)
     case SYS_STATE_READY: panel_model_set_scene(PANEL_SCENE_HOST_READY); return;
     case SYS_STATE_RUNNING: panel_model_set_scene(PANEL_SCENE_HOST_RUNNING); return;
     case SYS_STATE_DONE: panel_model_set_scene(PANEL_SCENE_HOST_DONE); return;
+    case SYS_STATE_PAUSED: panel_model_set_scene(PANEL_SCENE_REQUESTING_STOP); return;
     case SYS_STATE_REQUESTING_STOP: panel_model_set_scene(PANEL_SCENE_REQUESTING_STOP); return;
     case SYS_STATE_REQUESTING_ABORT: panel_model_set_scene(PANEL_SCENE_REQUESTING_ABORT); return;
     case SYS_STATE_REQUESTING_FOCUS_OFF: panel_model_set_scene(PANEL_SCENE_REQUESTING_FOCUS_OFF); return;
@@ -491,6 +494,40 @@ void panel_model_offline_execution_started(void)
     g_model.event_id++;
 }
 
+void panel_model_offline_paused(void)
+{
+    if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
+        return;
+    }
+    g_model.state = SYS_STATE_PAUSED;
+    g_model.laser_output_active = false;
+    g_model.seq++;
+    g_model.event_id++;
+}
+
+void panel_model_offline_resumed(void)
+{
+    if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
+        return;
+    }
+    g_model.state = SYS_STATE_RUNNING;
+    g_model.seq++;
+    g_model.event_id++;
+}
+
+void panel_model_offline_aborted(void)
+{
+    if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
+        return;
+    }
+    g_model.scene = PANEL_SCENE_IDLE_NONE;
+    g_model.state = SYS_STATE_TERMINATED;
+    g_model.focus_active = false;
+    g_model.laser_output_active = false;
+    g_model.seq++;
+    g_model.event_id++;
+}
+
 void panel_model_offline_job_done(void)
 {
     if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
@@ -582,6 +619,9 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
     case 3:
         g_model.state = SYS_STATE_RUNNING;
         break;
+    case 4:
+        g_model.state = SYS_STATE_PAUSED;
+        break;
     case 5:
         g_model.state = SYS_STATE_TERMINATED;
         break;
@@ -671,6 +711,7 @@ void panel_model_get_button_permissions(panel_button_permissions_t *out)
     bool requesting = state_is_requesting(g_model.state);
     bool active_job = (g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING ||
                        g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
+                       g_model.state == SYS_STATE_PAUSED ||
                        g_model.state == SYS_STATE_TERMINATED ||
                        g_model.state == SYS_STATE_REQUESTING_STOP ||
                        g_model.state == SYS_STATE_REQUESTING_ABORT ||
@@ -679,7 +720,7 @@ void panel_model_get_button_permissions(panel_button_permissions_t *out)
     out->can_start = !requesting && !link_bad && !error &&
                      g_model.owner != PANEL_OWNER_HOST &&
                      (g_model.state == SYS_STATE_BROWSING || g_model.state == SYS_STATE_READY ||
-                      g_model.state == SYS_STATE_DONE);
+                      g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_PAUSED);
     out->can_stop = !requesting && !link_bad &&
                     (g_model.state == SYS_STATE_RUNNING || g_model.state == SYS_STATE_RECEIVING ||
                      g_model.state == SYS_STATE_SENDING);
@@ -701,6 +742,7 @@ const char *panel_model_state_text(system_state_t state)
     case SYS_STATE_READY: return "JOB_READY";
     case SYS_STATE_RUNNING: return "EXECUTING";
     case SYS_STATE_DONE: return "DONE";
+    case SYS_STATE_PAUSED: return "PAUSED";
     case SYS_STATE_REQUESTING_STOP: return "REQUESTING_STOP";
     case SYS_STATE_REQUESTING_ABORT: return "REQUESTING_ABORT";
     case SYS_STATE_REQUESTING_FOCUS_OFF: return "REQUESTING_FOCUS_OFF";
@@ -773,6 +815,7 @@ const char *panel_model_state_label(system_state_t state)
     case SYS_STATE_READY: return "任务就绪";
     case SYS_STATE_RUNNING: return "正在执行";
     case SYS_STATE_DONE: return "执行完成";
+    case SYS_STATE_PAUSED: return "已暂停";
     case SYS_STATE_REQUESTING_STOP: return "暂停中";
     case SYS_STATE_REQUESTING_ABORT: return "取消中";
     case SYS_STATE_REQUESTING_FOCUS_OFF: return "关光中";
@@ -793,6 +836,7 @@ const char *panel_model_state_detail(system_state_t state)
     case SYS_STATE_READY: return "代码已读取并校验";
     case SYS_STATE_RUNNING: return "等待 RX 完成";
     case SYS_STATE_DONE: return "任务完成，控制已释放";
+    case SYS_STATE_PAUSED: return "执行已暂停";
     case SYS_STATE_REQUESTING_STOP: return "软件暂停执行中";
     case SYS_STATE_REQUESTING_ABORT: return "断光并取消任务中";
     case SYS_STATE_REQUESTING_FOCUS_OFF: return "调焦关光中";

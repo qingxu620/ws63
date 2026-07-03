@@ -204,7 +204,9 @@ static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_sta
     g_last_ack_ack_seq = ack_seq;
     g_last_ack_status = status;
     errcode_t send_ret = send_packet((status == SLE_JOB_STATUS_OK) ? SLE_JOB_PKT_ACK : SLE_JOB_PKT_NACK, &ack, sizeof(ack));
-    if (SLE_JOB_DIAG_LOG && (g_diag_rx_data_count <= 8U || status != SLE_JOB_STATUS_OK || send_ret != ERRCODE_SLE_SUCCESS)) {
+    if (ack_type != SLE_JOB_PKT_JOB_DATA ||
+        (SLE_JOB_DIAG_LOG && (g_diag_rx_data_count <= 8U || status != SLE_JOB_STATUS_OK ||
+                              send_ret != ERRCODE_SLE_SUCCESS))) {
         osal_printk("[RX_ACK] t=%u seq=%u st=%u off=%u ret=0x%x\r\n",
                     (unsigned int)uapi_systick_get_ms(), (unsigned int)ack_seq,
                     (unsigned int)status, (unsigned int)ack.offset, (unsigned int)send_ret);

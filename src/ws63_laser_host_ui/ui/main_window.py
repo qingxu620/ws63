@@ -23,7 +23,7 @@ from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
-    JOB_MAX_SIZE, JOB_PREROLL_BYTES, plan_safe_preroll,
+    JOB_DATA_CHUNK_SIZE, JOB_MAX_SIZE, JOB_PREROLL_BYTES, plan_safe_preroll,
 )
 from workers.doubao_image_worker import DoubaoImageWorker
 from workers.serial_worker import WorkerManager
@@ -178,20 +178,41 @@ class MainWindow(QMainWindow):
     def _show_error_dialog(self, message: str) -> None:
         QMessageBox.warning(self, "任务错误", message)
 
+    def _write_log_file(self, text: str, *, flush: bool = False) -> None:
+        log_file = self._log_file
+        if log_file is None or log_file.closed:
+            return
+        try:
+            log_file.write(text)
+            if flush:
+                log_file.flush()
+        except ValueError:
+            # Late queued log messages can arrive after closeEvent has closed
+            # the file. Logging must never crash the UI.
+            self._log_file = None
+
+    def _close_log_file(self) -> None:
+        log_file = self._log_file
+        self._log_file = None
+        if log_file is None or log_file.closed:
+            return
+        log_file.flush()
+        log_file.close()
+
     def _on_log_message(self, channel: str, message: str) -> None:
         # Protocol state is safety-critical and must not depend on log rendering.
         self._process_protocol_message(message)
 
         # Write to file
-        if self._log_file:
+        if self._log_file is not None and not self._log_file.closed:
             stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
             kind_map = {"tx_log": "TX_LOG", "rx_log": "RX_LOG", "tx": "TX", "rx": "RX",
                         "status": "STATUS", "error": "ERROR", "host": "HOST"}
             kind = kind_map.get(channel, channel.upper())
-            self._log_file.write(f"[{stamp}] {kind:8s} {message}\n")
+            self._write_log_file(f"[{stamp}] {kind:8s} {message}\n")
             self._log_pending += 1
             if self._log_pending >= 40:
-                self._log_file.flush()
+                self._write_log_file("", flush=True)
                 self._log_pending = 0
 
         # Presentation failures must never block RX state convergence.
@@ -201,11 +222,10 @@ class MainWindow(QMainWindow):
             if not self._log_view_error_reported:
                 self._log_view_error_reported = True
                 print(f"[HOST_LOG_VIEW_ERROR] {type(exc).__name__}: {exc}")
-                if self._log_file:
-                    self._log_file.write(
-                        f"[HOST_LOG_VIEW_ERROR] {type(exc).__name__}: {exc}\n"
-                    )
-                    self._log_file.flush()
+                self._write_log_file(
+                    f"[HOST_LOG_VIEW_ERROR] {type(exc).__name__}: {exc}\n",
+                    flush=True,
+                )
 
     def _process_protocol_message(self, message: str) -> None:
         # @STATUS may arrive on the TX command port or either optional log port.
@@ -792,7 +812,7 @@ class MainWindow(QMainWindow):
                 self.state.execution_complete = False
             self._enqueue_log(
                 "status",
-                "[CTRL_FAST] 暂停命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                f"[CTRL_FAST] 暂停命令已排队，将在当前 {JOB_DATA_CHUNK_SIZE}B 数据包 ACK 后作为下一个 SLE 包发送"
                 if queued else "[CTRL_FAST] 已有控制命令等待发送",
             )
             if queued:
@@ -819,7 +839,7 @@ class MainWindow(QMainWindow):
             )
             self._enqueue_log(
                 "status",
-                "[CTRL_FAST] 继续命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                f"[CTRL_FAST] 继续命令已排队，将在当前 {JOB_DATA_CHUNK_SIZE}B 数据包 ACK 后作为下一个 SLE 包发送"
                 if queued else "[CTRL_FAST] 已有控制命令等待发送",
             )
             if queued:
@@ -853,7 +873,7 @@ class MainWindow(QMainWindow):
                 self.state.execution_complete = False
             self._enqueue_log(
                 "status",
-                "[CTRL_FAST] 取消命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                f"[CTRL_FAST] 取消命令已排队，将在当前 {JOB_DATA_CHUNK_SIZE}B 数据包 ACK 后作为下一个 SLE 包发送"
                 if queued else "[CTRL_FAST] 已有控制命令等待发送",
             )
             if queued:
@@ -886,7 +906,7 @@ class MainWindow(QMainWindow):
             )
             self._enqueue_log(
                 "status",
-                "[CTRL_FAST] 关光命令已排队，将在当前 214B 数据包 ACK 后作为下一个 SLE 包发送"
+                f"[CTRL_FAST] 关光命令已排队，将在当前 {JOB_DATA_CHUNK_SIZE}B 数据包 ACK 后作为下一个 SLE 包发送"
                 if queued else "[CTRL_FAST] 已有控制命令等待发送",
             )
             return
@@ -965,7 +985,5 @@ class MainWindow(QMainWindow):
         self._stop_execution_status_poll()
         self.tx_monitor.close()
         self.rx_monitor.close()
-        if self._log_file:
-            self._log_file.flush()
-            self._log_file.close()
+        self._close_log_file()
         super().closeEvent(event)

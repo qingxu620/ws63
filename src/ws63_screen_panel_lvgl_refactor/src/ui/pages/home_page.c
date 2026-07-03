@@ -266,6 +266,12 @@ static void btn_event_cb(lv_event_t *e)
                         g_model.owner, g_model.state);
             break;
         }
+        if (g_model.state == SYS_STATE_PAUSED) {
+            if (panel_rx_commands_request_exec_resume() != ERRCODE_SUCC) {
+                osal_printk("[PANEL_CMD] resume queue failed\r\n");
+            }
+            break;
+        }
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
             (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING)) {
             ui_manager_switch_page(PAGE_FILE_BROWSER);
@@ -469,6 +475,19 @@ static void apply_state(void)
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
         break;
 
+    case SYS_STATE_PAUSED:
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+        lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
+        lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_ORANGE, 0);
+        lv_label_set_text(g_lbl_safety_val, "关闭");
+        lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_GREEN, 0);
+        break;
+
     case SYS_STATE_REQUESTING_STOP:
         {
             char buf[8];
@@ -586,7 +605,7 @@ static void apply_state(void)
     lv_obj_set_style_bg_opa(g_btn_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
 
-    lv_label_set_text(g_lbl_start, perms.can_start ? "执行" : "执行");
+    lv_label_set_text(g_lbl_start, g_model.state == SYS_STATE_PAUSED ? "继续" : "执行");
     lv_label_set_text(g_lbl_stop, perms.requesting_stop ? "暂停中" : "暂停");
     lv_label_set_text(g_lbl_abort, perms.requesting_abort ? "取消中" : "放弃");
     if (perms.requesting_focus_off) {
