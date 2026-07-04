@@ -15,6 +15,7 @@
 #include "sle_device_discovery.h"
 #include "sle_errcode.h"
 #include "sle_ssap_server.h"
+#include <string.h>
 
 #ifndef SLE_ADV_HANDLE_DEFAULT
 #define SLE_ADV_HANDLE_DEFAULT 1
@@ -40,10 +41,16 @@
 #define SLE_ADV_DATA_TYPE_TX_POWER_LEVEL 0x0C
 #endif
 
+#ifndef SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA
+#define SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA 0xFF
+#endif
+
 #define UUID_LEN_2 2
 #define SLE_CONN_INVALID 0xFFFF
 #define SLE_CONN_BROADCAST 0xFFFF
 #define SLE_JOB_ROUTE_MAX_CONNECTIONS 4U
+#define SLE_JOB_ADV_DATA_LEN_MAX 251U
+#define SLE_JOB_ADV_TX_POWER 20U
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
@@ -56,6 +63,11 @@ static uint16_t g_resp_property_handle = 0;
 static sle_job_route_packet_rx_cb_t g_packet_cb = NULL;
 static sle_job_route_disconnect_cb_t g_disconnect_cb = NULL;
 static volatile bool g_server_stopping = false;
+static volatile bool g_adv_data_ready = false;
+static volatile bool g_adv_enabled = false;
+static volatile bool g_adv_restart_pending = false;
+static uint8_t g_scan_rsp_data[SLE_JOB_ADV_DATA_LEN_MAX];
+static uint16_t g_scan_rsp_data_len = 0;
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -320,31 +332,107 @@ static void sle_conn_register_cbks(void)
     sle_connection_register_callbacks(&cbk);
 }
 
-static uint8_t g_announce_data[] = {
-    SLE_ADV_DATA_TYPE_DISCOVERY_LEVEL,
-    1,
-    SLE_ANNOUNCE_LEVEL_NORMAL,
-    SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS,
-    2,
-    (uint8_t)(SLE_JOB_SERVICE_UUID & 0xFF),
-    (uint8_t)(SLE_JOB_SERVICE_UUID >> 8),
-};
+static uint8_t g_announce_data[SLE_JOB_ADV_DATA_LEN_MAX];
+static uint16_t g_announce_data_len;
 
-static uint8_t g_scan_rsp_data[] = {
-    SLE_ADV_DATA_TYPE_TX_POWER_LEVEL,
-    1,
-    20,
-    SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME,
-    sizeof(SLE_JOB_RECEIVER_NAME) - 1,
-    's', 'l', 'e', '_', 'j', 'o', 'b', '_', 'r', 'x'
-};
+static bool adv_append_field(uint8_t *buf, uint16_t max_len, uint16_t *idx,
+                             uint8_t type, const void *data, uint8_t len)
+{
+    if (buf == NULL || idx == NULL || data == NULL ||
+        (uint16_t)(*idx + 2U + len) > max_len) {
+        return false;
+    }
+    buf[(*idx)++] = type;
+    buf[(*idx)++] = len;
+    (void)memcpy_s(&buf[*idx], (size_t)(max_len - *idx), data, len);
+    *idx = (uint16_t)(*idx + len);
+    return true;
+}
+
+static uint16_t build_scan_rsp_data(const sle_job_panel_status_payload_t *status)
+{
+    uint16_t idx = 0;
+    const uint8_t tx_power = SLE_JOB_ADV_TX_POWER;
+    const char name[] = SLE_JOB_RECEIVER_NAME;
+
+    memset(g_scan_rsp_data, 0, sizeof(g_scan_rsp_data));
+    if (!adv_append_field(g_scan_rsp_data, sizeof(g_scan_rsp_data), &idx,
+                          SLE_ADV_DATA_TYPE_TX_POWER_LEVEL,
+                          &tx_power, sizeof(tx_power))) {
+        return idx;
+    }
+    if (!adv_append_field(g_scan_rsp_data, sizeof(g_scan_rsp_data), &idx,
+                          SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME,
+                          name, (uint8_t)(sizeof(name) - 1U))) {
+        return idx;
+    }
+    if (status != NULL) {
+        sle_job_panel_status_adv_payload_t adv = {
+            .magic0 = SLE_JOB_PANEL_STATUS_ADV_MAGIC0,
+            .magic1 = SLE_JOB_PANEL_STATUS_ADV_MAGIC1,
+            .version = SLE_JOB_PANEL_STATUS_ADV_VERSION,
+            .status = *status,
+        };
+        (void)adv_append_field(g_scan_rsp_data, sizeof(g_scan_rsp_data), &idx,
+                               SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA,
+                               &adv, (uint8_t)sizeof(adv));
+    }
+    return idx;
+}
+
+static uint16_t build_announce_data(const sle_job_panel_status_payload_t *status)
+{
+    uint16_t idx = 0;
+    const uint8_t discovery_level = SLE_ANNOUNCE_LEVEL_NORMAL;
+    const uint8_t uuid16[] = {
+        (uint8_t)(SLE_JOB_SERVICE_UUID & 0xFF),
+        (uint8_t)(SLE_JOB_SERVICE_UUID >> 8),
+    };
+
+    memset(g_announce_data, 0, sizeof(g_announce_data));
+    if (!adv_append_field(g_announce_data, sizeof(g_announce_data), &idx,
+                          SLE_ADV_DATA_TYPE_DISCOVERY_LEVEL,
+                          &discovery_level, sizeof(discovery_level))) {
+        return idx;
+    }
+    if (!adv_append_field(g_announce_data, sizeof(g_announce_data), &idx,
+                          SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS,
+                          uuid16, sizeof(uuid16))) {
+        return idx;
+    }
+    if (status != NULL) {
+        sle_job_panel_status_adv_payload_t adv = {
+            .magic0 = SLE_JOB_PANEL_STATUS_ADV_MAGIC0,
+            .magic1 = SLE_JOB_PANEL_STATUS_ADV_MAGIC1,
+            .version = SLE_JOB_PANEL_STATUS_ADV_VERSION,
+            .status = *status,
+        };
+        (void)adv_append_field(g_announce_data, sizeof(g_announce_data), &idx,
+                               SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA,
+                               &adv, (uint8_t)sizeof(adv));
+    }
+    return idx;
+}
+
+static errcode_t set_current_announce_data(void)
+{
+    sle_announce_data_t data = {0};
+    data.announce_data = g_announce_data;
+    data.announce_data_len = g_announce_data_len;
+    data.seek_rsp_data = g_scan_rsp_data;
+    data.seek_rsp_data_len = g_scan_rsp_data_len;
+    return sle_set_announce_data(SLE_ADV_HANDLE_DEFAULT, &data);
+}
 
 static void sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
 {
     unused(announce_id);
     if (status != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] adv enable fail status=0x%02x\r\n", status);
+        g_adv_enabled = false;
+        return;
     }
+    g_adv_enabled = true;
 }
 
 static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
@@ -352,6 +440,15 @@ static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
     unused(announce_id);
     if (status != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] adv disable fail status=0x%02x\r\n", status);
+        return;
+    }
+    g_adv_enabled = false;
+    if (g_adv_restart_pending && !g_server_stopping) {
+        g_adv_restart_pending = false;
+        errcode_t ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[PANEL_STATUS_ADV] restart fail ret=0x%x\r\n", ret);
+        }
     }
 }
 
@@ -409,16 +506,14 @@ static void sle_enable_cbk(errcode_t status)
         return;
     }
 
-    sle_announce_data_t data = {0};
-    data.announce_data = g_announce_data;
-    data.announce_data_len = sizeof(g_announce_data);
-    data.seek_rsp_data = g_scan_rsp_data;
-    data.seek_rsp_data_len = sizeof(g_scan_rsp_data);
-    ret = sle_set_announce_data(SLE_ADV_HANDLE_DEFAULT, &data);
+    g_announce_data_len = build_announce_data(NULL);
+    g_scan_rsp_data_len = build_scan_rsp_data(NULL);
+    ret = set_current_announce_data();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] set adv data fail: 0x%x\r\n", ret);
         return;
     }
+    g_adv_data_ready = true;
 
     ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
     if (ret != ERRCODE_SLE_SUCCESS) {
@@ -455,6 +550,7 @@ errcode_t sle_job_route_server_init(void)
 errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
+    g_adv_data_ready = false;
     if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
         if (disc_ret != ERRCODE_SLE_SUCCESS) {
@@ -466,6 +562,8 @@ errcode_t sle_job_route_server_stop(void)
     if (adv_ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] stop announce fail: 0x%x\r\n", adv_ret);
     }
+    g_adv_enabled = false;
+    g_adv_restart_pending = false;
     return ERRCODE_SLE_SUCCESS;
 }
 
@@ -500,6 +598,37 @@ errcode_t sle_job_route_server_broadcast_packet(const void *data, uint16_t len)
     param.value_len = len;
     param.value = (uint8_t *)data;
     return ssaps_notify_indicate(g_server_id, SLE_CONN_BROADCAST, &param);
+}
+
+errcode_t sle_job_route_server_update_panel_status_adv(const sle_job_panel_status_payload_t *status)
+{
+    if (!g_adv_data_ready || status == NULL) {
+        return ERRCODE_SLE_FAIL;
+    }
+    g_announce_data_len = build_announce_data(status);
+    g_scan_rsp_data_len = build_scan_rsp_data(status);
+    errcode_t ret = set_current_announce_data();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        static uint32_t s_adv_update_fail_count = 0;
+        if ((s_adv_update_fail_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_STATUS_ADV] update fail ret=0x%x adv=%u rsp=%u\r\n",
+                        ret, (unsigned int)g_announce_data_len,
+                        (unsigned int)g_scan_rsp_data_len);
+        }
+        return ret;
+    }
+    if (g_adv_enabled) {
+        g_adv_restart_pending = true;
+        ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            g_adv_restart_pending = false;
+            static uint32_t s_adv_restart_fail_count = 0;
+            if ((s_adv_restart_fail_count++ & 0x0FU) == 0U) {
+                osal_printk("[PANEL_STATUS_ADV] stop-for-restart fail ret=0x%x\r\n", ret);
+            }
+        }
+    }
+    return ret;
 }
 
 uint16_t sle_job_route_server_get_owner_conn_id(void)

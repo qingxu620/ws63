@@ -6,6 +6,7 @@
 #define WS63_LASER_RX_UNIFIED_SLE_JOB_ROUTE_SERVER_H
 
 #include "errcode.h"
+#include "sle_job_protocol.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -21,6 +22,7 @@ errcode_t sle_job_route_server_stop(void);
 bool sle_job_route_server_is_connected(void);
 errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len);
 errcode_t sle_job_route_server_broadcast_packet(const void *data, uint16_t len);
+errcode_t sle_job_route_server_update_panel_status_adv(const sle_job_panel_status_payload_t *status);
 uint16_t sle_job_route_server_get_owner_conn_id(void);
 uint8_t sle_job_route_server_get_connection_count(void);
 const char *sle_job_route_server_get_status(void);

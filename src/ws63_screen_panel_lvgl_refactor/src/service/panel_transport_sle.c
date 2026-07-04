@@ -4,6 +4,7 @@
  */
 #include "panel_transport_sle.h"
 #include "panel_model.h"
+#include "task_manager.h"
 
 #include "common_def.h"
 #include "errcode.h"
@@ -46,6 +47,10 @@
 #define SLE_ADV_DATA_TYPE_TX_POWER_LEVEL 0x0C
 #endif
 
+#ifndef SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA
+#define SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA 0xFF
+#endif
+
 #ifndef SLE_SEEK_ACTIVE
 #define SLE_SEEK_ACTIVE 0x01
 #endif
@@ -57,6 +62,10 @@
 #define PANEL_SLE_WRITE_CFM_TIMEOUT_MS 1000U
 #define PANEL_SLE_FAST_CONN_INTERVAL 0x14U
 #define PANEL_SLE_FAST_CONN_TIMEOUT  0x1F4U
+#define PANEL_SLE_STATUS_LISTEN_PERIOD_MS 500U
+#define PANEL_SLE_STATUS_LISTEN_WINDOW_MS 80U
+#define PANEL_SLE_STATUS_LISTEN_TASK_STACK_SIZE 0x1000
+#define PANEL_SLE_STATUS_LISTEN_TASK_PRIORITY 26
 
 static uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
 static uint8_t g_server_id = 0;
@@ -69,6 +78,7 @@ static uint16_t g_rx_resp_handle = 0;
 static bool g_sle_enabled;
 static bool g_seek_active;
 static bool g_client_connecting;
+static bool g_seek_for_status_listen;
 static bool g_rx_handles_ready;
 static sle_addr_t g_pending_rx_addr = {0};
 static sle_addr_t g_rx_addr = {0};
@@ -76,11 +86,14 @@ static bool g_rx_addr_valid;
 static bool g_rx_disconnect_expected;
 static bool g_rx_connect_cancel_after_connect;
 static uint32_t g_last_seek_ms;
+static uint32_t g_status_listen_last_ms;
+static uint32_t g_status_listen_started_ms;
 static osal_semaphore g_write_cfm_sem;
 static osal_mutex g_write_mutex;
 static volatile bool g_write_cfm_sem_ready;
 static volatile bool g_write_mutex_ready;
 static volatile errcode_t g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+static volatile bool g_status_listen_task_started;
 static panel_transport_rx_response_cb_t g_offline_response_cb;
 static panel_transport_rx_response_cb_t g_cmd_response_cb;
 static volatile bool g_standalone_session_active;
@@ -215,6 +228,40 @@ static bool adv_service_match(const sle_seek_result_info_t *seek_result, uint16_
     return false;
 }
 
+static bool adv_panel_status_parse(const sle_seek_result_info_t *seek_result,
+                                   panel_status_payload_t *status)
+{
+    if (seek_result == NULL || seek_result->data == NULL || status == NULL) {
+        return false;
+    }
+
+    uint8_t *data = seek_result->data;
+    uint16_t len = seek_result->data_length;
+    for (uint16_t i = 0; i < len;) {
+        if ((i + 1U) >= len) {
+            break;
+        }
+        uint8_t ad_type = data[i];
+        uint8_t ad_len = data[i + 1U];
+        if ((uint16_t)(i + 2U + ad_len) > len) {
+            break;
+        }
+        if (ad_type == SLE_ADV_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA &&
+            ad_len == sizeof(panel_status_adv_payload_t)) {
+            panel_status_adv_payload_t adv;
+            (void)memcpy_s(&adv, sizeof(adv), &data[i + 2U], sizeof(adv));
+            if (adv.magic0 == PANEL_STATUS_ADV_MAGIC0 &&
+                adv.magic1 == PANEL_STATUS_ADV_MAGIC1 &&
+                adv.version == PANEL_STATUS_ADV_VERSION) {
+                *status = adv.status;
+                return true;
+            }
+        }
+        i = (uint16_t)(i + 2U + ad_len);
+    }
+    return false;
+}
+
 static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_result)
 {
     if (seek_result == NULL) {
@@ -290,6 +337,94 @@ static void start_seek_if_needed(void)
     }
 }
 
+static void start_status_listen_if_needed(void)
+{
+    if (!g_sle_enabled || rx_control_allowed_now() || g_seek_active || g_client_connecting ||
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if (g_status_listen_last_ms != 0U &&
+        (uint32_t)(now - g_status_listen_last_ms) < PANEL_SLE_STATUS_LISTEN_PERIOD_MS) {
+        return;
+    }
+
+    sle_seek_param_t param = {0};
+    param.own_addr_type = 0;
+    param.filter_duplicates = 0;
+    param.seek_filter_policy = 0;
+    param.seek_phys = 1;
+    param.seek_type[0] = SLE_SEEK_ACTIVE;
+    param.seek_interval[0] = 0x64;
+    param.seek_window[0] = 0x64;
+    (void)sle_set_seek_param(&param);
+
+    g_status_listen_last_ms = now;
+    g_status_listen_started_ms = now;
+    g_seek_for_status_listen = true;
+    errcode_t ret = sle_start_seek();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_seek_for_status_listen = false;
+        static uint32_t s_listen_start_fail_count = 0;
+        if ((s_listen_start_fail_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_SLE_LISTEN] start seek fail: 0x%x\r\n", ret);
+        }
+    } else {
+        static uint32_t s_listen_start_count = 0;
+        if ((s_listen_start_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_SLE_LISTEN] start\r\n");
+        }
+    }
+}
+
+static void stop_status_listen_if_expired(void)
+{
+    if (!g_seek_for_status_listen || !g_seek_active) {
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if ((uint32_t)(now - g_status_listen_started_ms) < PANEL_SLE_STATUS_LISTEN_WINDOW_MS) {
+        return;
+    }
+
+    errcode_t ret = sle_stop_seek();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_seek_for_status_listen = false;
+        static uint32_t s_listen_stop_fail_count = 0;
+        if ((s_listen_stop_fail_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_SLE_LISTEN] stop seek fail: 0x%x\r\n", ret);
+        }
+    }
+}
+
+static int panel_status_listen_task(void *arg)
+{
+    unused(arg);
+    while (1) {
+        stop_status_listen_if_expired();
+        start_status_listen_if_needed();
+        osal_msleep(20);
+    }
+    return 0;
+}
+
+static void start_status_listen_task_once(void)
+{
+    if (g_status_listen_task_started) {
+        return;
+    }
+    errcode_t ret = task_create("panel_sle_listen", panel_status_listen_task, NULL,
+                                PANEL_SLE_STATUS_LISTEN_TASK_STACK_SIZE,
+                                PANEL_SLE_STATUS_LISTEN_TASK_PRIORITY);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[PANEL_SLE_LISTEN] create task failed: 0x%x\r\n", ret);
+        return;
+    }
+    g_status_listen_task_started = true;
+}
+
 static uint8_t panel_mode_from_job_state(uint8_t job_state, uint8_t status)
 {
     if (status != JOB_STATUS_OK || job_state == JOB_STATE_ERROR) {
@@ -319,7 +454,8 @@ static void apply_panel_status(const panel_status_payload_t *st)
     if (st == NULL) {
         return;
     }
-    panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, st->flags, st->seq,
+    uint8_t flags = st->flags | PANEL_STATUS_FLAG_ANY_LINK;
+    panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, flags, st->seq,
                                       st->job_id, st->received_size, st->total_size,
                                       st->executed_lines, st->cache_free, st->last_error,
                                       st->tick_ms);
@@ -565,9 +701,41 @@ static void sle_seek_enable_cbk(errcode_t status)
 
 static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
 {
-    if (seek_result == NULL || g_client_connecting ||
-        g_rx_conn_id != PANEL_SLE_CONN_INVALID || !panel_transport_sle_can_control_rx() ||
-        !seek_result_matches_receiver(seek_result)) {
+    if (seek_result == NULL) {
+        return;
+    }
+
+    bool matches_rx = seek_result_matches_receiver(seek_result);
+    if (matches_rx) {
+        panel_status_payload_t status;
+        if (adv_panel_status_parse(seek_result, &status)) {
+            apply_panel_status(&status);
+            static uint32_t s_status_listen_count = 0;
+            if ((s_status_listen_count++ & 0x1FU) == 0U) {
+                osal_printk("[PANEL_SLE_LISTEN] status seq=%u owner=%u state=%u rx=%u total=%u\r\n",
+                            (unsigned int)status.seq, (unsigned int)status.owner,
+                            (unsigned int)status.job_state,
+                            (unsigned int)status.received_size,
+                            (unsigned int)status.total_size);
+            }
+            if (g_seek_for_status_listen && !rx_control_allowed_now()) {
+                errcode_t ret = sle_stop_seek();
+                if (ret != ERRCODE_SLE_SUCCESS) {
+                    g_seek_for_status_listen = false;
+                }
+                return;
+            }
+        } else if (g_seek_for_status_listen) {
+            static uint32_t s_status_parse_miss_count = 0;
+            if ((s_status_parse_miss_count++ & 0x0FU) == 0U) {
+                osal_printk("[PANEL_SLE_LISTEN] rx adv no status len=%u\r\n",
+                            (unsigned int)seek_result->data_length);
+            }
+        }
+    }
+
+    if (g_client_connecting || g_rx_conn_id != PANEL_SLE_CONN_INVALID ||
+        !rx_control_allowed_now() || !matches_rx) {
         return;
     }
 
@@ -583,7 +751,12 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
 
 static void sle_seek_disable_cbk(errcode_t status)
 {
+    bool was_status_listen = g_seek_for_status_listen;
+    g_seek_for_status_listen = false;
     g_seek_active = false;
+    if (was_status_listen && !g_client_connecting) {
+        return;
+    }
     if (status != ERRCODE_SLE_SUCCESS || !g_client_connecting) {
         g_client_connecting = false;
         g_rx_connect_cancel_after_connect = false;
@@ -664,6 +837,7 @@ static void sle_enable_cbk(errcode_t status)
     }
 
     osal_printk("[PANEL_SLE_CLI] rx client gated until standalone session\r\n");
+    start_status_listen_task_once();
     start_seek_if_needed();
 }
 
@@ -815,12 +989,15 @@ errcode_t panel_transport_sle_start(void)
     g_sle_enabled = false;
     g_seek_active = false;
     g_client_connecting = false;
+    g_seek_for_status_listen = false;
     g_rx_handles_ready = false;
     memset(&g_rx_addr, 0, sizeof(g_rx_addr));
     g_rx_addr_valid = false;
     g_rx_disconnect_expected = false;
     g_rx_connect_cancel_after_connect = false;
     g_last_seek_ms = 0;
+    g_status_listen_last_ms = 0;
+    g_status_listen_started_ms = 0;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
     g_standalone_session_active = false;
     if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
@@ -844,7 +1021,9 @@ errcode_t panel_transport_sle_start(void)
 
 void panel_transport_sle_poll(void)
 {
+    stop_status_listen_if_expired();
     start_seek_if_needed();
+    start_status_listen_if_needed();
 }
 
 bool panel_transport_sle_rx_is_connected(void)

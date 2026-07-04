@@ -156,6 +156,11 @@ typedef struct __attribute__((packed)) {
 #define PANEL_STATUS_FLAG_OWNER_LINK   0x04U
 #define PANEL_STATUS_FLAG_ANY_LINK     0x08U
 
+#define PANEL_STATUS_ADV_TYPE 0xFFU
+#define PANEL_STATUS_ADV_MAGIC0 'W'
+#define PANEL_STATUS_ADV_MAGIC1 'P'
+#define PANEL_STATUS_ADV_VERSION 1U
+
 typedef struct __attribute__((packed)) {
     uint32_t seq;
     uint8_t owner;
@@ -170,6 +175,13 @@ typedef struct __attribute__((packed)) {
     uint32_t last_error;
     uint32_t tick_ms;
 } panel_status_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic0;
+    uint8_t magic1;
+    uint8_t version;
+    panel_status_payload_t status;
+} panel_status_adv_payload_t;
 
 #define CMD_G0_MOVE 0x01
 #define CMD_G1_MOVE 0x02

@@ -149,6 +149,8 @@ static void send_panel_status(void)
     st.last_error = (g_state == SLE_JOB_STATE_ERROR) ? 1U : 0U;
     st.tick_ms = (uint32_t)uapi_systick_get_ms();
 
+    (void)sle_job_route_server_update_panel_status_adv(&st);
+
     errcode_t ret = broadcast_packet(SLE_JOB_PKT_PANEL_STATUS, &st, sizeof(st));
     if (ret != ERRCODE_SLE_SUCCESS && sle_job_route_server_get_connection_count() > 0U) {
         static uint32_t s_panel_bcast_fail_count = 0;

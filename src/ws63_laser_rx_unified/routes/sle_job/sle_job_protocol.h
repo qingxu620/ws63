@@ -152,6 +152,11 @@ typedef struct __attribute__((packed)) {
 #define SLE_JOB_PANEL_FLAG_OWNER_LINK   0x04U
 #define SLE_JOB_PANEL_FLAG_ANY_LINK     0x08U
 
+#define SLE_JOB_PANEL_STATUS_ADV_TYPE 0xFFU
+#define SLE_JOB_PANEL_STATUS_ADV_MAGIC0 'W'
+#define SLE_JOB_PANEL_STATUS_ADV_MAGIC1 'P'
+#define SLE_JOB_PANEL_STATUS_ADV_VERSION 1U
+
 typedef struct __attribute__((packed)) {
     uint32_t seq;
     uint8_t owner;
@@ -166,6 +171,13 @@ typedef struct __attribute__((packed)) {
     uint32_t last_error;
     uint32_t tick_ms;
 } sle_job_panel_status_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic0;
+    uint8_t magic1;
+    uint8_t version;
+    sle_job_panel_status_payload_t status;
+} sle_job_panel_status_adv_payload_t;
 
 #define SLE_JOB_CMD_G0_MOVE 0x01
 #define SLE_JOB_CMD_G1_MOVE 0x02
