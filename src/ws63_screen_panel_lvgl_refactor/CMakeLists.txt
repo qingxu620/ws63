@@ -36,8 +36,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages/page_file_browser.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/fonts/lv_font_panel_cn_14.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_panel_lvgl/src/ili9341_lcd.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common/packet.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common/crc16.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_tx/common/packet.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_tx/common/crc16.c
     ${LVGL_SOURCES}
 )
 
@@ -49,7 +49,7 @@ set(PUBLIC_HEADER
     ${CMAKE_CURRENT_SOURCE_DIR}/src/service
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/pages
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_job/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ws63_laser_sle_tx/common
     ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_panel_lvgl
     ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_panel_lvgl/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../deprecated/ws63_screen_lvgl/src/lvgl

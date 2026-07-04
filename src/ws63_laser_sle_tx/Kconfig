@@ -1,45 +1,20 @@
 #===============================================================================
-# @brief WS63 structured SLE laser job Kconfig
+# @brief WS63 structured SLE laser TX Kconfig
 #===============================================================================
 
-menu "WS63 SLE 离线任务包激光打标配置"
+menu "WS63 SLE TX 离线任务发送板配置"
     depends on ENABLE_LASER_SLE_JOB_SAMPLE
-
-choice
-    prompt "SLE 任务板角色选择"
-    default LASER_SLE_JOB_RECEIVER
-
-config LASER_SLE_JOB_RECEIVER
-    bool "构建接收板固件（RX：缓存、校验、执行）"
-    select SPI_SUPPORT_MASTER
-    help
-        选择构建接收板（RX）固件。
-        接收板负责接收SLE结构化任务包，缓存完整的G-code任务，
-        进行CRC/偏移/序列号校验，通过后本地执行打标任务。
 
 config LASER_SLE_JOB_TRANSMITTER
     bool "构建发射板固件（TX：串口输入转SLE包）"
+    default y
     help
         选择构建发射板（TX）固件。
         发射板从串口读取PC上位机的自定义协议数据，
         封装为SLE结构化包发送给接收板。不模拟Grbl协议。
 
-endchoice
-
-comment "当前构建目标：接收板固件（RX）"
-    depends on LASER_SLE_JOB_RECEIVER
-
 comment "当前构建目标：发射板固件（TX）"
     depends on LASER_SLE_JOB_TRANSMITTER
-
-config LASER_SLE_JOB_CACHE_SIZE
-    int "接收板G-code任务缓存大小（字节）"
-    default 65536
-    range 4096 262144
-    help
-        设置接收板RAM中用于缓存G-code任务的空间大小。
-        单位为字节，范围4KB-256KB。
-        根据任务复杂度和内存情况调整，默认64KB。
 
 comment "发射板串口配置（连接PC上位机）"
 config LASER_SLE_JOB_UART_BAUD
@@ -70,15 +45,5 @@ config LASER_SLE_JOB_UART_RX_PIN
     help
         设置串口接收引脚的GPIO编号。
         默认GPIO16，需与硬件连接一致。
-
-config LASER_SLE_JOB_WORK_AREA_X_MM
-    int "X轴工作区域（mm）"
-    range 1 300
-    default 99
-
-config LASER_SLE_JOB_WORK_AREA_Y_MM
-    int "Y轴工作区域（mm）"
-    range 1 300
-    default 99
 
 endmenu

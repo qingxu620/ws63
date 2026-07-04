@@ -38,6 +38,57 @@ static bool state_is_requesting(system_state_t state)
            state == SYS_STATE_REQUESTING_FOCUS_OFF;
 }
 
+enum {
+    RX_JOB_STATE_IDLE = 0U,
+    RX_JOB_STATE_RECEIVING = 1U,
+    RX_JOB_STATE_READY = 2U,
+    RX_JOB_STATE_EXECUTING = 3U,
+    RX_JOB_STATE_PAUSED = 4U,
+    RX_JOB_STATE_ABORTED = 5U,
+    RX_JOB_STATE_ERROR = 6U,
+};
+
+static bool state_is_offline_active(system_state_t state)
+{
+    return state == SYS_STATE_SENDING ||
+           state == SYS_STATE_RUNNING ||
+           state == SYS_STATE_PAUSED ||
+           state == SYS_STATE_REQUESTING_STOP ||
+           state == SYS_STATE_REQUESTING_ABORT ||
+           state == SYS_STATE_REQUESTING_FOCUS_OFF;
+}
+
+static bool model_is_screen_offline_session(void)
+{
+    return g_model.view_mode == PANEL_VIEW_OFFLINE &&
+           g_model.owner == PANEL_OWNER_SCREEN &&
+           g_model.mode == PANEL_MODE_OFFLINE &&
+           state_is_offline_active(g_model.state);
+}
+
+static bool job_id_matches_local(uint32_t job_id)
+{
+    return job_id == 0U || g_model.job_id == 0U || job_id == g_model.job_id;
+}
+
+static bool should_hold_local_request(system_state_t state, uint8_t job_state)
+{
+    if (state == SYS_STATE_REQUESTING_STOP) {
+        return job_state != RX_JOB_STATE_IDLE &&
+               job_state != RX_JOB_STATE_PAUSED &&
+               job_state != RX_JOB_STATE_ABORTED &&
+               job_state != RX_JOB_STATE_ERROR;
+    }
+
+    if (state == SYS_STATE_REQUESTING_ABORT) {
+        return job_state != RX_JOB_STATE_IDLE &&
+               job_state != RX_JOB_STATE_ABORTED &&
+               job_state != RX_JOB_STATE_ERROR;
+    }
+
+    return false;
+}
+
 static bool state_uses_job_timer(system_state_t state)
 {
     return state == SYS_STATE_RECEIVING ||
@@ -357,6 +408,12 @@ void panel_model_tick(void)
 
 void panel_model_request_stop(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE && !g_model.tx_connected) {
+        g_model.owner = PANEL_OWNER_SCREEN;
+        g_model.mode = PANEL_MODE_OFFLINE;
+        g_model.host_connected = false;
+        g_model.sd_mounted = true;
+    }
     g_model.state = SYS_STATE_REQUESTING_STOP;
     g_model.laser_output_active = false;
     g_model.seq++;
@@ -365,6 +422,12 @@ void panel_model_request_stop(void)
 
 void panel_model_request_abort(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE && !g_model.tx_connected) {
+        g_model.owner = PANEL_OWNER_SCREEN;
+        g_model.mode = PANEL_MODE_OFFLINE;
+        g_model.host_connected = false;
+        g_model.sd_mounted = true;
+    }
     g_model.state = SYS_STATE_REQUESTING_ABORT;
     g_model.focus_active = false;
     g_model.laser_output_active = false;
@@ -488,7 +551,9 @@ void panel_model_offline_upload_progress(uint32_t received_size)
     if (g_model.owner != PANEL_OWNER_SCREEN || g_model.mode != PANEL_MODE_OFFLINE) {
         return;
     }
-    if (g_model.state != SYS_STATE_RUNNING) {
+    if (g_model.state != SYS_STATE_RUNNING &&
+        g_model.state != SYS_STATE_PAUSED &&
+        !state_is_requesting(g_model.state)) {
         g_model.state = SYS_STATE_SENDING;
     }
     g_model.received_size = clamp_u32(received_size, 0, g_model.total_size);
@@ -597,6 +662,14 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
          g_model.mode == PANEL_MODE_OFFLINE &&
          g_model.state == SYS_STATE_READY &&
          owner == 0U && mode == 0U && job_state == 0U && job_id == 0U);
+    bool remap_to_screen_offline =
+        model_is_screen_offline_session() &&
+        owner == PANEL_OWNER_HOST &&
+        job_id_matches_local(job_id) &&
+        (mode == PANEL_MODE_IDLE || mode == PANEL_MODE_ONLINE ||
+         mode == PANEL_MODE_ERROR || mode == PANEL_MODE_LINK_LOST);
+    bool hold_local_request = remap_to_screen_offline &&
+        should_hold_local_request(prev_state, job_state);
 
     if (keep_local_offline_selection) {
         g_model.live_status_active = true;
@@ -609,6 +682,13 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
         g_model.seq++;
         g_model.event_id++;
         return;
+    }
+
+    if (remap_to_screen_offline) {
+        owner = PANEL_OWNER_SCREEN;
+        if (mode == PANEL_MODE_IDLE || mode == PANEL_MODE_ONLINE) {
+            mode = PANEL_MODE_OFFLINE;
+        }
     }
 
     g_model.scene = PANEL_SCENE_IDLE_NONE;
@@ -653,6 +733,9 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
     default:
         g_model.state = SYS_STATE_NO_JOB;
         break;
+    }
+    if (hold_local_request) {
+        g_model.state = prev_state;
     }
 
     g_model.job_id = job_id;

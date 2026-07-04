@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# WS63 MSP3223 SD-card Test Firmware Build & Archive Script
+# WS63 MSP3223 deprecated SD-card Test Firmware Build & Archive Script
 # =============================================================================
 
 ROOT="/root/fbb_ws63"
@@ -107,7 +107,7 @@ archive() {
     echo "  Archived: ${latest_dir}/${DEST_NAME}"
 }
 
-log "WS63 SD-card Test Firmware Build"
+log "WS63 deprecated SD-card Test Firmware Build"
 echo "  Config:    ${CONFIG}"
 echo "  Timestamp: ${TIMESTAMP}"
 echo ""

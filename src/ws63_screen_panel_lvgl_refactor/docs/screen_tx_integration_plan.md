@@ -28,7 +28,7 @@ Panel Offline Mode：Screen -> SD read -> SLE Job Client -> RX
 硬性边界：
 
 - 不修改 `src/ws63_screen_panel_lvgl` 冻结目录。
-- 不修改 TX 正式工程 `src/ws63_laser_sle_job`。
+- 不修改 TX 正式工程 `src/ws63_laser_sle_tx`。
 - 不修改 RX 正式工程 `src/ws63_laser_rx_unified`。
 - 不修改 Host 正式工程 `src/ws63_laser_host_ui`。
 - 不接真实 UART / SLE / SD / 音频 / 小游戏。
@@ -54,7 +54,7 @@ src/ws63_laser_host_ui
     │ 文本控制命令
     ▼
 TX control_dispatcher
-src/ws63_laser_sle_job/transmitter
+src/ws63_laser_sle_tx/transmitter
     ▲
     │ 文本控制命令
     │
@@ -468,7 +468,7 @@ panel_state.c
 位于：
 
 ```text
-src/ws63_laser_sle_job/transmitter/
+src/ws63_laser_sle_tx/transmitter/
 ```
 
 建议新增：

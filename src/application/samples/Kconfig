@@ -118,7 +118,7 @@ config ENABLE_LASER_SLE_JOB_SAMPLE
         标准包下发给 RX，RX 缓存完整任务、校验通过后本地执行。
 
 if ENABLE_LASER_SLE_JOB_SAMPLE
-source "ws63_laser_sle_job/Kconfig"
+source "ws63_laser_sle_tx/Kconfig"
 endif
 
 config LASER_RX_UNIFIED

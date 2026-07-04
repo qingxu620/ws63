@@ -141,9 +141,9 @@ switch_to_rx_unified() {
     set_config_n CONFIG_ENABLE_LVGL_PANEL
     set_config_y CONFIG_LASER_RX_UNIFIED
 
-    # The standalone SLE sample is disabled, but keep its role selector on RX
-    # so the checked-in build configuration cannot retain a previous TX build.
-    set_config_y CONFIG_LASER_SLE_JOB_RECEIVER
+    # The standalone SLE TX sample is disabled; clear both old role selectors
+    # so previous TX/legacy receiver builds cannot leak into unified RX config.
+    set_config_n CONFIG_LASER_SLE_JOB_RECEIVER
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
     # R5D experiment compiles all three routes, starts SLE Job, then starts
@@ -165,7 +165,7 @@ verify_rx_unified_config() {
     log "Verifying unified RX config"
 
     assert_config_y CONFIG_LASER_RX_UNIFIED
-    assert_config_y CONFIG_LASER_SLE_JOB_RECEIVER
+    assert_config_n CONFIG_LASER_SLE_JOB_RECEIVER
     assert_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
     local conflicting=(
@@ -205,7 +205,7 @@ verify_rx_unified_config() {
     done
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
-    echo "  Role selector OK: RECEIVER=y, TRANSMITTER=not set"
+    echo "  Standalone SLE role selectors OK: RECEIVER=not set, TRANSMITTER=not set"
     echo "  R5D OK: SLE + WiFi coexist demo; no owner/arbitration"
     echo "  SLE job cache fixed at 65536 bytes"
     echo "  Work area fixed at 99x99 mm"
@@ -302,7 +302,7 @@ output_path=${fw}
 file_size=${file_size}
 sha256=${file_sha}
 enabled_sample_config=CONFIG_LASER_RX_UNIFIED=y
-CONFIG_LASER_SLE_JOB_RECEIVER=y
+CONFIG_LASER_SLE_JOB_RECEIVER=not_set
 CONFIG_LASER_SLE_JOB_TRANSMITTER=not_set
 CONFIG_ENABLE_LASER_SINGLE_SAMPLE=not_set
 CONFIG_ENABLE_LASER_WIFI_SAMPLE=not_set
