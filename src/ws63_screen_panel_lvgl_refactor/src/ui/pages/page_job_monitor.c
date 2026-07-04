@@ -142,7 +142,7 @@ void page_job_monitor_create(lv_obj_t *parent)
 
     g_lbl_owner = lv_label_create(owner_row);
     lv_label_set_text(g_lbl_owner, "--");
-    lv_obj_set_style_text_font(g_lbl_owner, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(g_lbl_owner, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_owner, COLOR_TEXT_LIGHT, 0);
 
     lv_obj_t *mode_lbl = lv_label_create(owner_row);
@@ -152,7 +152,7 @@ void page_job_monitor_create(lv_obj_t *parent)
 
     g_lbl_mode = lv_label_create(owner_row);
     lv_label_set_text(g_lbl_mode, "--");
-    lv_obj_set_style_text_font(g_lbl_mode, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(g_lbl_mode, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_mode, COLOR_TEXT_LIGHT, 0);
 
     lv_obj_t *job_row = lv_obj_create(job_card);
@@ -171,7 +171,7 @@ void page_job_monitor_create(lv_obj_t *parent)
 
     g_lbl_job_id = lv_label_create(job_row);
     lv_label_set_text(g_lbl_job_id, "--");
-    lv_obj_set_style_text_font(g_lbl_job_id, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(g_lbl_job_id, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(g_lbl_job_id, COLOR_TEXT_LIGHT, 0);
 
     /* Progress card */
@@ -265,7 +265,7 @@ void page_job_monitor_create(lv_obj_t *parent)
 
 void page_job_monitor_update(void)
 {
-    /* Update with demo data from model */
+    /* Update from the RX-backed panel model. */
     char buf[24];
 
     if (g_rendered_seq == g_model.seq) {

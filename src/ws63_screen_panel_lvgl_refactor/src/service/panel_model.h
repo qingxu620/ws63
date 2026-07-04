@@ -1,6 +1,6 @@
 /**
  * @file panel_model.h
- * @brief Local state model for the panel UI (demo mode).
+ * @brief Local state model for mirrored RX status and standalone panel control.
  */
 #ifndef PANEL_MODEL_H
 #define PANEL_MODEL_H
@@ -117,6 +117,7 @@ void panel_model_request_stop(void);
 void panel_model_request_abort(void);
 void panel_model_request_focus_off(void);
 void panel_model_mark_focus_ack(bool active);
+void panel_model_set_transport_links(bool tx_connected, bool rx_connected);
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count);
 void panel_model_start_offline_selected(void);
 void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uint32_t line_count);

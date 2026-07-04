@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief WS63 Screen Panel minimal main: hardware init + LVGL + demo state loop.
+ * @brief WS63 Screen Panel main: hardware init + LVGL + mirrored/standalone data flow.
  */
 #include "app_init.h"
 #include "lvgl.h"
@@ -8,6 +8,7 @@
 #include "timer.h"
 #include "chip_core_irq.h"
 
+#include "config.h"
 #include "hal/spi_bus.h"
 #include "hal/lcd_driver.h"
 #include "hal/touch_driver.h"
@@ -29,7 +30,6 @@
 #define PANEL_POWER_STABLE_MS 500
 #define PANEL_FILE_BOOT_SCAN_DELAY_TICKS (200 / LVGL_HANDLER_MS)
 #define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
-#define PANEL_FAKE_PROGRESS_PERIOD_TICKS (100 / LVGL_HANDLER_MS)
 #define PANEL_JOB_TIME_PERIOD_TICKS (1000 / LVGL_HANDLER_MS)
 #define SCREEN_FIRMWARE_PACKAGE "ws63-liteos-app_screen_all.fwpkg"
 
@@ -124,32 +124,20 @@ static int panel_task(void *arg)
          * competing during boot, which is important now that the panel uses a
          * larger Chinese font and more UI pages.
          */
+#if PANEL_ENABLE_SLE
         if (!sle_started && tick_count >= PANEL_SLE_START_DELAY_TICKS) {
             ret = panel_transport_sle_start();
             if (ret != ERRCODE_SUCC) {
-                osal_printk("[PANEL] SLE observer start failed: 0x%x (continuing fake UI)\r\n", ret);
+                osal_printk("[PANEL] SLE observer start failed: 0x%x (continuing local UI)\r\n", ret);
             }
             sle_started = true;
         }
-
-        /* Progress simulation for fake transfer/execution states */
-        if (!g_model.live_status_active &&
-            (g_model.state == SYS_STATE_RECEIVING ||
-             g_model.state == SYS_STATE_SENDING ||
-             g_model.state == SYS_STATE_RUNNING) &&
-            (tick_count % PANEL_FAKE_PROGRESS_PERIOD_TICKS) == 0) {
-            if (g_model.progress < 100) {
-                panel_model_set_progress(g_model.progress + 1);
-            } else if (g_model.state == SYS_STATE_RECEIVING) {
-                panel_model_set_scene(PANEL_SCENE_HOST_READY);
-            } else if (g_model.state == SYS_STATE_SENDING) {
-                panel_model_set_scene(PANEL_SCENE_SCREEN_RUNNING);
-            } else if (g_model.state == SYS_STATE_RUNNING) {
-                panel_model_set_scene(g_model.owner == PANEL_OWNER_SCREEN ?
-                                      PANEL_SCENE_SCREEN_DONE :
-                                      PANEL_SCENE_HOST_DONE);
-            }
+#else
+        if (!sle_started && tick_count >= PANEL_SLE_START_DELAY_TICKS) {
+            osal_printk("[PANEL] SLE disabled for isolation test; local UI only\r\n");
+            sle_started = true;
         }
+#endif
 
         /* Job time tick (every ~1s) */
         if ((tick_count % PANEL_JOB_TIME_PERIOD_TICKS) == 0) {

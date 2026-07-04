@@ -1,6 +1,6 @@
 /**
  * @file panel_model.c
- * @brief Local state model with demo state cycling.
+ * @brief Local state model for RX-sourced panel status and offline control UI.
  */
 #include "panel_model.h"
 #include "soc_osal.h"
@@ -15,7 +15,6 @@ enum {
     PANEL_FAKE_TOTAL_SIZE = 131072U,
     PANEL_FAKE_TOTAL_LINES = 1000U,
     PANEL_FAKE_CACHE_SIZE = 131072U,
-    PANEL_FAKE_REQUEST_DONE_SECONDS = 2U,
 };
 
 static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
@@ -99,8 +98,8 @@ static void reset_common(void)
     g_model.owner = PANEL_OWNER_NONE;
     g_model.mode = PANEL_MODE_IDLE;
     g_model.view_mode = view_mode;
-    g_model.rx_connected = true;
-    g_model.tx_connected = true;
+    g_model.rx_connected = false;
+    g_model.tx_connected = false;
     g_model.host_connected = false;
     g_model.sle_connected = true;
     g_model.sd_mounted = false;
@@ -128,23 +127,21 @@ void panel_model_init(void)
 void panel_model_set_state(system_state_t state)
 {
     if (state >= SYS_STATE_COUNT) return;
-
-    switch (state) {
-    case SYS_STATE_NO_JOB: panel_model_set_scene(PANEL_SCENE_IDLE_NONE); return;
-    case SYS_STATE_BROWSING: panel_model_set_scene(PANEL_SCENE_SCREEN_BROWSING); return;
-    case SYS_STATE_RECEIVING: panel_model_set_scene(PANEL_SCENE_HOST_RECEIVING); return;
-    case SYS_STATE_SENDING: panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING); return;
-    case SYS_STATE_READY: panel_model_set_scene(PANEL_SCENE_HOST_READY); return;
-    case SYS_STATE_RUNNING: panel_model_set_scene(PANEL_SCENE_HOST_RUNNING); return;
-    case SYS_STATE_DONE: panel_model_set_scene(PANEL_SCENE_HOST_DONE); return;
-    case SYS_STATE_PAUSED: panel_model_set_scene(PANEL_SCENE_REQUESTING_STOP); return;
-    case SYS_STATE_REQUESTING_STOP: panel_model_set_scene(PANEL_SCENE_REQUESTING_STOP); return;
-    case SYS_STATE_REQUESTING_ABORT: panel_model_set_scene(PANEL_SCENE_REQUESTING_ABORT); return;
-    case SYS_STATE_REQUESTING_FOCUS_OFF: panel_model_set_scene(PANEL_SCENE_REQUESTING_FOCUS_OFF); return;
-    case SYS_STATE_ERROR: panel_model_set_scene(PANEL_SCENE_HOST_ERROR); return;
-    case SYS_STATE_LINK_LOST: panel_model_set_scene(PANEL_SCENE_HOST_LINK_LOST); return;
-    default: return;
+    g_model.state = state;
+    if (state == SYS_STATE_NO_JOB) {
+        g_model.scene = PANEL_SCENE_IDLE_NONE;
+        g_model.focus_active = false;
+        g_model.laser_output_active = false;
+        g_model.progress = 0;
+    } else if (state == SYS_STATE_ERROR) {
+        g_model.mode = PANEL_MODE_ERROR;
+        g_model.focus_active = false;
+        g_model.laser_output_active = false;
+    } else if (state == SYS_STATE_LINK_LOST) {
+        g_model.mode = PANEL_MODE_LINK_LOST;
     }
+    g_model.seq++;
+    g_model.event_id++;
 }
 
 void panel_model_set_scene(panel_fake_scene_t scene)
@@ -156,7 +153,7 @@ void panel_model_set_scene(panel_fake_scene_t scene)
 
     switch (scene) {
     case PANEL_SCENE_IDLE_NONE:
-            g_model.state = SYS_STATE_TERMINATED;
+        g_model.state = SYS_STATE_NO_JOB;
         break;
     case PANEL_SCENE_HOST_RECEIVING:
         g_model.view_mode = PANEL_VIEW_ONLINE;
@@ -326,19 +323,17 @@ void panel_model_toggle_primary_mode(void)
 {
     if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
         g_model.view_mode = PANEL_VIEW_ONLINE;
-        if (!g_model.live_status_active) {
-            panel_model_set_scene(PANEL_SCENE_HOST_READY);
-            return;
-        }
     } else {
         g_model.view_mode = PANEL_VIEW_OFFLINE;
-        if (!g_model.live_status_active) {
-            panel_model_set_scene(PANEL_SCENE_SCREEN_BROWSING);
-            return;
+        if (g_model.state == SYS_STATE_NO_JOB && !g_model.tx_connected) {
+            g_model.state = SYS_STATE_BROWSING;
+            g_model.owner = PANEL_OWNER_SCREEN;
+            g_model.mode = PANEL_MODE_OFFLINE;
         }
     }
 
     g_model.event_id++;
+    g_model.seq++;
 }
 
 void panel_model_set_progress(int pct)
@@ -358,25 +353,32 @@ void panel_model_tick(void)
         g_model.seq++;
     }
 
-    if (state_is_requesting(g_model.state) &&
-        g_model.job_seconds >= PANEL_FAKE_REQUEST_DONE_SECONDS) {
-        panel_model_set_scene(PANEL_SCENE_IDLE_NONE);
-    }
 }
 
 void panel_model_request_stop(void)
 {
-    panel_model_set_scene(PANEL_SCENE_REQUESTING_STOP);
+    g_model.state = SYS_STATE_REQUESTING_STOP;
+    g_model.laser_output_active = false;
+    g_model.seq++;
+    g_model.event_id++;
 }
 
 void panel_model_request_abort(void)
 {
-    panel_model_set_scene(PANEL_SCENE_REQUESTING_ABORT);
+    g_model.state = SYS_STATE_REQUESTING_ABORT;
+    g_model.focus_active = false;
+    g_model.laser_output_active = false;
+    g_model.seq++;
+    g_model.event_id++;
 }
 
 void panel_model_request_focus_off(void)
 {
-    panel_model_set_scene(PANEL_SCENE_REQUESTING_FOCUS_OFF);
+    g_model.state = SYS_STATE_REQUESTING_FOCUS_OFF;
+    g_model.focus_active = false;
+    g_model.laser_output_active = false;
+    g_model.seq++;
+    g_model.event_id++;
 }
 
 void panel_model_mark_focus_ack(bool active)
@@ -389,6 +391,25 @@ void panel_model_mark_focus_ack(bool active)
     }
     g_model.seq++;
     g_model.event_id++;
+}
+
+void panel_model_set_transport_links(bool tx_connected, bool rx_connected)
+{
+    bool changed = (g_model.tx_connected != tx_connected) ||
+                   (g_model.rx_connected != rx_connected) ||
+                   (g_model.sle_connected != (tx_connected || rx_connected));
+    g_model.tx_connected = tx_connected;
+    g_model.rx_connected = rx_connected;
+    g_model.sle_connected = tx_connected || rx_connected;
+    if (tx_connected) {
+        g_model.host_connected = true;
+    } else if (g_model.owner != PANEL_OWNER_HOST) {
+        g_model.host_connected = false;
+    }
+    if (changed) {
+        g_model.seq++;
+        g_model.event_id++;
+    }
 }
 
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count)
@@ -716,20 +737,29 @@ void panel_model_get_button_permissions(panel_button_permissions_t *out)
                        g_model.state == SYS_STATE_REQUESTING_STOP ||
                        g_model.state == SYS_STATE_REQUESTING_ABORT ||
                        g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF);
+    bool screen_owner = (g_model.owner == PANEL_OWNER_SCREEN && g_model.mode == PANEL_MODE_OFFLINE);
+    bool screen_session_in_progress = screen_owner &&
+        (g_model.state == SYS_STATE_RECEIVING || g_model.state == SYS_STATE_SENDING ||
+         g_model.state == SYS_STATE_RUNNING || g_model.state == SYS_STATE_PAUSED ||
+         g_model.state == SYS_STATE_REQUESTING_STOP ||
+         g_model.state == SYS_STATE_REQUESTING_ABORT ||
+         g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF ||
+         g_model.state == SYS_STATE_ERROR);
+    bool screen_control_allowed = !g_model.tx_connected || screen_session_in_progress;
 
-    out->can_start = !requesting && !link_bad && !error &&
+    out->can_start = screen_control_allowed && !requesting && !link_bad && !error &&
                      g_model.owner != PANEL_OWNER_HOST &&
                      (g_model.state == SYS_STATE_BROWSING || g_model.state == SYS_STATE_READY ||
                       g_model.state == SYS_STATE_DONE || g_model.state == SYS_STATE_PAUSED);
-    out->can_stop = !requesting && !link_bad &&
+    out->can_stop = screen_control_allowed && !requesting && !link_bad &&
                     (g_model.state == SYS_STATE_RUNNING || g_model.state == SYS_STATE_RECEIVING ||
                      g_model.state == SYS_STATE_SENDING);
-    out->can_abort = !out->requesting_abort && !link_bad && (active_job || error);
-    out->can_focus_on = !requesting && !link_bad && !error &&
+    out->can_abort = screen_control_allowed && !out->requesting_abort && !link_bad && (active_job || error);
+    out->can_focus_on = screen_control_allowed && !requesting && !link_bad && !error &&
                         g_model.owner != PANEL_OWNER_HOST &&
                         (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING ||
                          g_model.state == SYS_STATE_DONE);
-    out->can_focus_off = !out->requesting_focus_off;
+    out->can_focus_off = screen_control_allowed && !out->requesting_focus_off;
 }
 
 const char *panel_model_state_text(system_state_t state)
@@ -841,7 +871,7 @@ const char *panel_model_state_detail(system_state_t state)
     case SYS_STATE_REQUESTING_ABORT: return "断光并取消任务中";
     case SYS_STATE_REQUESTING_FOCUS_OFF: return "调焦关光中";
     case SYS_STATE_TERMINATED: return "任务已终止";
-    case SYS_STATE_ERROR: return "警报/故障";
+    case SYS_STATE_ERROR: return "故障";
     case SYS_STATE_LINK_LOST: return "SLE/RX 链路断开";
     default: return "状态未知";
     }

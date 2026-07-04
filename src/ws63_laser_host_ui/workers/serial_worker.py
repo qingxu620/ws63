@@ -62,9 +62,10 @@ class WorkerManager(QObject):
         t.signals.log.connect(self.log)
         t.signals.progress.connect(self.progress)
         t.signals.task_status.connect(self.task_status)
-        t.signals.finished.connect(self._on_finished)
+        t.signals.finished.connect(self.finished.emit)
         t.signals.error.connect(self.error)
         t.signals.error.connect(lambda msg: self.log.emit("error", msg))
+        t.finished.connect(lambda thread=t: self._on_thread_finished(thread))
         self._thread = t
         t.start()
 
@@ -74,6 +75,7 @@ class WorkerManager(QObject):
             return True
         return thread.wait(max(0, timeout_ms))
 
-    def _on_finished(self) -> None:
-        self._thread = None
-        self.finished.emit()
+    def _on_thread_finished(self, thread: _WorkerThread) -> None:
+        if self._thread is thread:
+            self._thread = None
+        thread.deleteLater()

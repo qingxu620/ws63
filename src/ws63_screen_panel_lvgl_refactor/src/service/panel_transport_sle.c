@@ -71,15 +71,31 @@ static bool g_seek_active;
 static bool g_client_connecting;
 static bool g_rx_handles_ready;
 static sle_addr_t g_pending_rx_addr = {0};
+static sle_addr_t g_rx_addr = {0};
+static bool g_rx_addr_valid;
+static bool g_rx_disconnect_expected;
+static bool g_rx_connect_cancel_after_connect;
 static uint32_t g_last_seek_ms;
 static osal_semaphore g_write_cfm_sem;
+static osal_mutex g_write_mutex;
 static volatile bool g_write_cfm_sem_ready;
+static volatile bool g_write_mutex_ready;
 static volatile errcode_t g_last_write_cfm_status = ERRCODE_SLE_FAIL;
 static panel_transport_rx_response_cb_t g_offline_response_cb;
 static panel_transport_rx_response_cb_t g_cmd_response_cb;
+static volatile bool g_standalone_session_active;
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+
+static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
+{
+    const uint8_t *bytes = (const uint8_t *)data;
+    if (bytes == NULL || len < SLE_JOB_PACKET_HEADER_LEN) {
+        return 0;
+    }
+    return bytes[2];
+}
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -213,9 +229,40 @@ static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_resu
            adv_service_match(seek_result, SLE_JOB_SERVICE_UUID);
 }
 
+static bool rx_control_allowed_now(void)
+{
+    /*
+     * Normal product topology is Host/TX -> RX plus TX -> Screen mirror.
+     * The panel must not keep a background RX client link; it may connect to
+     * RX only while an explicit standalone/offline control session is active.
+     */
+    return g_standalone_session_active;
+}
+
+static bool addr_matches_pending_rx(const sle_addr_t *addr)
+{
+    return addr != NULL &&
+           memcmp(addr->addr, g_pending_rx_addr.addr, SLE_ADDR_LEN) == 0;
+}
+
+static void disconnect_rx_expected(void)
+{
+    if (!g_rx_addr_valid) {
+        return;
+    }
+
+    g_rx_disconnect_expected = true;
+    errcode_t ret = sle_disconnect_remote_device(&g_rx_addr);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_rx_disconnect_expected = false;
+        osal_printk("[PANEL_SLE_CLI] rx disconnect submit fail: 0x%x\r\n", ret);
+    }
+}
+
 static void start_seek_if_needed(void)
 {
-    if (!g_sle_enabled || g_seek_active || g_client_connecting ||
+    if (!g_sle_enabled || !rx_control_allowed_now() ||
+        g_seek_active || g_client_connecting ||
         (g_rx_conn_id != PANEL_SLE_CONN_INVALID && g_rx_handles_ready)) {
         return;
     }
@@ -313,6 +360,8 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     }
 
     g_panel_conn_id = conn_id;
+    panel_model_set_transport_links(panel_transport_sle_tx_is_connected(),
+                                    panel_transport_sle_rx_is_connected());
     handle_panel_write(write_cb_para->value, write_cb_para->length);
 }
 
@@ -403,36 +452,66 @@ static errcode_t panel_server_add(void)
 static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
-    unused(addr);
     unused(pair_state);
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        if (g_client_connecting) {
+        if (g_client_connecting && addr_matches_pending_rx(addr)) {
             g_rx_conn_id = conn_id;
             g_client_connecting = false;
+            if (addr != NULL) {
+                (void)memcpy_s(&g_rx_addr, sizeof(g_rx_addr), addr, sizeof(*addr));
+                g_rx_addr_valid = true;
+            }
             request_fast_rx_conn_params(conn_id);
+            if (g_rx_connect_cancel_after_connect && !g_standalone_session_active) {
+                g_rx_connect_cancel_after_connect = false;
+                disconnect_rx_expected();
+                return;
+            }
             ssap_exchange_info_t info = {0};
             info.mtu_size = 512;
             info.version = 1;
             (void)ssapc_exchange_info_req(PANEL_SLE_CLIENT_ID, conn_id, &info);
         } else {
             g_panel_conn_id = conn_id;
+            if (g_client_connecting && !g_standalone_session_active) {
+                g_rx_connect_cancel_after_connect = true;
+            }
+            if (!g_standalone_session_active && g_rx_addr_valid) {
+                disconnect_rx_expected();
+            }
+            panel_model_set_transport_links(true, panel_transport_sle_rx_is_connected());
+            osal_printk("[PANEL_SLE_SRV] tx mirror connected conn=%u\r\n",
+                        (unsigned int)conn_id);
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         if (conn_id == g_panel_conn_id) {
             g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+            panel_model_set_transport_links(false, panel_transport_sle_rx_is_connected());
         }
         if (conn_id == g_rx_conn_id) {
+            bool expected = g_rx_disconnect_expected;
+            g_rx_disconnect_expected = false;
             g_rx_conn_id = PANEL_SLE_CONN_INVALID;
             g_rx_handles_ready = false;
             g_rx_data_handle = 0;
             g_rx_resp_handle = 0;
+            g_rx_connect_cancel_after_connect = false;
+            memset(&g_rx_addr, 0, sizeof(g_rx_addr));
+            g_rx_addr_valid = false;
             osal_printk("[PANEL_SLE_CLI] rx disconnected\r\n");
+            panel_model_set_transport_links(panel_transport_sle_tx_is_connected(), false);
+            if (expected) {
+                start_seek_if_needed();
+                return;
+            }
         }
         g_client_connecting = false;
-        panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
-                                          0, g_model.seq + 1U, 0, 0, 0, 0, 0, 1, 0U);
+        if (!panel_transport_sle_tx_is_connected() && !panel_transport_sle_rx_is_connected()) {
+            panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
+                                              0, g_model.seq + 1U, 0, 0, 0, 0, 0, 1, 0U);
+        }
         start_seek_if_needed();
     }
 }
@@ -487,7 +566,8 @@ static void sle_seek_enable_cbk(errcode_t status)
 static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
 {
     if (seek_result == NULL || g_client_connecting ||
-        g_rx_conn_id != PANEL_SLE_CONN_INVALID || !seek_result_matches_receiver(seek_result)) {
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID || !panel_transport_sle_can_control_rx() ||
+        !seek_result_matches_receiver(seek_result)) {
         return;
     }
 
@@ -506,6 +586,7 @@ static void sle_seek_disable_cbk(errcode_t status)
     g_seek_active = false;
     if (status != ERRCODE_SLE_SUCCESS || !g_client_connecting) {
         g_client_connecting = false;
+        g_rx_connect_cancel_after_connect = false;
         start_seek_if_needed();
         return;
     }
@@ -513,6 +594,7 @@ static void sle_seek_disable_cbk(errcode_t status)
     errcode_t ret = sle_connect_remote_device(&g_pending_rx_addr);
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_client_connecting = false;
+        g_rx_connect_cancel_after_connect = false;
         osal_printk("[PANEL_SLE_CLI] connect submit fail: 0x%x\r\n", ret);
         start_seek_if_needed();
     }
@@ -581,6 +663,7 @@ static void sle_enable_cbk(errcode_t status)
         return;
     }
 
+    osal_printk("[PANEL_SLE_CLI] rx client gated until standalone session\r\n");
     start_seek_if_needed();
 }
 
@@ -648,6 +731,7 @@ static void ssapc_find_property_cbk(uint8_t client_id, uint16_t conn_id,
         osal_printk("[PANEL_SLE_CLI] rx ready conn=%u data=0x%x resp=0x%x\r\n",
                     (unsigned int)g_rx_conn_id, (unsigned int)g_rx_data_handle,
                     (unsigned int)g_rx_resp_handle);
+        panel_model_set_transport_links(panel_transport_sle_tx_is_connected(), true);
     }
 }
 
@@ -732,10 +816,18 @@ errcode_t panel_transport_sle_start(void)
     g_seek_active = false;
     g_client_connecting = false;
     g_rx_handles_ready = false;
+    memset(&g_rx_addr, 0, sizeof(g_rx_addr));
+    g_rx_addr_valid = false;
+    g_rx_disconnect_expected = false;
+    g_rx_connect_cancel_after_connect = false;
     g_last_seek_ms = 0;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    g_standalone_session_active = false;
     if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
         g_write_cfm_sem_ready = true;
+    }
+    if (!g_write_mutex_ready && osal_mutex_init(&g_write_mutex) == OSAL_SUCCESS) {
+        g_write_mutex_ready = true;
     }
 
     sle_announce_register_cbks();
@@ -760,13 +852,43 @@ bool panel_transport_sle_rx_is_connected(void)
     return g_rx_conn_id != PANEL_SLE_CONN_INVALID && g_rx_handles_ready;
 }
 
+bool panel_transport_sle_tx_is_connected(void)
+{
+    return g_panel_conn_id != PANEL_SLE_CONN_INVALID;
+}
+
+bool panel_transport_sle_can_control_rx(void)
+{
+    return !panel_transport_sle_tx_is_connected() || g_standalone_session_active;
+}
+
+void panel_transport_sle_set_standalone_session_active(bool active)
+{
+    bool was_active = g_standalone_session_active;
+    g_standalone_session_active = active;
+    if (active) {
+        g_rx_connect_cancel_after_connect = false;
+    }
+    if (!active) {
+        if (g_client_connecting) {
+            g_rx_connect_cancel_after_connect = true;
+        }
+    }
+    if (!active && was_active && g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
+        disconnect_rx_expected();
+    }
+    start_seek_if_needed();
+}
+
 errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
 {
-    if (data == NULL || len == 0 || !panel_transport_sle_rx_is_connected() ||
-        g_rx_data_handle == 0 || !g_write_cfm_sem_ready) {
+    if (data == NULL || len == 0 || !panel_transport_sle_can_control_rx() ||
+        !panel_transport_sle_rx_is_connected() || g_rx_data_handle == 0 ||
+        !g_write_cfm_sem_ready || !g_write_mutex_ready) {
         return ERRCODE_SLE_FAIL;
     }
 
+    osal_mutex_lock(&g_write_mutex);
     while (osal_sem_down_timeout(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
     }
 
@@ -776,18 +898,33 @@ errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
     param.data_len = len;
     param.data = (uint8_t *)data;
 
+    uint8_t pkt_type = packet_type_from_encoded(data, len);
+    if (pkt_type == PKT_JOB_DATA || pkt_type == PKT_STATUS_REQ) {
+        errcode_t ret = ssapc_write_cmd(PANEL_SLE_CLIENT_ID, g_rx_conn_id, &param);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[PANEL_SLE_CLI] write cmd fail type=0x%02x ret=0x%x len=%u\r\n",
+                        pkt_type, ret, (unsigned int)len);
+        }
+        osal_mutex_unlock(&g_write_mutex);
+        return ret;
+    }
+
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
     errcode_t ret = ssapc_write_req(PANEL_SLE_CLIENT_ID, g_rx_conn_id, &param);
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[PANEL_SLE_CLI] write submit fail ret=0x%x len=%u\r\n",
                     ret, (unsigned int)len);
+        osal_mutex_unlock(&g_write_mutex);
         return ret;
     }
     if (osal_sem_down_timeout(&g_write_cfm_sem, PANEL_SLE_WRITE_CFM_TIMEOUT_MS) != OSAL_SUCCESS) {
         osal_printk("[PANEL_SLE_CLI] write cfm timeout len=%u\r\n", (unsigned int)len);
+        osal_mutex_unlock(&g_write_mutex);
         return ERRCODE_SLE_TIMEOUT;
     }
-    return g_last_write_cfm_status;
+    ret = g_last_write_cfm_status;
+    osal_mutex_unlock(&g_write_mutex);
+    return ret;
 }
 
 void panel_transport_sle_set_rx_response_cb(panel_transport_rx_response_cb_t cb)

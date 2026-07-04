@@ -248,6 +248,8 @@ class SleJobSerialClient:
         self._priority_lock = threading.Lock()
         self._priority_control: Optional[PriorityControl] = None
         self._upload_paused = False
+        self._upload_abort_requested = False
+        self._terminal_control_confirmed: Optional[str] = None
 
     def is_open(self) -> bool:
         return self._serial is not None and self._serial.is_open
@@ -391,6 +393,8 @@ class SleJobSerialClient:
         if not control.command:
             raise RuntimeError("空控制命令")
         with self._priority_lock:
+            if control.command == "@ABORT" and control.interrupt_upload:
+                self._upload_abort_requested = True
             if control.command == "@EXEC_STOP" and self._upload_paused:
                 return False
             pending = self._priority_control
@@ -433,6 +437,29 @@ class SleJobSerialClient:
         with self._priority_lock:
             return self._upload_paused
 
+    def _reset_upload_control_state(self) -> None:
+        with self._priority_lock:
+            self._upload_paused = False
+            self._upload_abort_requested = False
+            self._terminal_control_confirmed = None
+
+    def _is_upload_abort_requested(self) -> bool:
+        with self._priority_lock:
+            return self._upload_abort_requested
+
+    def _set_terminal_control_confirmed(self, command: str) -> None:
+        with self._priority_lock:
+            self._terminal_control_confirmed = command
+
+    def _get_terminal_control_confirmed(self) -> Optional[str]:
+        with self._priority_lock:
+            return self._terminal_control_confirmed
+
+    def _raise_if_abort_took_over_upload(self, exc: BaseException) -> None:
+        confirmed = self._get_terminal_control_confirmed()
+        if confirmed == "@ABORT" or self._is_upload_abort_requested():
+            raise UploadInterrupted("控制命令已发送，上传已停止: @ABORT") from exc
+
     def _dispatch_priority_control_locked(self) -> Optional[str]:
         control = self._pop_priority_control()
         if control is None:
@@ -451,6 +478,7 @@ class SleJobSerialClient:
             self._set_upload_paused(False)
         elif control.command == "@ABORT":
             self._set_upload_paused(False)
+            self._set_terminal_control_confirmed("@ABORT")
         if control.interrupt_upload:
             raise UploadInterrupted(f"控制命令已发送，上传已停止: {control.command}")
         return control.command
@@ -512,7 +540,7 @@ class SleJobSerialClient:
         t_begin = time.perf_counter()
 
         with self._command_lock:
-            self._set_upload_paused(False)
+            self._reset_upload_control_state()
             resync_timeout = max(timeout, TX_RESYNC_TIMEOUT_MIN_S)
             if recover_tx:
                 self._resync_tx_locked(resync_timeout)
@@ -573,9 +601,18 @@ class SleJobSerialClient:
                                 "旧版 EXEC_STOP 会退出 data_mode，后续 G-code 被当作命令解析。"
                                 "请烧录最新 ws63-liteos-app_tx_all.fwpkg 后再测试暂停/恢复。"
                             ) from exc
+                        self._raise_if_abort_took_over_upload(exc)
                         raise
-                    except TimeoutError:
-                        self._dispatch_priority_control_locked()
+                    except TimeoutError as exc:
+                        try:
+                            self._dispatch_priority_control_locked()
+                        except UploadInterrupted:
+                            raise
+                        if self._is_upload_abort_requested():
+                            self._resync_tx_locked(resync_timeout)
+                            raise UploadInterrupted(
+                                "控制命令已发送，上传已停止: @ABORT"
+                            ) from exc
                         raise
                     chunk_ms = int((time.perf_counter() - chunk_t0) * 1000)
                     ack_wait_ms = ack.elapsed_ms
@@ -652,6 +689,9 @@ class SleJobSerialClient:
             except UploadInterrupted:
                 raise
             except Exception:
+                confirmed = self._get_terminal_control_confirmed()
+                if confirmed == "@ABORT" or self._is_upload_abort_requested():
+                    raise UploadInterrupted("控制命令已发送，上传已停止: @ABORT")
                 if transaction_started:
                     try:
                         self._resync_tx_locked(resync_timeout)

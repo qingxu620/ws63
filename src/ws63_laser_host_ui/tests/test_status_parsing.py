@@ -224,6 +224,42 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual([len(item) for item in writes], [1, JOB_DATA_CHUNK_SIZE, 2])
         self.assertEqual(writes[-1], bytes((TX_UART_CONTROL_BYTE, ord("A"))))
 
+    def test_abort_request_converts_lost_data_ack_to_upload_interrupted(self) -> None:
+        writes: list[bytes] = []
+        commands: list[str] = []
+        resync_count = 0
+        payload = b"A" * JOB_DATA_CHUNK_SIZE
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def send_line(self, line: str) -> None:
+                commands.append(line)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                nonlocal resync_count
+                if "@OK resync" in pattern:
+                    resync_count += 1
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    return WaitResult(f"@DATA_READY job=1 size={len(payload)}", 1)
+                if "@ACK type=4" in pattern:
+                    return WaitResult("@ACK type=4 seq=0 status=0", 1)
+                if "@ACK type=2" in pattern:
+                    self.request_priority_control("@ABORT", "@ACK type=4", 2.0)
+                    self._pop_priority_control()
+                    raise TimeoutError("等待 @ACK type=2 offset 超时")
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        with self.assertRaises(UploadInterrupted):
+            client.upload_job(1, payload, 2.0)
+
+        self.assertEqual(resync_count, 2)
+        self.assertEqual(commands, [f"@BEGIN 1 {len(payload)} 35c9"])
+        self.assertEqual(writes, [bytes((TX_UART_RESYNC_BYTE,)), payload, bytes((TX_UART_RESYNC_BYTE,))])
+
     def test_upload_unknown_command_after_pause_points_to_old_tx_firmware(self) -> None:
         payload = b"A" * JOB_DATA_CHUNK_SIZE
 

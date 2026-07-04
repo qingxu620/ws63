@@ -30,7 +30,7 @@
 #define PANEL_OFFLINE_RETRY_MAX       8U
 #define PANEL_OFFLINE_STATUS_MS       1000U
 #define PANEL_OFFLINE_EXEC_TIMEOUT_MS 600000U
-#define PANEL_OFFLINE_CHUNK_MAX       (SLE_JOB_PACKET_MAX_PAYLOAD - sizeof(job_data_payload_t))
+#define PANEL_OFFLINE_CHUNK_MAX       214U
 #define PANEL_OFFLINE_USE_FULL_FILE_CRC 0
 #define PANEL_OFFLINE_READAHEAD_BYTES 8192U
 #define PANEL_OFFLINE_YIELD_PACKETS   16U
@@ -38,6 +38,14 @@
 #define PANEL_OFFLINE_PREROLL_REQUEST_BYTES 4096U
 #define PANEL_OFFLINE_PREROLL_FALLBACK_BYTES 8192U
 #define PANEL_OFFLINE_PREROLL_LINE_MAX 128U
+#define PANEL_OFFLINE_TIMING_FIRST_PACKETS 8U
+#define PANEL_OFFLINE_TIMING_EVERY_PACKETS 32U
+#define PANEL_OFFLINE_TIMING_SLOW_MS 250U
+#define PANEL_OFFLINE_READ_LOG_BYTES 32768U
+#define PANEL_OFFLINE_READ_SLOW_MS 100U
+
+_Static_assert(sizeof(job_data_payload_t) + PANEL_OFFLINE_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
+               "PANEL_OFFLINE_CHUNK_MAX too large for SLE payload");
 
 typedef struct {
     uint32_t request_offset;
@@ -63,6 +71,7 @@ static volatile bool g_busy;
 static volatile bool g_start_requested;
 static uint8_t g_pending_index;
 static uint8_t g_readahead_buf[PANEL_OFFLINE_READAHEAD_BYTES];
+static uint32_t g_diag_data_count;
 
 static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t fallback)
 {
@@ -71,6 +80,17 @@ static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t
         return (uint16_t)(sizeof(job_data_payload_t) + p->data_len);
     }
     return fallback;
+}
+
+static bool should_log_packet_timing(uint8_t type, uint32_t data_index, uint32_t total_ms)
+{
+    if (type != PKT_JOB_DATA) {
+        return true;
+    }
+    return data_index <= PANEL_OFFLINE_TIMING_FIRST_PACKETS ||
+           (PANEL_OFFLINE_TIMING_EVERY_PACKETS > 0U &&
+            (data_index % PANEL_OFFLINE_TIMING_EVERY_PACKETS) == 0U) ||
+           total_ms >= PANEL_OFFLINE_TIMING_SLOW_MS;
 }
 
 static void rx_response_cb(const uint8_t *data, uint16_t len)
@@ -117,6 +137,9 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     uint16_t packet_len = 0;
     uint16_t seq = panel_job_proto_next_seq();
     uint16_t actual_payload_len = payload_len_for_type(type, payload, payload_len);
+    uint32_t dbg_off = 0;
+    uint16_t dbg_dlen = 0;
+    uint32_t dbg_data_index = 0;
 
     if (!sle_packet_encode(type, 0, seq, payload, actual_payload_len,
                            packet, sizeof(packet), &packet_len)) {
@@ -130,6 +153,15 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         return ERRCODE_SLE_TIMEOUT;
     }
 
+    if (type == PKT_JOB_DATA && payload != NULL &&
+        actual_payload_len >= sizeof(job_data_payload_t)) {
+        const job_data_payload_t *dp = (const job_data_payload_t *)payload;
+        dbg_off = dp->offset;
+        dbg_dlen = dp->data_len;
+        g_diag_data_count++;
+        dbg_data_index = g_diag_data_count;
+    }
+
     g_wait_ack_seq = seq;
     g_wait_active = true;
 
@@ -138,16 +170,38 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         }
         g_wait_status = JOB_STATUS_INTERNAL_ERROR;
         g_wait_got_ack = false;
+        uint32_t t_send = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = panel_transport_sle_send_rx_packet(packet, packet_len);
+        uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
         if (ret == ERRCODE_SLE_SUCCESS &&
             osal_sem_down_timeout(&g_ack_sem, PANEL_OFFLINE_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
             g_wait_got_ack) {
+            uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_send - send_ms;
+            uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+            if (should_log_packet_timing(type, dbg_data_index, total_ms)) {
+                osal_printk("[PANEL_TIMING] type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                            "send_ms=%u ack_ms=%u total_ms=%u retry=%u status=%u\r\n",
+                            type, (unsigned int)seq, (unsigned int)dbg_data_index,
+                            (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                            (unsigned int)send_ms, (unsigned int)ack_ms,
+                            (unsigned int)total_ms, (unsigned int)retry,
+                            (unsigned int)g_wait_status);
+            }
             g_wait_active = false;
             g_wait_ack_seq = 0;
-            return (g_wait_status == JOB_STATUS_OK) ? ERRCODE_SUCC : ERRCODE_FAIL;
+            if (g_wait_status == JOB_STATUS_OK) {
+                return ERRCODE_SUCC;
+            }
+            osal_printk("[PANEL_OFFLINE] rx nack type=0x%02x seq=%u status=%u off=%u len=%u\r\n",
+                        type, (unsigned int)seq, (unsigned int)g_wait_status,
+                        (unsigned int)dbg_off, (unsigned int)dbg_dlen);
+            return ERRCODE_FAIL;
         }
-        osal_printk("[PANEL_OFFLINE] wait ack retry type=0x%02x seq=%u try=%u st=%u\r\n",
-                    type, (unsigned int)seq, (unsigned int)retry, (unsigned int)g_wait_status);
+        osal_printk("[PANEL_OFFLINE] wait ack retry type=0x%02x seq=%u try=%u ret=0x%x "
+                    "send_ms=%u st=%u off=%u len=%u\r\n",
+                    type, (unsigned int)seq, (unsigned int)retry, ret,
+                    (unsigned int)send_ms, (unsigned int)g_wait_status,
+                    (unsigned int)dbg_off, (unsigned int)dbg_dlen);
     }
 
     g_wait_active = false;
@@ -390,10 +444,12 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
     uint32_t offset = 0;
     uint32_t total_size = entry->size_bytes;
     uint32_t packet_count = 0;
+    uint32_t next_read_log = 0;
     uint32_t t_start = (uint32_t)uapi_systick_get_ms();
     bool exec_started = false;
     preroll_tracker_t preroll;
     preroll_tracker_init(&preroll, total_size);
+    g_diag_data_count = 0;
 
     errcode_t ret = send_job_begin(PANEL_OFFLINE_JOB_ID, total_size, crc);
     if (ret != ERRCODE_SUCC) {
@@ -413,10 +469,32 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
         size_t bytes_read = 0;
         bool eof = false;
         uint32_t read_offset = offset;
-        if (!panel_file_manager_read_chunk(index, read_offset, g_readahead_buf,
-                                           sizeof(g_readahead_buf), &bytes_read, &eof) ||
-            bytes_read == 0U) {
+        uint32_t t_read = (uint32_t)uapi_systick_get_ms();
+        bool read_ok = panel_file_manager_read_chunk(index, read_offset, g_readahead_buf,
+                                                     sizeof(g_readahead_buf), &bytes_read, &eof);
+        uint32_t read_ms = (uint32_t)uapi_systick_get_ms() - t_read;
+        if (!read_ok || bytes_read == 0U) {
+            const panel_file_manager_t *mgr = panel_file_manager_get();
+            const char *err = (mgr != NULL) ? mgr->last_error : "unknown";
+            osal_printk("[PANEL_OFFLINE_READ_FAIL] off=%u req=%u got=%u eof=%u ms=%u err=%s\r\n",
+                        (unsigned int)read_offset,
+                        (unsigned int)sizeof(g_readahead_buf),
+                        (unsigned int)bytes_read,
+                        eof ? 1U : 0U,
+                        (unsigned int)read_ms,
+                        err);
             return PANEL_OFFLINE_FLOW_FAIL;
+        }
+        if (read_offset >= next_read_log || read_ms >= PANEL_OFFLINE_READ_SLOW_MS || eof) {
+            osal_printk("[PANEL_OFFLINE_READ] off=%u req=%u got=%u eof=%u ms=%u\r\n",
+                        (unsigned int)read_offset,
+                        (unsigned int)sizeof(g_readahead_buf),
+                        (unsigned int)bytes_read,
+                        eof ? 1U : 0U,
+                        (unsigned int)read_ms);
+            while (next_read_log <= read_offset) {
+                next_read_log += PANEL_OFFLINE_READ_LOG_BYTES;
+            }
         }
 
         size_t read_pos = 0;
@@ -553,6 +631,11 @@ static void run_offline_job(uint8_t index)
         panel_model_offline_error("NO_FILE");
         return;
     }
+    if (!panel_transport_sle_can_control_rx()) {
+        panel_model_offline_error("DISPLAY_ONLY");
+        osal_printk("[PANEL_OFFLINE] rejected: tx mirror present, display-only mode\r\n");
+        return;
+    }
     if (entry->size_bytes == 0U || entry->size_bytes > PANEL_OFFLINE_JOB_MAX_SIZE) {
         panel_model_offline_error("BAD_SIZE");
         return;
@@ -603,9 +686,11 @@ static int panel_offline_job_task(void *arg)
 
         g_start_requested = false;
         g_busy = true;
+        panel_transport_sle_set_standalone_session_active(true);
         panel_rx_commands_set_offline_upload_active(true);
         run_offline_job(g_pending_index);
         panel_rx_commands_set_offline_upload_active(false);
+        panel_transport_sle_set_standalone_session_active(false);
         g_busy = false;
     }
     return 0;
@@ -627,7 +712,8 @@ errcode_t panel_offline_job_init(void)
 errcode_t panel_offline_job_start_selected(void)
 {
     const panel_file_manager_t *mgr = panel_file_manager_get();
-    if (mgr == NULL || mgr->selected_index < 0 || g_busy || g_start_requested) {
+    if (mgr == NULL || mgr->selected_index < 0 || g_busy || g_start_requested ||
+        !panel_transport_sle_can_control_rx()) {
         return ERRCODE_FAIL;
     }
     g_pending_index = (uint8_t)mgr->selected_index;

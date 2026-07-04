@@ -43,11 +43,14 @@
 /* State */
 static uint16_t g_conn_id = SLE_CONN_INVALID;
 static uint16_t g_panel_conn_id = SLE_CONN_INVALID;
+static bool g_panel_link_allowed = true;
 static bool g_sle_enabled = false;
 static bool g_seek_active = false;
 static bool g_connecting = false;
 static uint8_t g_pending_role = SLE_LINK_ROLE_NONE;
 static sle_addr_t g_pending_addr = {0};
+static sle_addr_t g_panel_addr = {0};
+static bool g_panel_addr_valid = false;
 static bool g_handles_ready = false;
 static bool g_panel_handles_ready = false;
 static uint16_t g_data_handle = 0;
@@ -201,7 +204,7 @@ static bool need_rx_link(void)
 
 static bool need_panel_link(void)
 {
-    return g_panel_conn_id == SLE_CONN_INVALID;
+    return g_panel_link_allowed && g_panel_conn_id == SLE_CONN_INVALID;
 }
 
 static void start_seek_if_needed(void)
@@ -300,17 +303,46 @@ static void seek_disable_cbk(errcode_t status)
 static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
-    unused(addr);
     unused(pair_state);
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         uint8_t role = g_pending_role;
         if (role == SLE_LINK_ROLE_NONE) {
-            role = need_rx_link() ? SLE_LINK_ROLE_RX : SLE_LINK_ROLE_PANEL;
+            if (need_rx_link()) {
+                role = SLE_LINK_ROLE_RX;
+            } else if (need_panel_link()) {
+                role = SLE_LINK_ROLE_PANEL;
+            }
+        }
+        if (role == SLE_LINK_ROLE_NONE) {
+            g_connecting = false;
+            g_pending_role = SLE_LINK_ROLE_NONE;
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
+            start_seek_if_needed();
+            return;
         }
         if (role == SLE_LINK_ROLE_PANEL) {
+            if (!g_panel_link_allowed) {
+                g_connecting = false;
+                g_pending_role = SLE_LINK_ROLE_NONE;
+                osal_printk("[tx_panel] reject link while disabled\r\n");
+                if (addr != NULL) {
+                    (void)sle_disconnect_remote_device(addr);
+                }
+                start_seek_if_needed();
+                return;
+            }
             g_panel_conn_id = conn_id;
+            if (addr != NULL) {
+                (void)memcpy_s(&g_panel_addr, sizeof(g_panel_addr), addr, sizeof(*addr));
+                g_panel_addr_valid = true;
+            } else {
+                memset(&g_panel_addr, 0, sizeof(g_panel_addr));
+                g_panel_addr_valid = false;
+            }
         } else {
             g_conn_id = conn_id;
         }
@@ -336,6 +368,8 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
             g_panel_conn_id = SLE_CONN_INVALID;
             g_panel_handles_ready = false;
             g_panel_status_handle = 0;
+            memset(&g_panel_addr, 0, sizeof(g_panel_addr));
+            g_panel_addr_valid = false;
             osal_printk("[tx_panel] disconnected\r\n");
         }
         if (conn_id == g_conn_id) {
@@ -482,11 +516,14 @@ errcode_t sle_job_client_init(void)
 {
     g_conn_id = SLE_CONN_INVALID;
     g_panel_conn_id = SLE_CONN_INVALID;
+    g_panel_link_allowed = true;
     g_sle_enabled = false;
     g_seek_active = false;
     g_connecting = false;
     g_pending_role = SLE_LINK_ROLE_NONE;
     memset(&g_pending_addr, 0, sizeof(g_pending_addr));
+    memset(&g_panel_addr, 0, sizeof(g_panel_addr));
+    g_panel_addr_valid = false;
     g_handles_ready = false;
     g_panel_handles_ready = false;
     g_data_handle = 0;
@@ -590,12 +627,45 @@ bool sle_job_client_is_connected(void)
 
 bool sle_job_client_panel_is_connected(void)
 {
-    return g_panel_conn_id != SLE_CONN_INVALID && g_panel_handles_ready;
+    return g_panel_link_allowed && g_panel_conn_id != SLE_CONN_INVALID && g_panel_handles_ready;
+}
+
+bool sle_job_client_panel_link_allowed(void)
+{
+    return g_panel_link_allowed;
+}
+
+void sle_job_client_set_panel_link_allowed(bool allowed)
+{
+    if (g_panel_link_allowed == allowed) {
+        return;
+    }
+
+    g_panel_link_allowed = allowed;
+    osal_printk("[tx_panel] link_allowed=%u\r\n", allowed ? 1U : 0U);
+
+    if (!allowed) {
+        if (g_pending_role == SLE_LINK_ROLE_PANEL) {
+            g_connecting = false;
+            g_pending_role = SLE_LINK_ROLE_NONE;
+            memset(&g_pending_addr, 0, sizeof(g_pending_addr));
+        }
+        if (g_panel_conn_id != SLE_CONN_INVALID && g_panel_addr_valid) {
+            errcode_t ret = sle_disconnect_remote_device(&g_panel_addr);
+            if (ret != ERRCODE_SLE_SUCCESS) {
+                osal_printk("[tx_panel] disconnect submit fail: 0x%x\r\n", ret);
+            }
+        }
+        return;
+    }
+
+    start_seek_if_needed();
 }
 
 errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len)
 {
-    if (data == NULL || len == 0 || !sle_job_client_panel_is_connected() ||
+    if (data == NULL || len == 0 || !g_panel_link_allowed ||
+        !sle_job_client_panel_is_connected() ||
         g_panel_status_handle == 0) {
         return ERRCODE_SLE_FAIL;
     }

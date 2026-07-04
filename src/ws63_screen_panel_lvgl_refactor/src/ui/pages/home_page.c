@@ -16,6 +16,7 @@
 #include "../service/panel_model.h"
 #include "../service/panel_offline_job.h"
 #include "../service/panel_rx_commands.h"
+#include "../service/panel_transport_sle.h"
 #include "soc_osal.h"
 #include <stdio.h>
 #include <string.h>
@@ -37,17 +38,15 @@ static lv_obj_t *g_lbl_sd_file;
 
 /* Action bar buttons */
 static lv_obj_t *g_btn_start;
-static lv_obj_t *g_btn_stop;
-static lv_obj_t *g_btn_abort;
-static lv_obj_t *g_btn_focus;
+static lv_obj_t *g_btn_pause;
+static lv_obj_t *g_btn_resume;
+static lv_obj_t *g_btn_force_stop;
 static lv_obj_t *g_btn_settings;
 static lv_obj_t *g_lbl_start;
-static lv_obj_t *g_lbl_stop;
-static lv_obj_t *g_lbl_abort;
-static lv_obj_t *g_lbl_focus;
+static lv_obj_t *g_lbl_pause;
+static lv_obj_t *g_lbl_resume;
+static lv_obj_t *g_lbl_force_stop;
 static lv_obj_t *g_lbl_settings;
-static bool g_focus_visual_on;
-static bool g_focus_visual_allowed;
 static uint32_t g_rendered_model_seq = UINT32_MAX;
 static uint32_t g_rendered_file_seq = UINT32_MAX;
 
@@ -102,8 +101,15 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_add_event_cb(bar, status_bar_click_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
+    lv_obj_t *title_dot = lv_obj_create(bar);
+    lv_obj_remove_style_all(title_dot);
+    lv_obj_set_size(title_dot, 8, 8);
+    lv_obj_set_style_bg_color(title_dot, COLOR_LASER_BLUE, 0);
+    lv_obj_set_style_bg_opa(title_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(title_dot, LV_RADIUS_CIRCLE, 0);
+
     lv_obj_t *title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
-    lv_label_set_text(title, "● WS63 激光主控");
+    lv_label_set_text(title, "WS63 激光主控");
     lv_obj_set_style_text_color(title, COLOR_LASER_BLUE, 0);
 
     lv_obj_t *spacer = lv_obj_create(bar);
@@ -239,14 +245,6 @@ static void create_info_block(lv_obj_t *parent)
     bind_click(g_lbl_sd_file, sd_file_card_cb, NULL);
 }
 
-static void set_focus_visual_state(bool on)
-{
-    g_focus_visual_on = on;
-    lv_obj_set_style_bg_color(g_btn_focus,
-        on ? COLOR_LASER_RED : COLOR_LASER_BLUE, 0);
-    lv_label_set_text(g_lbl_focus, on ? "调焦开启" : "调焦");
-}
-
 static void btn_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -261,15 +259,9 @@ static void btn_event_cb(lv_event_t *e)
                 perms.can_start, perms.can_stop, perms.can_abort);
     switch (idx) {
     case 0:
-        if (!perms.can_start) {
+        if (!perms.can_start || g_model.state == SYS_STATE_PAUSED) {
             osal_printk("[PANEL_CMD] start rejected: owner=%d state=%d\r\n",
                         g_model.owner, g_model.state);
-            break;
-        }
-        if (g_model.state == SYS_STATE_PAUSED) {
-            if (panel_rx_commands_request_exec_resume() != ERRCODE_SUCC) {
-                osal_printk("[PANEL_CMD] resume queue failed\r\n");
-            }
             break;
         }
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
@@ -288,7 +280,8 @@ static void btn_event_cb(lv_event_t *e)
             osal_printk("[PANEL_CMD] offline job queued\r\n");
             break;
         }
-        panel_model_set_scene(PANEL_SCENE_SCREEN_SENDING);
+        osal_printk("[PANEL_CMD] start ignored: no selected standalone job tx=%d owner=%d state=%d\r\n",
+                    panel_transport_sle_tx_is_connected(), g_model.owner, g_model.state);
         break;
     case 1:
         if (!perms.can_stop) {
@@ -302,25 +295,23 @@ static void btn_event_cb(lv_event_t *e)
         }
         break;
     case 2:
+        if (!perms.can_start || g_model.state != SYS_STATE_PAUSED) {
+            osal_printk("[PANEL_CMD] resume rejected: state=%d\r\n", g_model.state);
+            break;
+        }
+        if (panel_rx_commands_request_exec_resume() != ERRCODE_SUCC) {
+            osal_printk("[PANEL_CMD] resume queue failed\r\n");
+        }
+        break;
+    case 3:
         if (!perms.can_abort) {
-            osal_printk("[PANEL_CMD] abort rejected: state=%d\r\n", g_model.state);
+            osal_printk("[PANEL_CMD] force_stop rejected: state=%d\r\n", g_model.state);
             break;
         }
         if (panel_rx_commands_request_abort() == ERRCODE_SUCC) {
             panel_model_request_abort();
         } else {
-            osal_printk("[PANEL_CMD] abort queue failed\r\n");
-        }
-        break;
-    case 3:
-        if (!perms.can_focus_off) {
-            osal_printk("[PANEL_CMD] focus_off rejected by UI state\r\n");
-            break;
-        }
-        if (panel_rx_commands_request_focus_off() == ERRCODE_SUCC) {
-            panel_model_request_focus_off();
-        } else {
-            osal_printk("[PANEL_CMD] focus_off queue failed\r\n");
+            osal_printk("[PANEL_CMD] force_stop queue failed\r\n");
         }
         break;
     case 4:
@@ -335,7 +326,7 @@ static lv_obj_t *create_action_btn(lv_obj_t *parent, const char *text,
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, 58, 44);
+    lv_obj_set_size(btn, 60, 44);
     lv_obj_set_style_bg_color(btn, bg_color, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(btn, 10, 0);
@@ -346,6 +337,9 @@ static lv_obj_t *create_action_btn(lv_obj_t *parent, const char *text,
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_set_width(lbl, 58);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
     lv_obj_center(lbl);
 
     if (out_label) *out_label = lbl;
@@ -370,21 +364,21 @@ static void create_action_bar(lv_obj_t *parent)
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_radius(bar, 0, 0);
 
-    g_btn_start = create_action_btn(bar, "执行", COLOR_LASER_GREEN, &g_lbl_start);
+    g_btn_start = create_action_btn(bar, "启动", COLOR_LASER_GREEN, &g_lbl_start);
     bind_click(g_btn_start, btn_event_cb, (void *)0);
     bind_click(g_lbl_start, btn_event_cb, (void *)0);
 
-    g_btn_stop = create_action_btn(bar, "暂停", COLOR_LASER_ORANGE, &g_lbl_stop);
-    bind_click(g_btn_stop, btn_event_cb, (void *)1);
-    bind_click(g_lbl_stop, btn_event_cb, (void *)1);
+    g_btn_pause = create_action_btn(bar, "暂停", COLOR_LASER_ORANGE, &g_lbl_pause);
+    bind_click(g_btn_pause, btn_event_cb, (void *)1);
+    bind_click(g_lbl_pause, btn_event_cb, (void *)1);
 
-    g_btn_abort = create_action_btn(bar, "放弃", COLOR_LASER_RED, &g_lbl_abort);
-    bind_click(g_btn_abort, btn_event_cb, (void *)2);
-    bind_click(g_lbl_abort, btn_event_cb, (void *)2);
+    g_btn_resume = create_action_btn(bar, "恢复", COLOR_LASER_BLUE, &g_lbl_resume);
+    bind_click(g_btn_resume, btn_event_cb, (void *)2);
+    bind_click(g_lbl_resume, btn_event_cb, (void *)2);
 
-    g_btn_focus = create_action_btn(bar, "关光", COLOR_LASER_BLUE, &g_lbl_focus);
-    bind_click(g_btn_focus, btn_event_cb, (void *)3);
-    bind_click(g_lbl_focus, btn_event_cb, (void *)3);
+    g_btn_force_stop = create_action_btn(bar, "强制停止", COLOR_LASER_RED, &g_lbl_force_stop);
+    bind_click(g_btn_force_stop, btn_event_cb, (void *)3);
+    bind_click(g_lbl_force_stop, btn_event_cb, (void *)3);
 
     g_btn_settings = create_action_btn(bar, "设置", COLOR_TEXT_MUTED, &g_lbl_settings);
     bind_click(g_btn_settings, btn_event_cb, (void *)4);
@@ -395,7 +389,7 @@ static void apply_state(void)
 {
     panel_button_permissions_t perms;
     panel_model_get_button_permissions(&perms);
-    bool start_en = false, stop_en = false, abort_en = false, focus_en = false;
+    bool start_en = false, pause_en = false, resume_en = false, force_stop_en = false;
 
     lv_label_set_text(g_lbl_substate, "待机");
 
@@ -547,7 +541,7 @@ static void apply_state(void)
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_RED, 0);
         lv_label_set_text(g_lbl_safety_val, "已锁定");
         lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_RED, 0);
-        abort_en = true;
+        force_stop_en = true;
         break;
 
     case SYS_STATE_LINK_LOST:
@@ -563,10 +557,10 @@ static void apply_state(void)
         break;
     }
 
-    start_en = perms.can_start;
-    stop_en = perms.can_stop;
-    abort_en = perms.can_abort;
-    focus_en = perms.can_focus_off;
+    start_en = perms.can_start && g_model.state != SYS_STATE_PAUSED;
+    pause_en = perms.can_stop;
+    resume_en = perms.can_start && g_model.state == SYS_STATE_PAUSED;
+    force_stop_en = perms.can_abort;
 
     {
         char time_buf[12];
@@ -593,28 +587,19 @@ static void apply_state(void)
         lv_label_set_text(g_lbl_sd_file, "点击选择");
     }
 
-    set_focus_visual_state(g_model.focus_active);
-    g_focus_visual_allowed = focus_en;
-
     lv_obj_set_style_bg_opa(g_btn_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_bg_opa(g_btn_stop, stop_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_text_opa(g_lbl_stop, stop_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_bg_opa(g_btn_abort, abort_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_text_opa(g_lbl_abort, abort_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_bg_opa(g_btn_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_text_opa(g_lbl_focus, focus_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(g_btn_pause, pause_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(g_lbl_pause, pause_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(g_btn_resume, resume_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(g_lbl_resume, resume_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(g_btn_force_stop, force_stop_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(g_lbl_force_stop, force_stop_en ? LV_OPA_COVER : LV_OPA_50, 0);
 
-    lv_label_set_text(g_lbl_start, g_model.state == SYS_STATE_PAUSED ? "继续" : "执行");
-    lv_label_set_text(g_lbl_stop, perms.requesting_stop ? "暂停中" : "暂停");
-    lv_label_set_text(g_lbl_abort, perms.requesting_abort ? "取消中" : "放弃");
-    if (perms.requesting_focus_off) {
-        lv_label_set_text(g_lbl_focus, "关光中");
-    } else if (g_model.focus_active) {
-        lv_label_set_text(g_lbl_focus, "关调焦");
-    } else {
-        lv_label_set_text(g_lbl_focus, "关光");
-    }
+    lv_label_set_text(g_lbl_start, "启动");
+    lv_label_set_text(g_lbl_pause, perms.requesting_stop ? "暂停中" : "暂停");
+    lv_label_set_text(g_lbl_resume, "恢复");
+    lv_label_set_text(g_lbl_force_stop, perms.requesting_abort ? "停止中" : "强制停止");
 }
 
 void home_page_create(lv_obj_t *parent)
@@ -641,8 +626,6 @@ void home_page_create(lv_obj_t *parent)
     create_progress_block(body);
     create_info_block(body);
     create_action_bar(scr);
-    g_focus_visual_on = false;
-    g_focus_visual_allowed = false;
     g_rendered_model_seq = UINT32_MAX;
     g_rendered_file_seq = UINT32_MAX;
 }

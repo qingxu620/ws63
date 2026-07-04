@@ -137,7 +137,7 @@ void page_diagnostics_create(lv_obj_t *parent)
 
     lv_obj_t *mode_lbl = lv_label_create(mode_btn);
     lv_label_set_text(mode_lbl, "视图");
-    lv_obj_set_style_text_font(mode_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(mode_lbl, PANEL_FONT_CN, 0);
     lv_obj_set_style_text_color(mode_lbl, COLOR_LASER_GREEN, 0);
     lv_obj_center(mode_lbl);
     bind_click(mode_lbl, mode_toggle_cb, NULL);

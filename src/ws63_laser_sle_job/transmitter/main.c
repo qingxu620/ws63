@@ -58,6 +58,26 @@ static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
 static char g_line[TX_LINE_MAX];
 static uint16_t g_line_len = 0;
 static bool g_uart_control_frame_active = false;
+static bool g_host_job_topology_active = false;
+
+static void set_host_job_topology_active(bool active)
+{
+    if (g_host_job_topology_active == active) {
+        return;
+    }
+
+    g_host_job_topology_active = active;
+    sle_job_client_set_panel_link_allowed(!active);
+    osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u\r\n",
+                active ? 1U : 0U, active ? 0U : 1U);
+}
+
+static bool topology_state_is_terminal(uint8_t state)
+{
+    return state == JOB_STATE_IDLE ||
+           state == JOB_STATE_ABORTED ||
+           state == JOB_STATE_ERROR;
+}
 
 static void clear_local_job_state(void)
 {
@@ -266,10 +286,12 @@ static errcode_t abort_rx_and_clear_transaction(const char *reason)
 
     if (!sle_job_client_is_connected()) {
         osal_printk("[JOB_TX_RESYNC] RX abort not confirmed: SLE disconnected\r\n");
+        set_host_job_topology_active(false);
         return ERRCODE_FAIL;
     }
 
     errcode_t ret = send_packet_wait_ack(PKT_JOB_ABORT, NULL, 0);
+    set_host_job_topology_active(false);
     return ret;
 }
 
@@ -327,6 +349,9 @@ static void response_cb(const uint8_t *data, uint16_t length)
                    st.state, st.status, (unsigned int)st.job_id,
                    (unsigned int)st.received_size, (unsigned int)st.total_size,
                    (unsigned int)st.cache_free, (unsigned int)st.executed_lines);
+        if (g_host_job_topology_active && topology_state_is_terminal(st.state)) {
+            set_host_job_topology_active(false);
+        }
         if (sle_job_client_panel_is_connected()) {
             (void)sle_job_client_mirror_panel_packet(data, length);
         }
@@ -343,6 +368,9 @@ static void response_cb(const uint8_t *data, uint16_t length)
                         (unsigned int)st.total_size, (unsigned int)st.executed_lines,
                         (unsigned int)st.cache_free, (unsigned int)st.last_error,
                         (unsigned int)st.tick_ms);
+        }
+        if (g_host_job_topology_active && topology_state_is_terminal(st.job_state)) {
+            set_host_job_topology_active(false);
         }
         if (sle_job_client_panel_is_connected()) {
             (void)sle_job_client_mirror_panel_packet(data, length);
@@ -571,6 +599,7 @@ static void handle_command_line(char *line)
             host_sendf("@ERR bad_begin\r\n");
             return;
         }
+        set_host_job_topology_active(true);
         if (send_job_begin((uint32_t)job_id, (uint32_t)total, (uint16_t)crc) != ERRCODE_SUCC) {
             (void)abort_rx_and_clear_transaction("job-begin-fail");
             host_sendf("@ERR begin_failed\r\n");

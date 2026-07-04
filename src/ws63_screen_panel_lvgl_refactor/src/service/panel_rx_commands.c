@@ -22,6 +22,7 @@
 #define PANEL_RX_CMD_TASK_STACK_SIZE 0x1400
 #define PANEL_RX_CMD_TASK_PRIORITY   6
 #define PANEL_RX_CMD_ACK_TIMEOUT_MS  1000U
+#define PANEL_RX_CMD_CONNECT_WAIT_MS 3000U
 #define PANEL_RX_CMD_RETRY_MAX       2U
 #define PANEL_RX_CMD_IDLE_WAIT_MS    50U
 
@@ -84,9 +85,32 @@ static errcode_t encode_and_send(uint8_t type, uint16_t seq,
     return panel_transport_sle_send_rx_packet(packet, packet_len);
 }
 
+static errcode_t ensure_rx_control_link(void)
+{
+    if (!panel_transport_sle_can_control_rx()) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    panel_transport_sle_set_standalone_session_active(true);
+    uint32_t waited_ms = 0;
+    while (!panel_transport_sle_rx_is_connected()) {
+        if (!panel_transport_sle_can_control_rx()) {
+            return ERRCODE_SLE_FAIL;
+        }
+        if (waited_ms >= PANEL_RX_CMD_CONNECT_WAIT_MS) {
+            return ERRCODE_SLE_TIMEOUT;
+        }
+        panel_transport_sle_poll();
+        osal_msleep(20);
+        waited_ms += 20U;
+    }
+
+    return ERRCODE_SUCC;
+}
+
 static errcode_t send_wait_ack(uint8_t type, const void *payload, uint16_t payload_len)
 {
-    if (!panel_transport_sle_rx_is_connected()) {
+    if (ensure_rx_control_link() != ERRCODE_SUCC) {
         osal_printk("[PANEL_CMD] no RX link type=0x%02x\r\n", type);
         return ERRCODE_SLE_FAIL;
     }
@@ -122,6 +146,9 @@ static errcode_t send_wait_ack(uint8_t type, const void *payload, uint16_t paylo
 
 static errcode_t send_status_req(void)
 {
+    if (ensure_rx_control_link() != ERRCODE_SUCC) {
+        return ERRCODE_SLE_FAIL;
+    }
     return encode_and_send(PKT_STATUS_REQ, panel_job_proto_next_seq(), NULL, 0);
 }
 
@@ -131,6 +158,18 @@ static errcode_t send_focus(bool on, uint8_t power)
     fp.on = on ? 1U : 0U;
     fp.power = on ? power : 0U;
     return send_wait_ack(PKT_FOCUS_CTRL, &fp, sizeof(fp));
+}
+
+static void release_session_after_result(panel_rx_command_type_t type, errcode_t ret)
+{
+    if (g_offline_upload_active) {
+        return;
+    }
+    if (ret != ERRCODE_SUCC || type == PANEL_RX_COMMAND_ABORT ||
+        type == PANEL_RX_COMMAND_FOCUS_OFF ||
+        type == PANEL_RX_COMMAND_STATUS) {
+        panel_transport_sle_set_standalone_session_active(false);
+    }
 }
 
 static uint32_t pop_next_pending(void)
@@ -162,6 +201,11 @@ static uint32_t pop_next_pending(void)
 
 static errcode_t queue_cmd(uint32_t bit)
 {
+    if (!panel_transport_sle_can_control_rx()) {
+        osal_printk("[PANEL_CMD] reject display-only bit=0x%x\r\n", (unsigned int)bit);
+        return ERRCODE_SLE_FAIL;
+    }
+
     uint32_t lock = osal_irq_lock();
     if (bit == PANEL_RX_CMD_ABORT) {
         g_pending_mask = PANEL_RX_CMD_ABORT;
@@ -251,6 +295,7 @@ static panel_rx_command_result_t dispatch_bit(uint32_t bit)
         break;
     }
 
+    release_session_after_result(result.type, result.ret);
     return result;
 }
 
@@ -322,6 +367,10 @@ errcode_t panel_rx_commands_request_abort(void)
 
 errcode_t panel_rx_commands_request_focus_on(uint8_t power)
 {
+    if (!panel_transport_sle_can_control_rx()) {
+        osal_printk("[PANEL_CMD] reject display-only focus_on\r\n");
+        return ERRCODE_SLE_FAIL;
+    }
     if (power > 100U) {
         power = 100U;
     }
