@@ -34,8 +34,9 @@ main.py  →  MainWindow
 - **Connection**: TX command port + TX/RX debug log monitors
 - **Image/G-code Workspace**: AI-provider hook, local image preview, bounded
   60×60 mm conversion, selectable scanline fill or closed-contour vector
-  tracing, vector noise filtering/path simplification, original/effect preview
-  switching, file loading, manual editing, and byte-size preview
+  tracing, LaserGRBL-style threshold vector extraction, vector noise
+  filtering/path simplification, original/effect preview switching, file
+  loading, manual editing, and byte-size preview
 - **Job Control**: Upload, preroll execution, exec start/stop, abort
 - **Safety**: Software safe stop, job abort, manual focus laser on/off
 - **Monitor**: upload byte progress, RX state, cache credit, and link status
@@ -110,6 +111,18 @@ Image conversion modes:
 - **Vector outline** traces black/white region boundaries into closed paths. The
   noise-area option removes small regions and path simplification reduces
   stair-step points. The converted preview shows these paths in red.
+- **LaserGRBL-style vector** follows LaserGRBL's practical Potrace workflow:
+  tune brightness/contrast, clip near-white background pixels, remove small
+  spots, smooth the path, then emit the same RX-compatible outline G-code. This
+  is not a full LaserGRBL port; it keeps the existing WS63 Host output format.
+- The image workspace keeps the main panel compact. `图像参数...` opens the
+  LaserGRBL-style import-parameter dialog for resize mode, threshold, tone
+  cleanup, spot removal, smoothing, path optimization, downsampling, and fill.
+  `目标参数...` opens the target/laser dialog for M3/M4, speed, S range, DPI,
+  width/height, aspect lock, and XY offset.
+
+See `THIRD_PARTY_NOTICES.md` for the LaserGRBL/Potrace reference and license
+notes behind the vectorization workflow.
 
 The square marking-size control applies the same `0–99 mm` side length to X and
 Y. Source aspect ratio is preserved inside that square. A `0×0 mm` selection

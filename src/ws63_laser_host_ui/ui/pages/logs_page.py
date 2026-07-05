@@ -5,7 +5,7 @@ from datetime import datetime
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QVBoxLayout, QWidget, QFileDialog,
+    QVBoxLayout, QWidget, QFileDialog, QLineEdit,
 )
 
 SHOW_ALWAYS_TOKENS = (
@@ -32,6 +32,8 @@ class LogsPage(QWidget):
         self._line_count = 0
         self._paused = False
         self._pending: list[str] = []
+        self._all_logs: list[tuple[str, str, str, str]] = []
+        self._search_keyword = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -68,6 +70,13 @@ class LogsPage(QWidget):
         self.chk_pause.toggled.connect(self._on_pause_toggle)
         toolbar.addWidget(self.chk_pause)
         toolbar.addStretch(1)
+
+        self.txt_search = QLineEdit()
+        self.txt_search.setPlaceholderText("🔍 搜索日志...")
+        self.txt_search.setClearButtonEnabled(True)
+        self.txt_search.setFixedWidth(160)
+        self.txt_search.textChanged.connect(self._on_search_changed)
+        toolbar.addWidget(self.txt_search)
 
         self.btn_export = QPushButton("导出日志")
         self.btn_export.setObjectName("btnPrimary")
@@ -150,15 +159,28 @@ class LogsPage(QWidget):
             f'<span style="color: #1E293B;">{clean_msg}</span>'
         )
 
+        # Store in log cache (up to 4000 entries)
+        self._all_logs.append((stamp, channel, message, html_line))
+        if len(self._all_logs) > 4000:
+            self._all_logs = self._all_logs[-3500:]
+
         if self._paused:
             self._pending.append(html_line)
             if len(self._pending) > 2000:
                 self._pending = self._pending[-1000:]
             return
 
+        # Apply search filter
+        if self._search_keyword and self._search_keyword not in message.lower():
+            return
+
         self._append(html_line)
 
     def _append(self, line: str) -> None:
+        # Check if scrollbar is currently at the bottom (with a small 20px threshold)
+        bar = self.log_text.verticalScrollBar()
+        was_at_bottom = (bar.value() >= bar.maximum() - 20) or (bar.maximum() == 0)
+
         self.log_text.append(line)
         self._line_count += 1
         if self._line_count > 4000:
@@ -171,10 +193,10 @@ class LogsPage(QWidget):
             )
             cursor.removeSelectedText()
             self._line_count -= 500
-        if not self._paused:
-            self.log_text.verticalScrollBar().setValue(
-                self.log_text.verticalScrollBar().maximum()
-            )
+
+        # Auto-scroll only if we are not paused and user was already at the bottom
+        if not self._paused and was_at_bottom:
+            bar.setValue(bar.maximum())
 
     def _should_show(self, channel: str, message: str) -> bool:
         if self.chk_diag.isChecked():
@@ -199,6 +221,30 @@ class LogsPage(QWidget):
     def _clear(self) -> None:
         self.log_text.clear()
         self._line_count = 0
+        self._all_logs.clear()
+
+    def _on_search_changed(self, text: str) -> None:
+        self._search_keyword = text.strip().lower()
+        self._refilter_logs()
+
+    def _refilter_logs(self) -> None:
+        self.log_text.clear()
+        self._line_count = 0
+
+        lines_to_add = []
+        for stamp, channel, message, html_line in self._all_logs:
+            if not self._search_keyword or self._search_keyword in message.lower():
+                lines_to_add.append(html_line)
+
+        self.log_text.setUpdatesEnabled(False)
+        for line in lines_to_add:
+            self._append(line)
+        self.log_text.setUpdatesEnabled(True)
+        self.log_text.update()
+
+        # Re-scroll to bottom
+        bar = self.log_text.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _export_logs(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(

@@ -32,11 +32,12 @@ TX_UART_RESYNC_BYTE = 0x18
 TX_UART_CONTROL_BYTE = 0x19
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
+HOST_UPLOAD_WINDOW_CHUNKS = 1
 HOST_TIMING_FIRST_CHUNKS = 8
 HOST_TIMING_EVERY_CHUNKS = 32
 HOST_TIMING_SLOW_CHUNK_MS = 250
 JOB_PREROLL_BYTES = 4096
-JOB_PREROLL_SAFE_MAX_BYTES = 8192
+JOB_PREROLL_LINE_SEARCH_MAX_BYTES = GCODE_LINE_MAX_BYTES
 TX_PRIORITY_CONTROL_CODES = {
     "@EXEC_STOP": b"S",
     "@EXEC_RESUME": b"R",
@@ -137,59 +138,38 @@ def normalize_gcode_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _line_final_laser_state_is_off(line: bytes) -> bool:
-    text = line.decode("utf-8", errors="ignore")
-    code = text.split(";", 1)[0].split("(", 1)[0]
-    saw_laser_state = False
-    laser_off = False
-    for token in code.replace("\t", " ").split():
-        upper = token.upper()
-        if upper == "M5":
-            saw_laser_state = True
-            laser_off = True
-        elif upper.startswith("S") and len(upper) > 1:
-            try:
-                value = float(upper[1:])
-            except ValueError:
-                continue
-            saw_laser_state = True
-            laser_off = value <= 0.0
-    return saw_laser_state and laser_off
-
-
 def plan_safe_preroll(gcode: bytes, requested: int) -> PrerollPlan:
-    """Pick a Host-side preroll threshold that lands on a complete G-code line."""
+    """Pick a preroll threshold near the requested value on a complete G-code line.
+
+    The executor starts from byte 0 after preroll is reached. The preroll
+    boundary only needs to avoid leaving RX with a partial trailing G-code line
+    when EXEC_START is issued; it does not need to wait for a laser-off line.
+    """
     total = len(gcode)
     if requested <= 0 or total <= requested:
         return PrerollPlan(requested=requested, effective=0, safe_line_end=0, reason="disabled")
 
-    fallback_after = max(requested, JOB_PREROLL_SAFE_MAX_BYTES)
+    search_limit = min(total, requested + JOB_PREROLL_LINE_SEARCH_MAX_BYTES)
     line_start = 0
-    fallback_line_end = 0
     for index, byte in enumerate(gcode):
         if byte != 0x0A:
             continue
         line_end = index + 1
-        line = gcode[line_start:index].rstrip(b"\r")
         line_start = line_end
         if line_end < requested:
             continue
-        if _line_final_laser_state_is_off(line):
+        if line_end <= search_limit:
             return PrerollPlan(
                 requested=requested,
                 effective=line_end if line_end < total else 0,
                 safe_line_end=line_end,
-                reason="laser_off_line" if line_end < total else "near_eof",
+                reason="line_boundary" if line_end < total else "near_eof",
             )
-        if fallback_line_end == 0 and line_end >= fallback_after:
-            fallback_line_end = line_end
-
-    if fallback_line_end > 0:
         return PrerollPlan(
             requested=requested,
-            effective=fallback_line_end if fallback_line_end < total else 0,
-            safe_line_end=fallback_line_end,
-            reason="fallback_line" if fallback_line_end < total else "near_eof",
+            effective=0,
+            safe_line_end=line_end,
+            reason="line_too_long",
         )
     return PrerollPlan(requested=requested, effective=0, safe_line_end=0, reason="no_line_boundary")
 
@@ -439,6 +419,7 @@ class SleJobSerialClient:
 
     def _reset_upload_control_state(self) -> None:
         with self._priority_lock:
+            self._priority_control = None
             self._upload_paused = False
             self._upload_abort_requested = False
             self._terminal_control_confirmed = None
@@ -562,7 +543,8 @@ class SleJobSerialClient:
                 if status_cb:
                     status_cb("上传中 0/{} bytes".format(total), 0)
 
-                offset = 0
+                send_offset = 0
+                acked_offset = 0
                 chunk_count = 0
                 timing_write_ms_total = 0
                 timing_ack_ms_total = 0
@@ -570,27 +552,57 @@ class SleJobSerialClient:
                 t_data = time.perf_counter()
                 preroll_done = False
                 data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
+                pending_chunks: list[dict[str, float | int]] = []
 
-                while offset < total:
-                    self._dispatch_priority_control_locked()
-                    self._wait_while_upload_paused_locked(
-                        status_cb, offset * 100 // total if total else -1
-                    )
-                    end = min(offset + JOB_DATA_CHUNK_SIZE, total)
-                    if (
-                        start_on_preroll and preroll_bytes > 0 and not preroll_done
-                        and offset < preroll_bytes < end
-                    ):
-                        end = preroll_bytes
-                    chunk = gcode[offset:end]
-                    chunk_index = chunk_count + 1
-                    chunk_t0 = time.perf_counter()
-                    write_t0 = chunk_t0
-                    self.write_bytes(chunk, f"<chunk> off={offset} len={len(chunk)}")
-                    write_ms = int((time.perf_counter() - write_t0) * 1000)
+                while acked_offset < total:
+                    while send_offset < total and len(pending_chunks) < HOST_UPLOAD_WINDOW_CHUNKS:
+                        if (
+                            start_on_preroll and preroll_bytes > 0 and not preroll_done
+                            and send_offset >= preroll_bytes
+                        ):
+                            break
+                        self._dispatch_priority_control_locked()
+                        self._wait_while_upload_paused_locked(
+                            status_cb, acked_offset * 100 // total if total else -1
+                        )
+                        end = min(send_offset + JOB_DATA_CHUNK_SIZE, total)
+                        if (
+                            start_on_preroll and preroll_bytes > 0 and not preroll_done
+                            and send_offset < preroll_bytes < end
+                        ):
+                            end = preroll_bytes
+                        chunk = gcode[send_offset:end]
+                        chunk_index = chunk_count + 1
+                        chunk_t0 = time.perf_counter()
+                        write_t0 = chunk_t0
+                        self.write_bytes(chunk, f"<chunk> off={send_offset} len={len(chunk)}")
+                        write_ms = int((time.perf_counter() - write_t0) * 1000)
+                        pending_chunks.append(
+                            {
+                                "end": end,
+                                "len": len(chunk),
+                                "index": chunk_index,
+                                "t0": chunk_t0,
+                                "write_ms": write_ms,
+                            }
+                        )
+                        timing_write_ms_total += write_ms
+                        chunk_count += 1
+                        send_offset = end
+                        if (
+                            start_on_preroll and preroll_bytes > 0 and not preroll_done
+                            and send_offset >= preroll_bytes and send_offset < total
+                        ):
+                            break
+
+                    if not pending_chunks:
+                        raise TimeoutError("上传窗口没有待确认 chunk，无法继续")
+
+                    pending = pending_chunks.pop(0)
+                    expected_end = int(pending["end"])
                     try:
                         ack = self.wait_for(
-                            rf"@ACK type=2 .*status=0 .*offset={end}\b",
+                            rf"@ACK type=2 .*status=0 .*offset={expected_end}\b",
                             data_timeout, regex=True,
                         )
                     except RuntimeError as exc:
@@ -614,17 +626,19 @@ class SleJobSerialClient:
                                 "控制命令已发送，上传已停止: @ABORT"
                             ) from exc
                         raise
-                    chunk_ms = int((time.perf_counter() - chunk_t0) * 1000)
-                    ack_wait_ms = ack.elapsed_ms
-                    timing_write_ms_total += write_ms
+
+                    acked_offset = expected_end
+                    chunk_ms = int((time.perf_counter() - float(pending["t0"])) * 1000)
+                    write_ms = int(pending["write_ms"])
+                    ack_wait_ms = max(0, chunk_ms - write_ms)
                     timing_ack_ms_total += ack_wait_ms
                     timing_chunk_ms_total += chunk_ms
-                    offset = end
-                    chunk_count += 1
+
                     has_preroll = "preroll=1" in ack.line
-                    is_last = offset >= total
-                    if chunk_count <= 3 or has_preroll or is_last:
-                        self._on_log("status", f"ACK off={offset} preroll={1 if has_preroll else 0}")
+                    is_last = acked_offset >= total
+                    chunk_index = int(pending["index"])
+                    if chunk_index <= 3 or has_preroll or is_last:
+                        self._on_log("status", f"ACK off={acked_offset} preroll={1 if has_preroll else 0}")
                     if (
                         chunk_index <= HOST_TIMING_FIRST_CHUNKS
                         or chunk_index % HOST_TIMING_EVERY_CHUNKS == 0
@@ -634,20 +648,20 @@ class SleJobSerialClient:
                     ):
                         self._on_log(
                             "status",
-                            f"[HOST_TIMING] chunk={chunk_index} off={offset} len={len(chunk)} "
+                            f"[HOST_TIMING] chunk={chunk_index} off={acked_offset} len={int(pending['len'])} "
                             f"write_ms={write_ms} ack_wait_ms={ack_wait_ms} "
                             f"total_ms={chunk_ms}",
                         )
-                    pct = offset * 100 // total
+                    pct = acked_offset * 100 // total
                     if status_cb:
-                        status_cb(f"上传中 {offset}/{total} bytes", pct)
-                    if progress_cb and (chunk_count % 100 == 0 or is_last):
-                        progress_cb(f"上传中 {offset}/{total} ({pct}%)")
+                        status_cb(f"上传中 {acked_offset}/{total} bytes", pct)
+                    if progress_cb and (chunk_index % 100 == 0 or is_last):
+                        progress_cb(f"上传中 {acked_offset}/{total} ({pct}%)")
                     self._dispatch_priority_control_locked()
                     self._wait_while_upload_paused_locked(status_cb, pct)
                     if start_on_preroll and preroll_bytes > 0 and not preroll_done and has_preroll:
                         preroll_done = True
-                        self._on_log("status", f"PREROLL offset={offset} elapsed={int((time.perf_counter()-t_begin)*1000)}ms")
+                        self._on_log("status", f"PREROLL offset={acked_offset} elapsed={int((time.perf_counter()-t_begin)*1000)}ms")
                         if status_cb:
                             status_cb("预缓冲完成，启动执行", pct)
                         self.send_line(f"@EXEC_START {job_id}")
@@ -656,7 +670,7 @@ class SleJobSerialClient:
                         self.wait_for("@OK data_resume", timeout)
                         self._on_log("status", "DATA_RESUME OK")
                         if status_cb:
-                            status_cb(f"继续上传 {offset}/{total} bytes", pct)
+                            status_cb(f"继续上传 {acked_offset}/{total} bytes", pct)
 
                 data_elapsed = time.perf_counter() - t_data
                 rate = total / data_elapsed if data_elapsed > 0 else 0

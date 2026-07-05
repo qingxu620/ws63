@@ -25,12 +25,17 @@ SUPPORTED_GCODE_COMMANDS = {
     "M3", "M4", "M5", "M30",
 }
 
+IGNORED_GCODE_COMMANDS = {
+    "G17", "G21", "G40", "G49", "G54", "G64", "G94",
+}
+
 UNSUPPORTED_GCODE_COMMANDS = {
-    "G2", "G3", "G4", "G17", "G18", "G19", "G54", "G55",
+    "G2", "G3", "G4", "G18", "G19", "G55",
 }
 
 # Pattern to extract G/M commands from a line
-_CMD_RE = re.compile(r"^(?:G|M)\d+(?:\.\d+)?", re.IGNORECASE)
+_WORD_RE = re.compile(r"([A-Z])([+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:E[+-]?\d+)?)")
+_CMD_RE = re.compile(r"^(?:G|M)\d+(?:\.\d+)?$", re.IGNORECASE)
 
 
 @dataclass
@@ -79,7 +84,7 @@ def normalize_gcode(text: str) -> str:
     lines = text.split("\n")
     output: list[str] = []
 
-    for line in lines:
+    for line_number, line in enumerate(lines, start=1):
         # Remove comments after ;
         line = line.split(";", 1)[0]
 
@@ -94,18 +99,54 @@ def normalize_gcode(text: str) -> str:
         if not line:
             continue
 
+        if TX_UART_RESYNC_CHAR in line:
+            raise RuntimeError(f"第 {line_number} 行包含保留的 UART 同步控制字节 0x18")
+
         # Convert to uppercase
         line = line.upper()
 
-        # RX uses millimetres unconditionally; keep the established upload
-        # contract by removing standalone metric-mode declarations.
-        if re.fullmatch(r"G21(?:\.0+)?", line):
+        words = _tokenize_gcode_words(line, line_number)
+        words = [word for word in words if _canonical_command(word) not in IGNORED_GCODE_COMMANDS]
+        if not words:
             continue
 
-        output.append(line)
+        output.append(" ".join(words))
 
     # Ensure trailing newline
     return "\n".join(output) + "\n"
+
+
+def _tokenize_gcode_words(line: str, line_number: int) -> list[str]:
+    """Split compact G-code words so RX never sees ambiguous strings like G0X."""
+    compact = re.sub(r"\s+", "", line)
+    words: list[str] = []
+    pos = 0
+
+    while pos < len(compact):
+        match = _WORD_RE.match(compact, pos)
+        if not match:
+            raise RuntimeError(f"第 {line_number} 行包含无法识别的 G-code 片段: {compact[pos:]}")
+        words.append(f"{match.group(1)}{match.group(2)}")
+        pos = match.end()
+
+    return words
+
+
+def _canonical_command(word: str) -> str:
+    if not _CMD_RE.match(word):
+        return word
+
+    cmd = word.upper()
+    if cmd.startswith(("G", "M")):
+        letter = cmd[0]
+        number = cmd[1:]
+        try:
+            value = float(number)
+        except ValueError:
+            return cmd
+        if value.is_integer():
+            return letter + str(int(value))
+    return cmd
 
 
 def validate_gcode(text: str) -> list[str]:
@@ -159,15 +200,11 @@ def validate_gcode(text: str) -> list[str]:
         for word in words:
             cmd_match = _CMD_RE.match(word)
             if cmd_match:
-                cmd = cmd_match.group(0).upper()
-                # Normalize G00 -> G0, G01 -> G1
-                if cmd.startswith("G") and cmd[1:].startswith("0") and len(cmd) > 2 and cmd[2:].isdigit():
-                    cmd = "G" + cmd[2:].lstrip("0") or "G0"
+                cmd = _canonical_command(cmd_match.group(0))
                 if cmd in UNSUPPORTED_GCODE_COMMANDS:
                     errors.append(f"第 {i} 行包含不支持的命令: {cmd}")
-                elif cmd.startswith("G") and cmd not in SUPPORTED_GCODE_COMMANDS and not cmd.startswith("G"):
-                    # Only warn for unknown G commands, not M commands
-                    pass
+                elif cmd.startswith("G") and cmd not in SUPPORTED_GCODE_COMMANDS:
+                    errors.append(f"第 {i} 行包含未知或未验证的 G 命令: {cmd}")
 
         # Check X/Y coordinates
         for coord in ["X", "Y"]:

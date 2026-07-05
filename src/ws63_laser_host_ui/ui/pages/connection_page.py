@@ -21,6 +21,15 @@ from app.config_store import HostConfig
 from transports.sle_tx_transport import BAUD_DEFAULT, BAUD_LOG_DEFAULT, port_device
 
 
+class AutoRefreshComboBox(QComboBox):
+    """QComboBox that triggers a port refresh signal before expanding its dropdown."""
+    about_to_popup = Signal()
+
+    def showPopup(self) -> None:
+        self.about_to_popup.emit()
+        super().showPopup()
+
+
 class ConnectionPage(QWidget):
     """Serial connection controls and persisted system defaults."""
 
@@ -76,8 +85,9 @@ class ConnectionPage(QWidget):
         cmd_group = QGroupBox("命令发送端口 (TX)")
         cmd_layout = self._card_layout(cmd_group)
 
-        self.cmd_combo = QComboBox()
+        self.cmd_combo = AutoRefreshComboBox()
         self._compact_combo(self.cmd_combo)
+        self.cmd_combo.about_to_popup.connect(self.refresh_requested.emit)
         self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
         port_row = self._field_row("选择端口", self.cmd_combo, 110)
@@ -101,8 +111,9 @@ class ConnectionPage(QWidget):
         log_group = QGroupBox("调试日志监控")
         log_layout = self._card_layout(log_group)
 
-        self.tx_log_combo = QComboBox()
+        self.tx_log_combo = AutoRefreshComboBox()
         self._compact_combo(self.tx_log_combo)
+        self.tx_log_combo.about_to_popup.connect(self.refresh_requested.emit)
         self.btn_tx_log = QPushButton("监听")
         self.btn_tx_log.setObjectName("btnPrimary")
         self.btn_tx_log.clicked.connect(self._on_tx_log)
@@ -110,8 +121,9 @@ class ConnectionPage(QWidget):
         tx_row.addWidget(self.btn_tx_log)
         log_layout.addLayout(tx_row)
 
-        self.rx_log_combo = QComboBox()
+        self.rx_log_combo = AutoRefreshComboBox()
         self._compact_combo(self.rx_log_combo)
+        self.rx_log_combo.about_to_popup.connect(self.refresh_requested.emit)
         self.btn_rx_log = QPushButton("监听")
         self.btn_rx_log.setObjectName("btnPrimary")
         self.btn_rx_log.clicked.connect(self._on_rx_log)

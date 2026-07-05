@@ -151,7 +151,10 @@ Current stable transport baseline from `src/ws63_laser_sle_tx/common/config.h`:
 - SLE MTU: `512`
 - Connection interval units: `0x0F` / 18.75 ms in current config
 - Retry max: `3`
-- ACK timeout: `1000 ms`
+- Control ACK timeout: `1000 ms`
+- DATA transfer uses a small TX-side cumulative-offset window (`JOB_TX_DATA_WINDOW_PACKETS`, currently 4 packets) with hybrid SLE writes: `write_cmd` only before execution or at low window water, and `write_req` for backpressure when the execution window is filling. Host `@ACK type=2 offset=...` means TX accepted the chunk into the SLE DATA window; preroll and `JOB_END` must still drain until RX cumulative `received_size` reaches the boundary.
+- DATA window progress timeout: `1000 ms`; only when the window stalls does TX probe RX status and use `STATUS_RESP.received_size` as cumulative confirmation.
+- `JOB_END` is a commit/finalization confirmation, not the only way RX learns EOF. RX may auto-finalize when cumulative DATA reaches total size and CRC is valid; TX must treat delayed `JOB_END` ACK with status-probe/idempotent retry instead of immediately aborting a long cut job.
 
 Treat 460800/921600 baud, large `JOB_DATA`, and larger send windows as experiments unless the user explicitly asks for them again.
 
@@ -180,6 +183,8 @@ SLE Job route requirements:
 
 - Cache size remains `65536`.
 - Host preroll baseline remains `4096`.
+- Treat the `4096` Host preroll baseline as the user-controlled upload-and-execute streaming policy. Do not bypass or disable upload-and-execute preroll just because a file fits in RX cache.
+- Treat the `65536` RX cache size as the local SRAM/cache limit for receive storage, especially the upload-only path. Do not use it as a Host-side threshold to switch upload-and-execute jobs onto a different route.
 - Preserve stable packet framing, CRC, ACK/NACK, sequence, duplicate handling, cache semantics, abort semantics, and reconnect behavior.
 - Control packets must remain distinct from G-code data.
 - Current stop controls are software safe-stop controls, not hardware emergency stop.
@@ -263,6 +268,7 @@ Rules:
 
 - Keep Python code simple and inspectable.
 - Keep serial protocol behavior explicit.
+- Preserve the user's upload-and-execute preroll choice. Do not silently change a configured `4096` preroll upload-and-execute job into a full upload then execute path based on file size or RX cache capacity.
 - Prefer clear logs over hidden automation.
 - Do not add large dependencies unless necessary.
 - Host runs on Win11, not WSL2.

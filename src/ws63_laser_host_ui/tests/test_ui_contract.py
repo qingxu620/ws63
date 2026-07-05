@@ -112,6 +112,11 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("主要内轮廓", vector_prompt)
         self.assertNotIn("黑白线稿", vector_prompt)
 
+        page.extract_mode.setCurrentIndex(page.extract_mode.findData("lasergrbl_vector"))
+        lasergrbl_prompt = page._compose_generation_prompt("一只皮卡丘")
+        self.assertIn("轮廓矢量", lasergrbl_prompt)
+        self.assertIn("主体边界清晰", lasergrbl_prompt)
+
     def test_raw_prompt_template_keeps_user_prompt_unchanged(self) -> None:
         page = GcodePage()
         page.prompt_preset_combo.setCurrentIndex(page.prompt_preset_combo.findData("raw"))
@@ -169,6 +174,29 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(b"S1000", emitted[-1][1])
         self.assertNotIn(b"M3", emitted[-1][1])
         self.assertIn("轮廓矢量", page.image_status.text())
+        self.assertIn("路径", page.image_status.text())
+
+    def test_image_conversion_mode_can_use_lasergrbl_style_vector(self) -> None:
+        page = GcodePage()
+        image = QImage(8, 8, QImage.Format.Format_RGB32)
+        image.fill(QColor("white"))
+        for y in range(2, 6):
+            for x in range(2, 6):
+                image.setPixelColor(x, y, QColor("black"))
+        emitted: list[tuple[str, bytes]] = []
+        page.gcode_loaded.connect(lambda path, data: emitted.append((path, data)))
+
+        page.extract_mode.setCurrentIndex(page.extract_mode.findData("lasergrbl_vector"))
+        self.assertTrue(page.vector_simplify.isEnabled())
+        page.set_image("outline.png", image)
+        page.btn_convert.click()
+
+        self.assertTrue(emitted)
+        self.assertEqual(emitted[-1][0], "outline.lasergrbl_vector.generated.gcode")
+        self.assertIn(b"M4 S0", emitted[-1][1])
+        self.assertIn(b"S1000", emitted[-1][1])
+        self.assertIn("LaserGRBL", page.image_status.text())
+        self.assertIn("白场", page.image_status.text())
         self.assertIn("路径", page.image_status.text())
 
     def test_image_conversion_uses_selected_mark_power(self) -> None:
@@ -272,7 +300,7 @@ class UiContractTests(unittest.TestCase):
         page.set_image("zero.png", image)
         page.size_spin.setValue(0)
 
-        for mode in ("scanline", "vector"):
+        for mode in ("scanline", "vector", "lasergrbl_vector"):
             page.extract_mode.setCurrentIndex(page.extract_mode.findData(mode))
             page.btn_convert.click()
             self.assertEqual(emitted[-1][1], b"M4 S0\nM5\n")
@@ -611,7 +639,7 @@ class UiContractTests(unittest.TestCase):
         window.client = FakeClient()
         large_job = (b"G1 X1\n" * 700) + b"S0\n" + (b"G1 X2\n" * 100)
         window._upload_exec_worker(large_job, 6, 20.0, 4096)
-        self.assertEqual(uploads[-1]["preroll_bytes"], 4203)
+        self.assertEqual(uploads[-1]["preroll_bytes"], 4098)
         self.assertTrue(uploads[-1]["start_on_preroll"])
         self.assertNotIn("wait_ready", uploads[-1])
         self.assertEqual(controls, [])

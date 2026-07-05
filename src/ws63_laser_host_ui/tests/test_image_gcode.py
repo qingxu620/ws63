@@ -4,6 +4,9 @@ import unittest
 import re
 
 from app.image_gcode import (
+    LaserGrblVectorOptions,
+    apply_lasergrbl_tone,
+    lasergrbl_style_vectorize,
     prepare_laser_mask,
     raster_mask_to_gcode,
     raster_rows_to_gcode,
@@ -61,6 +64,40 @@ class ImageGcodeTests(unittest.TestCase):
         self.assertFalse(mask[1][1])
         self.assertTrue(mask[2][2])
         self.assertTrue(mask[3][3])
+
+    def test_lasergrbl_tone_white_clip_cleans_light_background(self) -> None:
+        rows = [[244, 230, 120, 60]]
+
+        adjusted = apply_lasergrbl_tone(rows, brightness=0, contrast=0, white_clip=230)
+
+        self.assertEqual(adjusted[0][0], 255)
+        self.assertEqual(adjusted[0][1], 255)
+        self.assertLess(adjusted[0][2], 230)
+
+    def test_lasergrbl_style_vectorize_filters_spots_and_simplifies(self) -> None:
+        rows = [
+            [255, 255, 255, 255, 255, 255, 255, 255],
+            [255, 0, 255, 255, 255, 255, 255, 255],
+            [255, 255, 0, 0, 0, 0, 255, 255],
+            [255, 255, 0, 0, 0, 0, 255, 255],
+            [255, 255, 0, 0, 0, 0, 255, 255],
+            [255, 255, 0, 0, 0, 0, 255, 255],
+            [255, 255, 255, 255, 255, 255, 255, 255],
+        ]
+
+        result = lasergrbl_style_vectorize(
+            rows,
+            LaserGrblVectorOptions(
+                threshold=128,
+                white_clip=245,
+                spot_remove_px=2,
+                smoothing_px=0.5,
+            ),
+        )
+
+        self.assertFalse(result.mask[1][1])
+        self.assertTrue(result.contours)
+        self.assertLessEqual(len(result.contours), len(result.raw_contours))
 
     def test_edge_enhance_marks_gray_transitions_for_vector_mode(self) -> None:
         rows = [

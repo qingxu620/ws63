@@ -2,12 +2,35 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 import math
 
 
 Point = tuple[int, int]
 Contour = list[Point]
 Mask = list[list[bool]]
+
+
+@dataclass(frozen=True)
+class LaserGrblVectorOptions:
+    """LaserGRBL/Potrace-style bitmap cleanup controls for outline extraction."""
+
+    threshold: int = 128
+    brightness: int = 0
+    contrast: int = 0
+    white_clip: int = 245
+    black_clip: int = 0
+    spot_remove_px: float = 4.0
+    smoothing_px: float = 1.0
+    optimize_paths: bool = True
+
+
+@dataclass(frozen=True)
+class LaserGrblVectorResult:
+    rows: list[list[int]]
+    mask: Mask
+    raw_contours: list[Contour]
+    contours: list[Contour]
 
 
 def _validated_rows(rows: Sequence[Sequence[int]]) -> tuple[int, int]:
@@ -17,6 +40,43 @@ def _validated_rows(rows: Sequence[Sequence[int]]) -> tuple[int, int]:
     if any(len(row) != width for row in rows):
         raise ValueError("all image rows must have the same width")
     return width, len(rows)
+
+
+def _clamp_u8(value: float) -> int:
+    return max(0, min(255, int(round(value))))
+
+
+def apply_lasergrbl_tone(
+    rows: Sequence[Sequence[int]],
+    *,
+    brightness: int = 0,
+    contrast: int = 0,
+    white_clip: int = 245,
+    black_clip: int = 0,
+) -> list[list[int]]:
+    """Apply LaserGRBL-style brightness/contrast cleanup before thresholding."""
+    _validated_rows(rows)
+    brightness_shift = max(-100, min(100, int(brightness))) * 255.0 / 100.0
+    contrast_value = max(-100, min(100, int(contrast))) * 255.0 / 100.0
+    factor = (259.0 * (contrast_value + 255.0)) / (
+        255.0 * (259.0 - contrast_value)
+    )
+    clip = max(0, min(255, int(white_clip)))
+    black = max(0, min(255, int(black_clip)))
+
+    adjusted: list[list[int]] = []
+    for row in rows:
+        adjusted_row: list[int] = []
+        for value in row:
+            mapped = _clamp_u8(factor * (int(value) - 128.0) + 128.0 + brightness_shift)
+            if mapped >= clip:
+                adjusted_row.append(255)
+            elif black > 0 and mapped <= black:
+                adjusted_row.append(0)
+            else:
+                adjusted_row.append(mapped)
+        adjusted.append(adjusted_row)
+    return adjusted
 
 
 def trace_dark_runs(
@@ -186,6 +246,84 @@ def prepare_laser_mask(
                     mask[y][x] = True
 
     return _remove_small_components(mask, min_area_px)
+
+
+def dither_rows_to_mask(rows: Sequence[Sequence[int]], threshold: int = 128) -> Mask:
+    """Convert grayscale rows to a 1-bit Floyd-Steinberg dither mask."""
+    width, height = _validated_rows(rows)
+    work = [[float(value) for value in row] for row in rows]
+    limit = max(0, min(255, int(threshold)))
+    mask: Mask = [[False] * width for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
+            old = work[y][x]
+            new = 0.0 if old <= limit else 255.0
+            mask[y][x] = new == 0.0
+            error = old - new
+            if x + 1 < width:
+                work[y][x + 1] += error * 7.0 / 16.0
+            if y + 1 < height:
+                if x > 0:
+                    work[y + 1][x - 1] += error * 3.0 / 16.0
+                work[y + 1][x] += error * 5.0 / 16.0
+                if x + 1 < width:
+                    work[y + 1][x + 1] += error * 1.0 / 16.0
+    return mask
+
+
+def centerline_mask(mask: Sequence[Sequence[bool]], max_iterations: int = 64) -> Mask:
+    """Thin a binary mask with Zhang-Suen-style iterations for centerline jobs."""
+    width, height = _validated_mask(mask)
+    thinned = [list(row) for row in mask]
+
+    def neighbors(x: int, y: int) -> list[bool]:
+        return [
+            thinned[y - 1][x],
+            thinned[y - 1][x + 1],
+            thinned[y][x + 1],
+            thinned[y + 1][x + 1],
+            thinned[y + 1][x],
+            thinned[y + 1][x - 1],
+            thinned[y][x - 1],
+            thinned[y - 1][x - 1],
+        ]
+
+    for _ in range(max(1, int(max_iterations))):
+        changed = False
+        for step in (0, 1):
+            remove: list[Point] = []
+            for y in range(1, height - 1):
+                for x in range(1, width - 1):
+                    if not thinned[y][x]:
+                        continue
+                    n = neighbors(x, y)
+                    count = sum(1 for value in n if value)
+                    if count < 2 or count > 6:
+                        continue
+                    transitions = sum(
+                        1 for first, second in zip(n, n[1:] + n[:1])
+                        if not first and second
+                    )
+                    if transitions != 1:
+                        continue
+                    if step == 0:
+                        if n[0] and n[2] and n[4]:
+                            continue
+                        if n[2] and n[4] and n[6]:
+                            continue
+                    else:
+                        if n[0] and n[2] and n[6]:
+                            continue
+                        if n[0] and n[4] and n[6]:
+                            continue
+                    remove.append((x, y))
+            if remove:
+                changed = True
+                for x, y in remove:
+                    thinned[y][x] = False
+        if not changed:
+            break
+    return thinned
 
 
 def trace_dark_runs_from_mask(mask: Sequence[Sequence[bool]]) -> list[list[tuple[int, int]]]:
@@ -369,6 +507,44 @@ def simplify_vector_contours(contours: Sequence[Sequence[Point]], tolerance_px: 
     return simplified
 
 
+def lasergrbl_style_vectorize(
+    rows: Sequence[Sequence[int]],
+    options: LaserGrblVectorOptions,
+) -> LaserGrblVectorResult:
+    """Trace outlines with a LaserGRBL/Potrace-like preprocessing pipeline.
+
+    LaserGRBL feeds a thresholded bitmap into Potrace after brightness/contrast
+    cleanup, spot removal, smoothing, and optional optimization. This project
+    keeps its existing integer contour tracer for deterministic RX-compatible
+    G-code, while exposing the same practical controls at the Host layer.
+    """
+    adjusted_rows = apply_lasergrbl_tone(
+        rows,
+        brightness=options.brightness,
+        contrast=options.contrast,
+        white_clip=options.white_clip,
+        black_clip=options.black_clip,
+    )
+    mask = prepare_laser_mask(
+        adjusted_rows,
+        options.threshold,
+        adaptive=False,
+        edge_enhance=False,
+        min_area_px=options.spot_remove_px,
+    )
+    raw_contours = trace_vector_contours_from_mask(
+        mask,
+        min_area_px=options.spot_remove_px,
+    )
+    contours = simplify_vector_contours(raw_contours, tolerance_px=options.smoothing_px)
+    return LaserGrblVectorResult(
+        rows=adjusted_rows,
+        mask=mask,
+        raw_contours=raw_contours,
+        contours=contours,
+    )
+
+
 def vector_contours_to_gcode(
     contours: Sequence[Sequence[Point]],
     image_width: int,
@@ -377,6 +553,10 @@ def vector_contours_to_gcode(
     speed_mm_min: int,
     height_mm: float | None = None,
     power_s: int = 1000,
+    laser_mode: str = "M4",
+    x_offset_mm: float = 0.0,
+    y_offset_mm: float = 0.0,
+    optimize_paths: bool = True,
 ) -> str:
     """Convert closed pixel-space contours into continuous outline toolpaths."""
     if image_width <= 0 or image_height <= 0:
@@ -388,6 +568,7 @@ def vector_contours_to_gcode(
     if speed_mm_min <= 0:
         raise ValueError("speed_mm_min must be greater than zero")
     mark_power = max(0, min(1000, int(power_s)))
+    mode = "M3" if str(laser_mode).upper() == "M3" else "M4"
 
     step = width_mm / image_width
     if height_mm is not None:
@@ -395,26 +576,29 @@ def vector_contours_to_gcode(
     pending = [list(contour[:-1]) for contour in contours if len(contour) >= 4]
     current: Point = (0, 0)
     ordered: list[Contour] = []
-    while pending:
-        contour_index, start_index = min(
-            (
-                (contour_index, point_index)
-                for contour_index, contour in enumerate(pending)
-                for point_index, point in enumerate(contour)
-            ),
-            key=lambda item: (
-                (pending[item[0]][item[1]][0] - current[0]) ** 2
-                + (pending[item[0]][item[1]][1] - current[1]) ** 2,
-                item,
-            ),
-        )
-        ring = pending.pop(contour_index)
-        rotated = ring[start_index:] + ring[:start_index]
-        rotated.append(rotated[0])
-        ordered.append(rotated)
-        current = rotated[-1]
+    if optimize_paths:
+        while pending:
+            contour_index, start_index = min(
+                (
+                    (contour_index, point_index)
+                    for contour_index, contour in enumerate(pending)
+                    for point_index, point in enumerate(contour)
+                ),
+                key=lambda item: (
+                    (pending[item[0]][item[1]][0] - current[0]) ** 2
+                    + (pending[item[0]][item[1]][1] - current[1]) ** 2,
+                    item,
+                ),
+            )
+            ring = pending.pop(contour_index)
+            rotated = ring[start_index:] + ring[:start_index]
+            rotated.append(rotated[0])
+            ordered.append(rotated)
+            current = rotated[-1]
+    else:
+        ordered = [contour + [contour[0]] for contour in pending if contour]
 
-    lines = ["M4 S0", f"F{int(speed_mm_min)}"]
+    lines = [f"{mode} S0", f"F{int(speed_mm_min)}"]
     current_power = 0
 
     def emit_power(power: int) -> None:
@@ -424,13 +608,13 @@ def vector_contours_to_gcode(
             current_power = power
 
     for contour in ordered:
-        start_x = contour[0][0] * step
-        start_y = contour[0][1] * step
+        start_x = x_offset_mm + contour[0][0] * step
+        start_y = y_offset_mm + contour[0][1] * step
         emit_power(0)
         lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f}")
         emit_power(mark_power)
         for x, y in contour[1:]:
-            lines.append(f"G1 X{x * step:.3f} Y{y * step:.3f}")
+            lines.append(f"G1 X{x_offset_mm + x * step:.3f} Y{y_offset_mm + y * step:.3f}")
         emit_power(0)
     lines.append("M5")
     return "\n".join(lines) + "\n"
@@ -444,6 +628,9 @@ def _raster_runs_to_gcode(
     speed_mm_min: int,
     height_mm: float | None = None,
     power_s: int = 1000,
+    laser_mode: str = "M4",
+    x_offset_mm: float = 0.0,
+    y_offset_mm: float = 0.0,
 ) -> str:
     if width_mm <= 0:
         raise ValueError("width_mm must be greater than zero")
@@ -452,12 +639,13 @@ def _raster_runs_to_gcode(
     if speed_mm_min <= 0:
         raise ValueError("speed_mm_min must be greater than zero")
     mark_power = max(0, min(1000, int(power_s)))
+    mode = "M3" if str(laser_mode).upper() == "M3" else "M4"
 
     x_step = width_mm / image_width
     if height_mm is not None:
         x_step = min(x_step, height_mm / image_height)
     y_step = x_step
-    lines = ["M4 S0", f"F{int(speed_mm_min)}"]
+    lines = [f"{mode} S0", f"F{int(speed_mm_min)}"]
     current_power = 0
 
     def emit_power(power: int) -> None:
@@ -473,7 +661,9 @@ def _raster_runs_to_gcode(
                 x0, x1 = start * x_step, (end + 1) * x_step
             else:
                 x0, x1 = (end + 1) * x_step, start * x_step
-            y_mm = y * y_step
+            x0 += x_offset_mm
+            x1 += x_offset_mm
+            y_mm = y_offset_mm + y * y_step
             emit_power(0)
             lines.append(f"G0 X{x0:.3f} Y{y_mm:.3f}")
             emit_power(mark_power)
@@ -489,6 +679,9 @@ def raster_mask_to_gcode(
     speed_mm_min: int,
     height_mm: float | None = None,
     power_s: int = 1000,
+    laser_mode: str = "M4",
+    x_offset_mm: float = 0.0,
+    y_offset_mm: float = 0.0,
 ) -> str:
     """Convert a prepared dark mask into horizontal laser scan segments."""
     width, height = _validated_mask(mask)
@@ -500,6 +693,9 @@ def raster_mask_to_gcode(
         speed_mm_min,
         height_mm=height_mm,
         power_s=power_s,
+        laser_mode=laser_mode,
+        x_offset_mm=x_offset_mm,
+        y_offset_mm=y_offset_mm,
     )
 
 
@@ -510,6 +706,9 @@ def raster_rows_to_gcode(
     speed_mm_min: int,
     height_mm: float | None = None,
     power_s: int = 1000,
+    laser_mode: str = "M4",
+    x_offset_mm: float = 0.0,
+    y_offset_mm: float = 0.0,
 ) -> str:
     """Convert grayscale rows into a bounded horizontal line-segment toolpath."""
     width, height = _validated_rows(rows)
@@ -521,4 +720,7 @@ def raster_rows_to_gcode(
         speed_mm_min,
         height_mm=height_mm,
         power_s=power_s,
+        laser_mode=laser_mode,
+        x_offset_mm=x_offset_mm,
+        y_offset_mm=y_offset_mm,
     )

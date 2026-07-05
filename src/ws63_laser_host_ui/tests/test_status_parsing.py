@@ -95,24 +95,24 @@ class StatusParsingTests(unittest.TestCase):
 
         self.assertEqual(result.line, "@OK resync rx=aborted")
 
-    def test_preroll_plan_uses_host_side_safe_line(self) -> None:
+    def test_preroll_plan_uses_nearby_line_boundary(self) -> None:
         gcode = (b"G1 X1\n" * 700) + b"S0\n" + (b"G1 X2\n" * 100)
 
         plan = plan_safe_preroll(gcode, 4096)
 
-        self.assertEqual(plan.safe_line_end, 4203)
+        self.assertEqual(plan.safe_line_end, 4098)
         self.assertNotEqual(plan.effective % JOB_DATA_CHUNK_SIZE, 0)
-        self.assertEqual(plan.effective, 4203)
-        self.assertEqual(plan.reason, "laser_off_line")
+        self.assertEqual(plan.effective, 4098)
+        self.assertEqual(plan.reason, "line_boundary")
 
-    def test_preroll_plan_falls_back_to_line_after_safe_window(self) -> None:
+    def test_preroll_plan_rejects_distant_boundary(self) -> None:
         gcode = b"G1 X1\n" * 1500
+        gcode = gcode[:4096] + (b"X" * 200) + b"\n" + gcode[4096:]
 
         plan = plan_safe_preroll(gcode, 4096)
 
-        self.assertGreaterEqual(plan.safe_line_end, 8192)
-        self.assertEqual(plan.effective, plan.safe_line_end)
-        self.assertEqual(plan.reason, "fallback_line")
+        self.assertEqual(plan.effective, 0)
+        self.assertEqual(plan.reason, "line_too_long")
 
     def test_upload_splits_data_chunk_at_preroll_boundary(self) -> None:
         writes: list[bytes] = []
@@ -188,7 +188,7 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(waits[2][1], DATA_ACK_TIMEOUT_MIN_S)
         self.assertEqual(waits[3], ("@JOB_READY job=1", JOB_COMMIT_TIMEOUT_MIN_S))
 
-    def test_priority_control_is_sent_between_data_chunks(self) -> None:
+    def test_priority_control_is_sent_after_current_data_chunk(self) -> None:
         writes: list[bytes] = []
         commands: list[str] = []
         payload = b"A" * (JOB_DATA_CHUNK_SIZE * 2)
