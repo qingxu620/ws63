@@ -880,7 +880,16 @@ static void handle_job_end(const sle_job_packet_view_t *pkt)
         g_abort_requested = true;
         g_pause_requested = false;
     }
+    uint32_t ack_start_ms = (uint32_t)uapi_systick_get_ms();
     send_ack(pkt->type, pkt->seq, st);
+    osal_printk("[JOB_END_ACK_SENT] t=%u seq=%u st=%u ack_ms=%u rx=%u total=%u state=%s\r\n",
+                (unsigned int)uapi_systick_get_ms(),
+                (unsigned int)pkt->seq,
+                (unsigned int)st,
+                (unsigned int)((uint32_t)uapi_systick_get_ms() - ack_start_ms),
+                (unsigned int)sle_job_cache_received(),
+                (unsigned int)sle_job_cache_total_size(),
+                state_name(g_state));
 }
 
 static void handle_exec_start(const sle_job_packet_view_t *pkt)
@@ -909,7 +918,18 @@ static void handle_exec_start(const sle_job_packet_view_t *pkt)
         g_state = SLE_JOB_STATE_EXECUTING;
         seq_commit(pkt->seq);
     }
+    uint32_t ack_start_ms = (uint32_t)uapi_systick_get_ms();
     send_ack(pkt->type, pkt->seq, st);
+    osal_printk("[EXEC_START_ACK_SENT] t=%u seq=%u st=%u ack_ms=%u rx=%u consumed=%u avail=%u q=%u state=%s\r\n",
+                (unsigned int)uapi_systick_get_ms(),
+                (unsigned int)pkt->seq,
+                (unsigned int)st,
+                (unsigned int)((uint32_t)uapi_systick_get_ms() - ack_start_ms),
+                (unsigned int)sle_job_cache_received(),
+                (unsigned int)sle_job_cache_consumed(),
+                (unsigned int)sle_job_cache_available(),
+                (unsigned int)sle_job_motion_executor_queue_depth(),
+                state_name(g_state));
     if (st == SLE_JOB_STATUS_OK) {
         sle_job_status_t launch_st = launch_job_execution();
         if (launch_st != SLE_JOB_STATUS_OK) {

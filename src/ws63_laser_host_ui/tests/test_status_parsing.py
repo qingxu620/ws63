@@ -17,6 +17,7 @@ from transports.sle_tx_transport import (
     UploadInterrupted,
     WaitResult,
     clamp_stream_preroll_request,
+    crc16_ccitt,
     is_noisy_sdk_log,
     is_noisy_runtime_log,
     parse_rx_status,
@@ -344,7 +345,7 @@ class StatusParsingTests(unittest.TestCase):
             client.upload_job(1, payload, 2.0)
 
         self.assertEqual(resync_count, 2)
-        self.assertEqual(commands, [f"@BEGIN 1 {len(payload)} 35c9"])
+        self.assertEqual(commands, [f"@BEGIN 1 {len(payload)} {crc16_ccitt(payload):04x}"])
         self.assertEqual(writes, [bytes((TX_UART_RESYNC_BYTE,)), payload, bytes((TX_UART_RESYNC_BYTE,))])
 
     def test_upload_unknown_command_after_pause_points_to_old_tx_firmware(self) -> None:

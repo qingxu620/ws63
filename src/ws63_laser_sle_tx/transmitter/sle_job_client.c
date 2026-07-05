@@ -75,6 +75,62 @@ static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
            (uuid->uuid[15] == (uint8_t)((expect >> 8) & 0xFF));
 }
 
+static uint16_t sle_job_le16(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
+
+static uint32_t sle_job_le32(const uint8_t *data)
+{
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+}
+
+static void trace_response_notification(uint16_t conn_id, uint16_t handle,
+    const ssapc_handle_value_t *data)
+{
+    if (data == NULL || data->data == NULL || data->data_len < SLE_JOB_PACKET_HEADER_LEN) {
+        return;
+    }
+
+    const uint8_t *bytes = data->data;
+    if (sle_job_le16(&bytes[0]) != SLE_JOB_PACKET_MAGIC) {
+        return;
+    }
+
+    uint8_t pkt_type = bytes[2];
+    uint16_t seq = sle_job_le16(&bytes[4]);
+    uint16_t payload_len = sle_job_le16(&bytes[6]);
+    if ((uint16_t)(SLE_JOB_PACKET_HEADER_LEN + payload_len) > data->data_len) {
+        return;
+    }
+
+    if ((pkt_type == PKT_ACK || pkt_type == PKT_NACK) &&
+        payload_len == sizeof(ack_payload_t)) {
+        const uint8_t *payload = &bytes[SLE_JOB_PACKET_HEADER_LEN];
+        uint8_t ack_type = payload[0];
+        uint8_t status = payload[1];
+        uint16_t ack_seq = sle_job_le16(&payload[2]);
+        uint32_t offset = sle_job_le32(&payload[8]);
+        uint32_t credit = sle_job_le32(&payload[12]);
+        if (ack_type != PKT_JOB_DATA || status != JOB_STATUS_OK) {
+            osal_printk("[TX_NOTIFY] t=%u conn=%u handle=0x%x len=%u pkt=0x%02x seq=%u "
+                        "ack_type=0x%02x ack_seq=%u st=%u off=%u credit=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(),
+                        (unsigned int)conn_id,
+                        (unsigned int)handle,
+                        (unsigned int)data->data_len,
+                        (unsigned int)pkt_type,
+                        (unsigned int)seq,
+                        (unsigned int)ack_type,
+                        (unsigned int)ack_seq,
+                        (unsigned int)status,
+                        (unsigned int)offset,
+                        (unsigned int)credit);
+        }
+    }
+}
+
 static bool adv_name_match(const sle_seek_result_info_t *seek_result, const char *name)
 {
     if (seek_result == NULL || seek_result->data == NULL || name == NULL) {
@@ -374,7 +430,11 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         parame.interval_max = JOB_SLE_CONN_INTERVAL_UNITS;
         parame.max_latency = 0;
         parame.supervision_timeout = 0x1F4;
-        (void)sle_update_connect_param(&parame);
+        errcode_t param_ret = sle_update_connect_param(&parame);
+        osal_printk("[tx_conn_param] conn=%u interval_units=0x%02x ret=0x%x\r\n",
+                    (unsigned int)conn_id,
+                    (unsigned int)JOB_SLE_CONN_INTERVAL_UNITS,
+                    (unsigned int)param_ret);
 
         /* Start service discovery */
         ssap_exchange_info_t info = {0};
@@ -507,8 +567,11 @@ static void notification_cbk(uint8_t client_id, uint16_t conn_id,
         return;
     }
 
-    if (conn_id == g_conn_id && data->handle == g_resp_handle && g_response_cb != NULL) {
-        g_response_cb(data->data, data->data_len);
+    if (conn_id == g_conn_id && data->handle == g_resp_handle) {
+        trace_response_notification(conn_id, data->handle, data);
+        if (g_response_cb != NULL) {
+            g_response_cb(data->data, data->data_len);
+        }
     }
 }
 
