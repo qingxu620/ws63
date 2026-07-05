@@ -24,18 +24,23 @@ BAUD_DEFAULT = 115200
 BAUD_LOG_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 214
 JOB_MAX_SIZE = 65536
+JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES = 8192
+JOB_EXEC_PREROLL_MAX_BYTES = JOB_MAX_SIZE - JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
 DATA_ACK_TIMEOUT_MIN_S = 10.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
 TX_RESYNC_TIMEOUT_MIN_S = 12.0
+PREROLL_CONTROL_TIMEOUT_MIN_S = 12.0
 TX_UART_RESYNC_BYTE = 0x18
 TX_UART_CONTROL_BYTE = 0x19
 SERIAL_WRITE_BURST_SIZE = 128
 SERIAL_WRITE_BURST_GAP_S = 0.001
 HOST_UPLOAD_WINDOW_CHUNKS = 1
-HOST_TIMING_FIRST_CHUNKS = 8
-HOST_TIMING_EVERY_CHUNKS = 32
-HOST_TIMING_SLOW_CHUNK_MS = 250
+HOST_TIMING_FIRST_CHUNKS = 0
+HOST_TIMING_EVERY_CHUNKS = 0
+HOST_TIMING_SLOW_CHUNK_MS = 500
+HOST_STATUS_LOCK_SLOW_MS = 50
+HOST_STATUS_WAIT_SLOW_MS = 250
 JOB_PREROLL_BYTES = 4096
 JOB_PREROLL_LINE_SEARCH_MAX_BYTES = GCODE_LINE_MAX_BYTES
 TX_PRIORITY_CONTROL_CODES = {
@@ -194,6 +199,17 @@ def plan_safe_preroll(gcode: bytes, requested: int) -> PrerollPlan:
             reason="line_too_long",
         )
     return PrerollPlan(requested=requested, effective=0, safe_line_end=0, reason="no_line_boundary")
+
+
+def clamp_stream_preroll_request(total: int, requested: int) -> tuple[int, bool]:
+    """Keep upload+execute preroll below the RX cache ceiling."""
+    if requested <= 0:
+        return 0, False
+    if total <= JOB_MAX_SIZE:
+        return requested, False
+    if requested > JOB_EXEC_PREROLL_MAX_BYTES:
+        return JOB_EXEC_PREROLL_MAX_BYTES, True
+    return requested, False
 
 
 def prepare_gcode_for_rx(data: bytes) -> tuple[bytes, int]:
@@ -372,10 +388,29 @@ class SleJobSerialClient:
         raise TimeoutError(f"等待 {pattern} 超时 {elapsed}ms，最近响应: {tail}")
 
     def transact_status(self, timeout: float) -> WaitResult:
+        t0 = time.perf_counter()
         with self._command_lock:
+            lock_wait_ms = int((time.perf_counter() - t0) * 1000)
             self._drain_lines()
             self.send_line("@STATUS")
-            return self.wait_for("@STATUS", timeout, ignore_unknown_command=True)
+            try:
+                result = self.wait_for("@STATUS", timeout, ignore_unknown_command=True)
+            except Exception as exc:
+                total_ms = int((time.perf_counter() - t0) * 1000)
+                self._on_log(
+                    "status",
+                    f"[HOST_STATUS_TIMING] lock_wait_ms={lock_wait_ms} wait_ms=ERR "
+                    f"total_ms={total_ms} error={exc}",
+                )
+                raise
+            total_ms = int((time.perf_counter() - t0) * 1000)
+            if lock_wait_ms >= HOST_STATUS_LOCK_SLOW_MS or result.elapsed_ms >= HOST_STATUS_WAIT_SLOW_MS:
+                self._on_log(
+                    "status",
+                    f"[HOST_STATUS_TIMING] lock_wait_ms={lock_wait_ms} wait_ms={result.elapsed_ms} "
+                    f"total_ms={total_ms}",
+                )
+            return result
 
     def send_control(self, command: str, expect: str, timeout: float) -> WaitResult:
         with self._command_lock:
@@ -572,10 +607,13 @@ class SleJobSerialClient:
                 timing_write_ms_total = 0
                 timing_ack_ms_total = 0
                 timing_chunk_ms_total = 0
+                timing_ack_ms_max = 0
+                timing_chunk_ms_max = 0
                 t_data = time.perf_counter()
                 preroll_done = False
                 data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
                 pending_chunks: list[dict[str, float | int]] = []
+                preroll_control_timeout = max(timeout, PREROLL_CONTROL_TIMEOUT_MIN_S)
 
                 while acked_offset < total:
                     while send_offset < total and len(pending_chunks) < HOST_UPLOAD_WINDOW_CHUNKS:
@@ -656,15 +694,20 @@ class SleJobSerialClient:
                     ack_wait_ms = max(0, chunk_ms - write_ms)
                     timing_ack_ms_total += ack_wait_ms
                     timing_chunk_ms_total += chunk_ms
+                    timing_ack_ms_max = max(timing_ack_ms_max, ack_wait_ms)
+                    timing_chunk_ms_max = max(timing_chunk_ms_max, chunk_ms)
 
                     has_preroll = "preroll=1" in ack.line
                     is_last = acked_offset >= total
                     chunk_index = int(pending["index"])
-                    if chunk_index <= 3 or has_preroll or is_last:
+                    if has_preroll or is_last:
                         self._on_log("status", f"ACK off={acked_offset} preroll={1 if has_preroll else 0}")
                     if (
                         chunk_index <= HOST_TIMING_FIRST_CHUNKS
-                        or chunk_index % HOST_TIMING_EVERY_CHUNKS == 0
+                        or (
+                            HOST_TIMING_EVERY_CHUNKS > 0
+                            and chunk_index % HOST_TIMING_EVERY_CHUNKS == 0
+                        )
                         or chunk_ms >= HOST_TIMING_SLOW_CHUNK_MS
                         or has_preroll
                         or is_last
@@ -688,9 +731,9 @@ class SleJobSerialClient:
                         if status_cb:
                             status_cb("预缓冲完成，启动执行", pct)
                         self.send_line(f"@EXEC_START {job_id}")
-                        self.wait_for("@ACK type=16", timeout)
+                        self.wait_for("@ACK type=16", preroll_control_timeout)
                         self.send_line("@DATA_RESUME")
-                        self.wait_for("@OK data_resume", timeout)
+                        self.wait_for("@OK data_resume", preroll_control_timeout)
                         self._on_log("status", "DATA_RESUME OK")
                         if status_cb:
                             status_cb(f"继续上传 {acked_offset}/{total} bytes", pct)
@@ -704,7 +747,9 @@ class SleJobSerialClient:
                         f"[HOST_TIMING_SUM] chunks={chunk_count} "
                         f"avg_write_ms={timing_write_ms_total / chunk_count:.1f} "
                         f"avg_ack_wait_ms={timing_ack_ms_total / chunk_count:.1f} "
-                        f"avg_chunk_ms={timing_chunk_ms_total / chunk_count:.1f}",
+                        f"avg_chunk_ms={timing_chunk_ms_total / chunk_count:.1f} "
+                        f"max_ack_wait_ms={timing_ack_ms_max} "
+                        f"max_chunk_ms={timing_chunk_ms_max}",
                     )
 
                 # The final DATA ACK only confirms that TX accepted the UART

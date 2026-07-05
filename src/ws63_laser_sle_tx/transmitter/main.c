@@ -37,6 +37,8 @@ static uart_buffer_config_t g_uart_cfg = {
 
 static osal_semaphore g_ack_sem;
 static bool g_ack_sem_ready = false;
+static osal_semaphore g_status_sem;
+static bool g_status_sem_ready = false;
 static volatile uint16_t g_wait_ack_seq = 0;
 static volatile uint8_t g_wait_status = JOB_STATUS_INTERNAL_ERROR;
 static volatile bool g_wait_got_ack = false;
@@ -59,6 +61,11 @@ static char g_line[TX_LINE_MAX];
 static uint16_t g_line_len = 0;
 static bool g_uart_control_frame_active = false;
 static bool g_host_job_topology_active = false;
+static volatile uint32_t g_async_data_ack_offset = 0;
+static volatile uint16_t g_async_data_ack_seq = 0;
+static volatile uint8_t g_async_data_status = JOB_STATUS_OK;
+static volatile uint32_t g_async_data_credit = 0;
+static volatile bool g_async_data_error = false;
 
 static void set_host_job_topology_active(bool active)
 {
@@ -99,6 +106,11 @@ static void clear_local_job_state(void)
     g_diag_data_count = 0;
     g_line_len = 0;
     g_uart_control_frame_active = false;
+    g_async_data_ack_offset = 0;
+    g_async_data_ack_seq = 0;
+    g_async_data_status = JOB_STATUS_OK;
+    g_async_data_credit = 0;
+    g_async_data_error = false;
 }
 
 static uint16_t next_seq(void)
@@ -108,6 +120,11 @@ static uint16_t next_seq(void)
         g_tx_seq = 1;
     }
     return seq;
+}
+
+static uint16_t peek_seq(void)
+{
+    return (g_tx_seq == 0) ? 1 : g_tx_seq;
 }
 
 static void host_sendf(const char *fmt, ...)
@@ -150,6 +167,264 @@ static bool tx_should_log_timing(uint8_t type, uint32_t data_index, uint32_t tot
     unused(total_ms);
     return false;
 #endif
+}
+
+static uint32_t tx_ack_timeout_ms_for_type(uint8_t type)
+{
+    return (type == PKT_JOB_DATA) ? JOB_TX_DATA_ACK_TIMEOUT_MS : JOB_TX_ACK_TIMEOUT_MS;
+}
+
+static uint32_t tx_async_data_window_bytes(void)
+{
+    uint32_t packets = JOB_TX_DATA_WINDOW_PACKETS;
+    if (packets == 0U) {
+        packets = 1U;
+    }
+    return packets * JOB_TX_DATA_CHUNK_MAX;
+}
+
+static void update_async_data_progress_from_status(const status_resp_payload_t *st)
+{
+    if (st == NULL || !JOB_TX_DATA_ASYNC_AFTER_PREROLL || !g_preroll_signaled ||
+        g_job_id == 0U || st->job_id != g_job_id || st->status != JOB_STATUS_OK) {
+        return;
+    }
+
+    if (st->received_size > g_async_data_ack_offset) {
+        uint32_t old_ack = g_async_data_ack_offset;
+        g_async_data_ack_offset = st->received_size;
+        g_async_data_credit = st->cache_free;
+        osal_printk("[TX_DATA_STATUS_PROGRESS] t=%u job=%u rx=%u old_ack=%u total=%u "
+                    "free=%u state=%u lines=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(),
+                    (unsigned int)st->job_id,
+                    (unsigned int)st->received_size,
+                    (unsigned int)old_ack,
+                    (unsigned int)st->total_size,
+                    (unsigned int)st->cache_free,
+                    (unsigned int)st->state,
+                    (unsigned int)st->executed_lines);
+    }
+}
+
+#if JOB_TX_DATA_WINDOW_STATUS_PROBE_ENABLE
+static bool request_rx_status_probe(uint16_t data_seq, uint32_t data_index,
+                                    uint32_t offset, uint16_t len,
+                                    uint32_t waited)
+{
+    if (!g_status_sem_ready) {
+        return false;
+    }
+
+    while (osal_sem_down_timeout(&g_status_sem, 0) == OSAL_SUCCESS) {
+    }
+
+    uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t packet_len = 0;
+    /*
+     * send_job_data_chunk_async() reserves the DATA seq before waiting for
+     * window credit. A status probe issued from this wait path must not consume
+     * the next ordered DATA seq, otherwise RX will later see a future DATA seq.
+     */
+    uint16_t seq = peek_seq();
+    if (!sle_packet_encode(PKT_STATUS_REQ, 0, seq, NULL, 0, packet, sizeof(packet), &packet_len)) {
+        return false;
+    }
+
+    uint32_t t_send = (uint32_t)uapi_systick_get_ms();
+    errcode_t ret = sle_job_client_send_packet(packet, packet_len);
+    uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+    osal_printk("[TX_DATA_STATUS_PROBE] t=%u status_seq=%u data_seq=%u data_idx=%u "
+                "off=%u len=%u waited=%u ret=0x%x send_ms=%u ack_off=%u ack_seq=%u "
+                "seq_neutral=1\r\n",
+                (unsigned int)uapi_systick_get_ms(), seq, data_seq,
+                (unsigned int)data_index, (unsigned int)offset,
+                (unsigned int)len, (unsigned int)waited,
+                (unsigned int)ret, (unsigned int)send_ms,
+                (unsigned int)g_async_data_ack_offset,
+                (unsigned int)g_async_data_ack_seq);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        return false;
+    }
+
+    (void)osal_sem_down_timeout(&g_status_sem, JOB_TX_DATA_STATUS_PROBE_WAIT_MS);
+    return true;
+}
+#endif
+
+static bool wait_async_data_window(uint16_t seq, uint32_t data_index,
+                                   uint32_t offset, uint16_t len)
+{
+    uint32_t next_offset = offset + len;
+    uint32_t window = tx_async_data_window_bytes();
+    uint32_t start = (uint32_t)uapi_systick_get_ms();
+    bool logged_wait = false;
+    bool logged_stall = false;
+
+    while (!g_async_data_error) {
+        uint32_t ack_offset = g_async_data_ack_offset;
+        uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+        if (outstanding <= window) {
+            uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+            if (waited >= JOB_TX_TIMING_SLOW_MS || logged_wait) {
+                osal_printk("[TX_DATA_WIN_OK] t=%u seq=%u data_idx=%u off=%u len=%u "
+                            "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                            "credit=%u waited=%u\r\n",
+                            (unsigned int)uapi_systick_get_ms(), seq,
+                            (unsigned int)data_index, (unsigned int)offset,
+                            (unsigned int)len, (unsigned int)next_offset,
+                            (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
+                            (unsigned int)outstanding, (unsigned int)window,
+                            (unsigned int)g_async_data_credit, (unsigned int)waited);
+            }
+            return true;
+        }
+
+        uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+        if (!logged_wait && waited >= JOB_TX_TIMING_SLOW_MS) {
+            logged_wait = true;
+            osal_printk("[TX_DATA_WIN_WAIT] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "credit=%u waited=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_async_data_credit, (unsigned int)waited);
+        }
+        if (waited >= JOB_TX_DATA_WINDOW_STALL_MS && !logged_stall) {
+            logged_stall = true;
+            osal_printk("[TX_DATA_WIN_STALL_OBSERVE] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "status=%u credit=%u waited=%u probe=%u timeout=%u link=%u client=%s\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_async_data_status,
+                        (unsigned int)g_async_data_credit,
+                        (unsigned int)waited,
+                        (unsigned int)JOB_TX_DATA_WINDOW_STATUS_PROBE_ENABLE,
+                        (unsigned int)JOB_TX_ASYNC_DATA_DRAIN_TIMEOUT_MS,
+                        (unsigned int)sle_job_client_is_connected(),
+                        sle_job_client_get_status());
+        }
+
+#if JOB_TX_DATA_WINDOW_STATUS_PROBE_ENABLE
+        if (waited >= JOB_TX_DATA_WINDOW_STALL_MS) {
+            bool probed = request_rx_status_probe(seq, data_index, offset, len, waited);
+            ack_offset = g_async_data_ack_offset;
+            outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+            if (outstanding <= window) {
+                osal_printk("[TX_DATA_WIN_PROBE_OK] t=%u seq=%u data_idx=%u off=%u len=%u "
+                            "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                            "credit=%u waited=%u probed=%u\r\n",
+                            (unsigned int)uapi_systick_get_ms(), seq,
+                            (unsigned int)data_index, (unsigned int)offset,
+                            (unsigned int)len, (unsigned int)next_offset,
+                            (unsigned int)ack_offset,
+                            (unsigned int)g_async_data_ack_seq,
+                            (unsigned int)outstanding, (unsigned int)window,
+                            (unsigned int)g_async_data_credit,
+                            (unsigned int)waited, (unsigned int)(probed ? 1U : 0U));
+                return true;
+            }
+            osal_printk("[TX_DATA_WIN_STALL] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "status=%u credit=%u waited=%u probed=%u link=%u client=%s\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_async_data_status,
+                        (unsigned int)g_async_data_credit,
+                        (unsigned int)waited,
+                        (unsigned int)(probed ? 1U : 0U),
+                        (unsigned int)sle_job_client_is_connected(),
+                        sle_job_client_get_status());
+            return false;
+        }
+#else
+        if (waited >= JOB_TX_ASYNC_DATA_DRAIN_TIMEOUT_MS) {
+            osal_printk("[TX_DATA_WIN_STALL_TIMEOUT] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "status=%u credit=%u waited=%u probe=0 link=%u client=%s\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_async_data_status,
+                        (unsigned int)g_async_data_credit,
+                        (unsigned int)waited,
+                        (unsigned int)sle_job_client_is_connected(),
+                        sle_job_client_get_status());
+            return false;
+        }
+#endif
+
+        osal_msleep(JOB_TX_DATA_WINDOW_POLL_MS);
+    }
+
+    osal_printk("[TX_DATA_WIN_ERR] t=%u seq=%u data_idx=%u off=%u len=%u "
+                "ack_off=%u ack_seq=%u status=%u credit=%u\r\n",
+                (unsigned int)uapi_systick_get_ms(), seq,
+                (unsigned int)data_index, (unsigned int)offset,
+                (unsigned int)len, (unsigned int)g_async_data_ack_offset,
+                (unsigned int)g_async_data_ack_seq,
+                (unsigned int)g_async_data_status,
+                (unsigned int)g_async_data_credit);
+    return false;
+}
+
+static bool handle_async_data_ack(const ack_payload_t *ack)
+{
+    if (ack == NULL || ack->ack_type != PKT_JOB_DATA) {
+        return false;
+    }
+    if (g_wait_active && ack->ack_seq == g_wait_ack_seq) {
+        return false;
+    }
+
+    if (ack->status != JOB_STATUS_OK) {
+        g_async_data_ack_offset = ack->offset;
+        g_async_data_ack_seq = ack->ack_seq;
+        g_async_data_status = ack->status;
+        g_async_data_credit = ack->credit;
+        g_async_data_error = true;
+        osal_printk("[TX_DATA_ASYNC_NACK] t=%u seq=%u status=%u off=%u credit=%u wait=%u active=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq, ack->status,
+                    (unsigned int)ack->offset, (unsigned int)ack->credit,
+                    (unsigned int)g_wait_ack_seq, (unsigned int)g_wait_active);
+        host_sendf("@NACK type=%u seq=%u status=%u offset=%u async=1\r\n",
+                   PKT_JOB_DATA, ack->ack_seq, ack->status, (unsigned int)ack->offset);
+        return true;
+    }
+
+    if (ack->offset < g_async_data_ack_offset) {
+        osal_printk("[TX_DATA_ASYNC_OLD_ACK] t=%u seq=%u off=%u current_off=%u credit=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq,
+                    (unsigned int)ack->offset,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)ack->credit);
+        return true;
+    }
+
+    g_async_data_ack_offset = ack->offset;
+    g_async_data_ack_seq = ack->ack_seq;
+    g_async_data_status = ack->status;
+    g_async_data_credit = ack->credit;
+
+    if (JOB_TX_TIMING_EVERY_PACKETS > 0U &&
+        ((uint32_t)ack->ack_seq % JOB_TX_TIMING_EVERY_PACKETS) == 0U) {
+        osal_printk("[TX_DATA_ASYNC_ACK] t=%u seq=%u off=%u credit=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq,
+                    (unsigned int)ack->offset, (unsigned int)ack->credit);
+    }
+    return true;
 }
 
 static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_t payload_len)
@@ -197,6 +472,10 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
                     (unsigned int)sle_job_client_is_connected(), sle_job_client_get_status());
     }
 
+    uint32_t ack_timeout_ms = tx_ack_timeout_ms_for_type(type);
+    bool force_write_req = (type == PKT_JOB_DATA && g_preroll_signaled &&
+                            JOB_TX_DATA_FORCE_REQ_AFTER_PREROLL);
+
     for (uint32_t retry = 0; retry <= JOB_TX_RETRY_MAX; retry++) {
         uint32_t reconnect_start = (uint32_t)uapi_systick_get_ms();
         while (!sle_job_client_is_connected()) {
@@ -217,6 +496,19 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         }
 
         if (g_wait_got_ack && g_wait_status == JOB_STATUS_OK) {
+            if (retry > 0U) {
+                osal_printk("[TX_LATE_ACK_OK] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                            "retry=%u wait_cost=%u timeout=%u force_req=%u status=%u link=%u client=%s\r\n",
+                            (unsigned int)uapi_systick_get_ms(), type, seq,
+                            (unsigned int)dbg_data_index, (unsigned int)dbg_off,
+                            (unsigned int)dbg_dlen, (unsigned int)retry,
+                            (unsigned int)(uapi_systick_get_ms() - g_wait_start_ms),
+                            (unsigned int)ack_timeout_ms,
+                            (unsigned int)(force_write_req ? 1U : 0U),
+                            (unsigned int)g_wait_status,
+                            (unsigned int)sle_job_client_is_connected(),
+                            sle_job_client_get_status());
+            }
             g_wait_active = false;
             g_wait_ack_seq = 0;
             return ERRCODE_SUCC;
@@ -227,7 +519,7 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
                         type, seq, (unsigned int)retry, packet_len, sle_job_client_get_status());
         }
         uint32_t t_send = (uint32_t)uapi_systick_get_ms();
-        errcode_t ret = sle_job_client_send_packet(packet, packet_len);
+        errcode_t ret = sle_job_client_send_packet_ex(packet, packet_len, force_write_req);
         uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
         uint32_t wait_ms = 0;
         if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ret != ERRCODE_SLE_SUCCESS)) {
@@ -243,20 +535,35 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         if (ret == ERRCODE_SLE_SUCCESS) {
             uint32_t t_ack = (uint32_t)uapi_systick_get_ms();
             g_wait_start_ms = t_ack;
-            if (osal_sem_down_timeout(&g_ack_sem, JOB_TX_ACK_TIMEOUT_MS) == OSAL_SUCCESS &&
+            if (osal_sem_down_timeout(&g_ack_sem, ack_timeout_ms) == OSAL_SUCCESS &&
                 g_wait_got_ack) {
                 uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
                 uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_send;
                 if (tx_should_log_timing(type, dbg_data_index, total_ms)) {
                     osal_printk("[TX_TIMING] type=0x%02x seq=%u data_idx=%u off=%u len=%u "
-                                "send_ms=%u ack_ms=%u total_ms=%u retry=%u status=%u\r\n",
+                                "send_ms=%u ack_ms=%u total_ms=%u retry=%u force_req=%u status=%u link=%u client=%s\r\n",
                                 type, seq, (unsigned int)dbg_data_index,
                                 (unsigned int)dbg_off, (unsigned int)dbg_dlen,
                                 (unsigned int)send_ms, (unsigned int)ack_ms,
                                 (unsigned int)total_ms, (unsigned int)retry,
-                                (unsigned int)g_wait_status);
+                                (unsigned int)(force_write_req ? 1U : 0U),
+                                (unsigned int)g_wait_status,
+                                (unsigned int)sle_job_client_is_connected(),
+                                sle_job_client_get_status());
                 }
                 if (g_wait_status == JOB_STATUS_OK) {
+                    if (retry > 0U) {
+                        osal_printk("[TX_RETRY_OK] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                                    "retry=%u send_ms=%u ack_ms=%u total_ms=%u timeout=%u force_req=%u link=%u client=%s\r\n",
+                                    (unsigned int)uapi_systick_get_ms(), type, seq,
+                                    (unsigned int)dbg_data_index, (unsigned int)dbg_off,
+                                    (unsigned int)dbg_dlen, (unsigned int)retry,
+                                    (unsigned int)send_ms, (unsigned int)ack_ms,
+                                    (unsigned int)total_ms, (unsigned int)ack_timeout_ms,
+                                    (unsigned int)(force_write_req ? 1U : 0U),
+                                    (unsigned int)sle_job_client_is_connected(),
+                                    sle_job_client_get_status());
+                    }
                     g_wait_active = false;
                     g_wait_ack_seq = 0;
                     return ERRCODE_SUCC;
@@ -265,21 +572,23 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
             }
             wait_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
             osal_printk("[TX_TO] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
-                        "retry=%u waited=%u send_ret=0x%x send_ms=%u got=%u st=%u link=%u status=%s\r\n",
+                        "retry=%u waited=%u timeout=%u force_req=%u send_ret=0x%x send_ms=%u got=%u st=%u link=%u status=%s\r\n",
                         (unsigned int)uapi_systick_get_ms(), type, seq,
                         (unsigned int)dbg_data_index, (unsigned int)dbg_off,
                         (unsigned int)dbg_dlen, (unsigned int)retry,
-                        (unsigned int)wait_ms, (unsigned int)ret,
+                        (unsigned int)wait_ms, (unsigned int)ack_timeout_ms,
+                        (unsigned int)(force_write_req ? 1U : 0U), (unsigned int)ret,
                         (unsigned int)send_ms, (unsigned int)g_wait_got_ack,
                         (unsigned int)g_wait_status,
                         (unsigned int)sle_job_client_is_connected(),
                         sle_job_client_get_status());
         } else {
             osal_printk("[TX_SEND_FAIL] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
-                        "retry=%u send_ret=0x%x send_ms=%u link=%u status=%s\r\n",
+                        "retry=%u force_req=%u send_ret=0x%x send_ms=%u link=%u status=%s\r\n",
                         (unsigned int)uapi_systick_get_ms(), type, seq,
                         (unsigned int)dbg_data_index, (unsigned int)dbg_off,
                         (unsigned int)dbg_dlen, (unsigned int)retry,
+                        (unsigned int)(force_write_req ? 1U : 0U),
                         (unsigned int)ret, (unsigned int)send_ms,
                         (unsigned int)sle_job_client_is_connected(),
                         sle_job_client_get_status());
@@ -287,11 +596,12 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     }
 
     osal_printk("[TX_FAIL] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
-                "status=%u got=%u retries=%u link=%u client=%s\r\n",
+                "status=%u got=%u retries=%u force_req=%u link=%u client=%s\r\n",
                 (unsigned int)uapi_systick_get_ms(), type, seq,
                 (unsigned int)dbg_data_index, (unsigned int)dbg_off,
                 (unsigned int)dbg_dlen, (unsigned int)g_wait_status,
                 (unsigned int)g_wait_got_ack, (unsigned int)JOB_TX_RETRY_MAX,
+                (unsigned int)(force_write_req ? 1U : 0U),
                 (unsigned int)sle_job_client_is_connected(),
                 sle_job_client_get_status());
     g_wait_active = false;
@@ -346,6 +656,9 @@ static void response_cb(const uint8_t *data, uint16_t length)
     if ((pkt.type == PKT_ACK || pkt.type == PKT_NACK) && pkt.len == sizeof(ack_payload_t)) {
         ack_payload_t ack;
         memcpy(&ack, pkt.payload, sizeof(ack));
+        if (handle_async_data_ack(&ack)) {
+            return;
+        }
         if (!g_wait_active || ack.ack_seq != g_wait_ack_seq) {
             osal_printk("[TX_OLD] t=%u pkt_type=0x%02x ack_type=0x%02x ack_seq=%u wait=%u "
                         "st=%u off=%u credit=%u active=%u cost=%u\r\n",
@@ -374,6 +687,10 @@ static void response_cb(const uint8_t *data, uint16_t length)
     if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t)) {
         status_resp_payload_t st;
         memcpy(&st, pkt.payload, sizeof(st));
+        update_async_data_progress_from_status(&st);
+        if (g_status_sem_ready) {
+            osal_sem_up(&g_status_sem);
+        }
         if (JOB_DIAG_LOG) {
             osal_printk("[JOB_TX_STATUS] state=%u status=%u job=%u rx=%u/%u free=%u lines=%u\r\n",
                         st.state, st.status, (unsigned int)st.job_id,
@@ -431,6 +748,149 @@ static errcode_t send_job_end(void)
     return send_packet_wait_ack(PKT_JOB_END, &end, sizeof(end));
 }
 
+static bool wait_async_data_drain(uint32_t target_offset)
+{
+    if (!g_preroll_signaled || target_offset == 0U) {
+        return true;
+    }
+    if (!JOB_TX_DATA_ASYNC_AFTER_PREROLL) {
+        return true;
+    }
+
+    uint32_t start = (uint32_t)uapi_systick_get_ms();
+    while (!g_async_data_error && g_async_data_ack_offset < target_offset) {
+        uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - start;
+        if (elapsed >= JOB_TX_ASYNC_DATA_DRAIN_TIMEOUT_MS) {
+            osal_printk("[TX_DATA_ASYNC_DRAIN_TO] target=%u ack_off=%u ack_seq=%u status=%u waited=%u\r\n",
+                        (unsigned int)target_offset,
+                        (unsigned int)g_async_data_ack_offset,
+                        (unsigned int)g_async_data_ack_seq,
+                        (unsigned int)g_async_data_status,
+                        (unsigned int)elapsed);
+            return false;
+        }
+        osal_msleep(10);
+    }
+
+    uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+    if (g_async_data_error) {
+        osal_printk("[TX_DATA_ASYNC_DRAIN_ERR] target=%u ack_off=%u ack_seq=%u status=%u waited=%u\r\n",
+                    (unsigned int)target_offset,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)g_async_data_ack_seq,
+                    (unsigned int)g_async_data_status,
+                    (unsigned int)waited);
+        return false;
+    }
+    if (waited >= JOB_TX_TIMING_SLOW_MS) {
+        osal_printk("[TX_DATA_ASYNC_DRAIN_OK] target=%u ack_off=%u ack_seq=%u waited=%u\r\n",
+                    (unsigned int)target_offset,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)g_async_data_ack_seq,
+                    (unsigned int)waited);
+    }
+    return true;
+}
+
+static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload_len)
+{
+    uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t packet_len = 0;
+    uint16_t seq = next_seq();
+    uint16_t actual_payload_len = payload_len_for_type(PKT_JOB_DATA, payload, payload_len);
+    const job_data_payload_t *dp = (const job_data_payload_t *)payload;
+    uint32_t dbg_off = dp->offset;
+    uint16_t dbg_dlen = dp->data_len;
+    g_diag_data_count++;
+    uint32_t dbg_data_index = g_diag_data_count;
+
+    if (g_async_data_error) {
+        osal_printk("[TX_DATA_ASYNC_BLOCKED] seq=%u off=%u len=%u ack_seq=%u ack_off=%u status=%u\r\n",
+                    seq, (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                    (unsigned int)g_async_data_ack_seq,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)g_async_data_status);
+        return ERRCODE_FAIL;
+    }
+
+    if (!sle_packet_encode(PKT_JOB_DATA, 0, seq, payload, actual_payload_len,
+                           packet, sizeof(packet), &packet_len)) {
+        osal_printk("[JOB_TX] async encode fail type=0x%02x len=%u\r\n",
+                    PKT_JOB_DATA, actual_payload_len);
+        return ERRCODE_FAIL;
+    }
+
+    for (uint32_t retry = 0; retry <= JOB_TX_RETRY_MAX; retry++) {
+        uint32_t reconnect_start = (uint32_t)uapi_systick_get_ms();
+        while (!sle_job_client_is_connected()) {
+            uint32_t reconnect_elapsed =
+                (uint32_t)uapi_systick_get_ms() - reconnect_start;
+            if (reconnect_elapsed >= JOB_TX_CONNECT_WAIT_MS) {
+                osal_printk("[JOB_TX_WAIT_CONN_TIMEOUT] type=0x%02x seq=%u waited=%u status=%s async=1\r\n",
+                            PKT_JOB_DATA, seq, (unsigned int)reconnect_elapsed,
+                            sle_job_client_get_status());
+                host_sendf("@NACK type=%u seq=%u status=%u reason=no_link async=1\r\n",
+                           PKT_JOB_DATA, seq, JOB_STATUS_NOT_READY);
+                return ERRCODE_FAIL;
+            }
+            sle_job_client_poll_connect();
+            osal_msleep(20);
+        }
+
+        if (!wait_async_data_window(seq, dbg_data_index, dbg_off, dbg_dlen)) {
+            break;
+        }
+
+        uint32_t t_send = (uint32_t)uapi_systick_get_ms();
+        errcode_t ret = sle_job_client_send_packet_ex(packet, packet_len, false);
+        uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+        if (ret == ERRCODE_SLE_SUCCESS && !g_async_data_error) {
+            uint32_t next_offset = dbg_off + dbg_dlen;
+            uint32_t ack_offset = g_async_data_ack_offset;
+            uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+            if (tx_should_log_timing(PKT_JOB_DATA, dbg_data_index, send_ms)) {
+                osal_printk("[TX_DATA_WIN] t=%u seq=%u data_idx=%u off=%u len=%u "
+                            "next=%u send_ms=%u retry=%u ack_off=%u ack_seq=%u "
+                            "outstanding=%u window=%u credit=%u link=%u client=%s\r\n",
+                            (unsigned int)uapi_systick_get_ms(), seq,
+                            (unsigned int)dbg_data_index,
+                            (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                            (unsigned int)next_offset,
+                            (unsigned int)send_ms, (unsigned int)retry,
+                            (unsigned int)ack_offset,
+                            (unsigned int)g_async_data_ack_seq,
+                            (unsigned int)outstanding,
+                            (unsigned int)tx_async_data_window_bytes(),
+                            (unsigned int)g_async_data_credit,
+                            (unsigned int)sle_job_client_is_connected(),
+                            sle_job_client_get_status());
+            }
+            return ERRCODE_SUCC;
+        }
+
+        osal_printk("[TX_DATA_ASYNC_SEND_FAIL] t=%u seq=%u data_idx=%u off=%u len=%u "
+                    "retry=%u ret=0x%x send_ms=%u rx_err=%u ack_off=%u ack_seq=%u link=%u client=%s\r\n",
+                    (unsigned int)uapi_systick_get_ms(), seq,
+                    (unsigned int)dbg_data_index,
+                    (unsigned int)dbg_off, (unsigned int)dbg_dlen,
+                    (unsigned int)retry, (unsigned int)ret,
+                    (unsigned int)send_ms,
+                    (unsigned int)g_async_data_error,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)g_async_data_ack_seq,
+                    (unsigned int)sle_job_client_is_connected(),
+                    sle_job_client_get_status());
+        if (g_async_data_error) {
+            break;
+        }
+        osal_msleep(JOB_TX_DATA_WINDOW_POLL_MS);
+    }
+
+    host_sendf("@NACK type=%u seq=%u status=%u offset=%u async=1\r\n",
+               PKT_JOB_DATA, seq, g_async_data_status, (unsigned int)dbg_off);
+    return ERRCODE_FAIL;
+}
+
 static errcode_t send_job_data_chunk(uint32_t offset, const uint8_t *data, uint16_t chunk_len)
 {
     if (chunk_len == 0 || data == NULL) {
@@ -443,6 +903,18 @@ static errcode_t send_job_data_chunk(uint32_t offset, const uint8_t *data, uint1
     p->offset = offset;
     p->data_len = chunk_len;
     memcpy(p->data, data, chunk_len);
+
+    if (JOB_TX_DATA_ASYNC_AFTER_PREROLL && g_preroll_signaled) {
+        errcode_t ret = send_job_data_chunk_async(payload,
+                                                  (uint16_t)(sizeof(job_data_payload_t) + chunk_len));
+        if (JOB_DIAG_LOG && ret == ERRCODE_SUCC) {
+            osal_printk("[JOB_TX_DATA_SENT] job=%u off=%u len=%u next=%u/%u async=1\r\n",
+                        (unsigned int)g_job_id, (unsigned int)offset,
+                        (unsigned int)chunk_len, (unsigned int)(offset + chunk_len),
+                        (unsigned int)g_job_total);
+        }
+        return ret;
+    }
 
     errcode_t ret = send_packet_wait_ack(PKT_JOB_DATA, payload,
                                          (uint16_t)(sizeof(job_data_payload_t) + chunk_len));
@@ -512,6 +984,10 @@ static void handle_data_byte(uint8_t ch)
             return;
         }
         g_preroll_signaled = true;
+        g_async_data_ack_offset = g_job_offset;
+        g_async_data_status = JOB_STATUS_OK;
+        g_async_data_credit = 0;
+        g_async_data_error = false;
         g_data_mode = false;
         host_sendf("@ACK type=%u seq=0 status=%u offset=%u preroll=1\r\n",
                    PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
@@ -531,6 +1007,11 @@ static void handle_data_byte(uint8_t ch)
 
     if (g_job_offset >= g_job_total) {
         g_data_mode = false;
+        if (!wait_async_data_drain(g_job_total)) {
+            (void)abort_rx_and_clear_transaction("job-data-drain-fail");
+            host_sendf("@ERR job_data_drain_failed_abort\r\n");
+            return;
+        }
         if (send_job_end() == ERRCODE_SUCC) {
             osal_printk("[JOB_TX] job upload complete job=%u size=%u crc=0x%04x\r\n",
                         (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc);
@@ -648,6 +1129,11 @@ static void handle_command_line(char *line)
         g_data_log_next = TX_DATA_RX_LOG_STEP;
         g_data_mode = true;
         g_diag_data_count = 0;
+        g_async_data_ack_offset = 0;
+        g_async_data_ack_seq = 0;
+        g_async_data_status = JOB_STATUS_OK;
+        g_async_data_credit = 0;
+        g_async_data_error = false;
         g_preroll_bytes = (uint32_t)preroll;
         g_preroll_signaled = false;
         if (JOB_DIAG_LOG) {
@@ -669,6 +1155,12 @@ static void handle_command_line(char *line)
     }
     if (strcmp(line, "@DATA_RESUME") == 0) {
         if (g_preroll_signaled && g_job_offset < g_job_total && !g_data_mode) {
+            if (!JOB_TX_DATA_ASYNC_AFTER_PREROLL) {
+                g_async_data_ack_offset = g_job_offset;
+            }
+            g_async_data_status = JOB_STATUS_OK;
+            g_async_data_credit = 0;
+            g_async_data_error = false;
             g_data_mode = true;
             host_sendf("@OK data_resume\r\n");
         } else {
@@ -706,7 +1198,7 @@ static void handle_command_line(char *line)
     if (strcmp(line, "@STATUS") == 0) {
         uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
         uint16_t packet_len = 0;
-        uint16_t seq = next_seq();
+        uint16_t seq = peek_seq();
         if (sle_packet_encode(PKT_STATUS_REQ, 0, seq, NULL, 0, packet, sizeof(packet), &packet_len)) {
             (void)sle_job_client_send_packet(packet, packet_len);
         }
@@ -879,6 +1371,11 @@ static void laser_sle_job_tx_entry(void)
         g_ack_sem_ready = true;
     } else {
         osal_printk("[JOB_TX_BOOT] ack sem init failed\r\n");
+    }
+    if (osal_sem_init(&g_status_sem, 0) == OSAL_SUCCESS) {
+        g_status_sem_ready = true;
+    } else {
+        osal_printk("[JOB_TX_BOOT] status sem init failed\r\n");
     }
     if (job_uart_init() != ERRCODE_SUCC) {
         return;

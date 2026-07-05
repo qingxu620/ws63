@@ -13,9 +13,11 @@
 #define RX_BOOT_POLICY_POLL_MS 250U
 #define RX_BOOT_POLICY_STACK_SIZE 0x1000U
 #define RX_BOOT_POLICY_TASK_PRIORITY OSAL_TASK_PRIORITY_BELOW_MIDDLE
+#define RX_BOOT_WIFI_COEXIST_ENABLE 0
 
 static volatile rx_boot_state_t g_boot_state = RX_BOOT_STATE_SLE_STARTING;
 static volatile bool g_wifi_coexist_started = false;
+static volatile bool g_wifi_coexist_disabled_logged = false;
 
 const char *rx_boot_policy_state_name(rx_boot_state_t state)
 {
@@ -46,6 +48,13 @@ static void rx_boot_start_wifi_coexist_once(void)
         return;
     }
 
+#if !RX_BOOT_WIFI_COEXIST_ENABLE
+    if (!g_wifi_coexist_disabled_logged) {
+        osal_printk("[RX_BOOT] WiFi coexist disabled for SLE latency test\r\n");
+        g_wifi_coexist_disabled_logged = true;
+    }
+    return;
+#else
 #if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
     errcode_t ret = legacy_wifi_route_start();
     if (ret != ERRCODE_SUCC) {
@@ -57,6 +66,7 @@ static void rx_boot_start_wifi_coexist_once(void)
     g_boot_state = RX_BOOT_STATE_SLE_WIFI_COEXIST;
 #else
     osal_printk("[RX_BOOT] WiFi coexist unavailable: transport disabled\r\n");
+#endif
 #endif
 }
 
@@ -94,6 +104,7 @@ errcode_t rx_boot_policy_start(void)
 {
     g_boot_state = RX_BOOT_STATE_SLE_STARTING;
     g_wifi_coexist_started = false;
+    g_wifi_coexist_disabled_logged = false;
 
     osal_kthread_lock();
     osal_task *task = osal_kthread_create(rx_boot_policy_task, NULL, "rx_boot_policy",

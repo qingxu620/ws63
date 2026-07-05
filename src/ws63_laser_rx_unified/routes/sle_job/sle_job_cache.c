@@ -6,6 +6,7 @@
 #include "sle_job_config.h"
 #include "sle_job_crc16.h"
 #include "soc_osal.h"
+#include "systick.h"
 #include <string.h>
 
 static uint8_t g_cache[SLE_JOB_CACHE_SIZE];
@@ -79,6 +80,7 @@ sle_job_status_t sle_job_cache_begin(uint32_t job_id, uint32_t total_size, uint1
 
 sle_job_status_t sle_job_cache_write(uint32_t job_id, uint32_t offset, const uint8_t *data, uint16_t len)
 {
+    uint32_t t_total = (uint32_t)uapi_systick_get_ms();
     if (!g_receiving || job_id != g_job_id) {
         osal_printk("[JOB_CACHE_WRITE_REJECT] reason=not_receiving receiving=%d job=%u expected=%u\r\n",
                     (int)g_receiving, (unsigned int)job_id, (unsigned int)g_job_id);
@@ -100,20 +102,53 @@ sle_job_status_t sle_job_cache_write(uint32_t job_id, uint32_t offset, const uin
         return SLE_JOB_STATUS_NO_SPACE;
     }
 
+    uint32_t t_lock = (uint32_t)uapi_systick_get_ms();
     if (g_mutex_ready) {
         osal_mutex_lock(&g_cache_mutex);
     }
+    uint32_t lock_ms = (uint32_t)uapi_systick_get_ms() - t_lock;
+    uint32_t avail_before = g_data_len;
+    uint32_t free_before = SLE_JOB_CACHE_SIZE - g_data_len;
+    uint32_t rx_before = g_received;
+    uint32_t consumed_before = g_consumed;
 
+    uint32_t t_copy = (uint32_t)uapi_systick_get_ms();
     for (uint16_t i = 0; i < len; i++) {
         g_cache[g_write_pos] = data[i];
         g_write_pos = (g_write_pos + 1U) % SLE_JOB_CACHE_SIZE;
     }
+    uint32_t copy_ms = (uint32_t)uapi_systick_get_ms() - t_copy;
     g_data_len += len;
+
+    uint32_t t_crc = (uint32_t)uapi_systick_get_ms();
     g_running_crc = sle_job_crc16_ccitt_update(g_running_crc, data, len);
+    uint32_t crc_ms = (uint32_t)uapi_systick_get_ms() - t_crc;
     g_received += len;
 
+    uint32_t avail_after = g_data_len;
+    uint32_t free_after = SLE_JOB_CACHE_SIZE - g_data_len;
+    uint32_t rx_after = g_received;
+    uint32_t consumed_after = g_consumed;
+
+    uint32_t t_unlock = (uint32_t)uapi_systick_get_ms();
     if (g_mutex_ready) {
         osal_mutex_unlock(&g_cache_mutex);
+    }
+    uint32_t unlock_ms = (uint32_t)uapi_systick_get_ms() - t_unlock;
+    uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_total;
+    if (total_ms >= SLE_JOB_TIMING_SLOW_MS || lock_ms >= SLE_JOB_TIMING_SLOW_MS ||
+        copy_ms >= SLE_JOB_TIMING_SLOW_MS || crc_ms >= SLE_JOB_TIMING_SLOW_MS) {
+        osal_printk("[JOB_CACHE_WRITE_TIMING] job=%u off=%u len=%u total_ms=%u lock_ms=%u "
+                    "copy_ms=%u crc_ms=%u unlock_ms=%u rx=%u->%u consumed=%u->%u "
+                    "avail=%u->%u free=%u->%u\r\n",
+                    (unsigned int)job_id, (unsigned int)offset, (unsigned int)len,
+                    (unsigned int)total_ms, (unsigned int)lock_ms,
+                    (unsigned int)copy_ms, (unsigned int)crc_ms,
+                    (unsigned int)unlock_ms, (unsigned int)rx_before,
+                    (unsigned int)rx_after, (unsigned int)consumed_before,
+                    (unsigned int)consumed_after, (unsigned int)avail_before,
+                    (unsigned int)avail_after, (unsigned int)free_before,
+                    (unsigned int)free_after);
     }
     return SLE_JOB_STATUS_OK;
 }

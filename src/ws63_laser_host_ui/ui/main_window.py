@@ -23,7 +23,8 @@ from app.state_models import AppState, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
-    JOB_DATA_CHUNK_SIZE, JOB_MAX_SIZE, JOB_PREROLL_BYTES, plan_safe_preroll,
+    JOB_DATA_CHUNK_SIZE, JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES,
+    JOB_MAX_SIZE, JOB_PREROLL_BYTES, clamp_stream_preroll_request, plan_safe_preroll,
 )
 from workers.doubao_image_worker import DoubaoImageWorker
 from workers.serial_worker import WorkerManager
@@ -628,6 +629,14 @@ class MainWindow(QMainWindow):
         gcode = self._get_gcode()
         if not gcode:
             return
+        if len(gcode) > JOB_MAX_SIZE:
+            message = (
+                f"仅上传任务不能超过 RX cache: {len(gcode)}/{JOB_MAX_SIZE} bytes；"
+                "大文件请使用上传并执行，并保留安全 preroll 切换余量。"
+            )
+            self._enqueue_log("error", message)
+            QMessageBox.warning(self, "任务错误", message)
+            return
         if self.worker.is_busy():
             self._enqueue_log("error", "任务进行中")
             return
@@ -690,10 +699,22 @@ class MainWindow(QMainWindow):
         crc = crc16_ccitt(gcode)
         total = len(gcode)
         requested_preroll = preroll
+        plan_requested = requested_preroll
+        plan_reason = "disabled"
         effective_preroll = 0
-        if requested_preroll > 0 and total > requested_preroll:
-            plan = plan_safe_preroll(gcode, requested_preroll)
+        if requested_preroll > 0:
+            plan_requested, capped = clamp_stream_preroll_request(total, requested_preroll)
+            if capped:
+                self.worker.log.emit(
+                    "status",
+                    "[EXEC_FLOW] preroll capped "
+                    f"requested={requested_preroll} capped={plan_requested} "
+                    f"cache={JOB_MAX_SIZE} headroom={JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES}",
+                )
+        if plan_requested > 0 and total > plan_requested:
+            plan = plan_safe_preroll(gcode, plan_requested)
             effective_preroll = plan.effective
+            plan_reason = plan.reason
             self.worker.log.emit(
                 "status",
                 "[EXEC_FLOW] preroll plan "
@@ -704,6 +725,15 @@ class MainWindow(QMainWindow):
 
         # Upload+execute is controlled by the execution preroll setting.
         use_preroll = effective_preroll > 0 and total > effective_preroll
+        if total > JOB_MAX_SIZE and not use_preroll:
+            if requested_preroll <= 0:
+                detail = "未启用 preroll"
+            else:
+                detail = f"未找到安全 preroll 边界 reason={plan_reason}"
+            raise RuntimeError(
+                f"大文件 {total} bytes 超过 RX cache {JOB_MAX_SIZE} bytes，"
+                f"上传并执行必须先在 cache 内切换到执行；{detail}"
+            )
         if requested_preroll > 0 and not use_preroll:
             self.worker.log.emit("status", f"[EXEC_FLOW] 未找到可用 preroll 边界，使用 normal upload 路径")
         self.worker.log.emit("status", f"[EXEC_FLOW] use_preroll={use_preroll} path={'preroll' if use_preroll else 'normal'}")

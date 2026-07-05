@@ -115,11 +115,11 @@
 #define TASK_PRIORITY_APP       27
 #define TASK_PRIORITY_CMD       1
 #define TASK_PRIORITY_BT        1
-#define TASK_PRIORITY_SDK       12
+#define TASK_PRIORITY_SDK       5
 #define TASK_PRIORITY_WF        25
-#define TASK_PRIORITY_BTH_SDK   13
-#define TASK_PRIORITY_BTH_RECV  10
-#define TASK_PRIORITY_SRV       12
+#define TASK_PRIORITY_BTH_SDK   5
+#define TASK_PRIORITY_BTH_RECV  3
+#define TASK_PRIORITY_SRV       5
 
 #define STACK_SIZE_BASELINE     0x200
 #define FS_EXTEND_STACK         (STACK_SIZE_BASELINE * 3)

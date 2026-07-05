@@ -9,6 +9,7 @@
 #include "sle_job_protocol.h"
 #include "securec.h"
 #include "soc_osal.h"
+#include "systick.h"
 
 #include "sle_common.h"
 #include "sle_connection_manager.h"
@@ -52,6 +53,34 @@
 #define SLE_JOB_ADV_DATA_LEN_MAX 251U
 #define SLE_JOB_ADV_TX_POWER 20U
 #define SLE_JOB_CONNECTED_ANNOUNCE_ENABLE 0
+#define SLE_JOB_RX_WORK_QUEUE_SIZE 8U
+#define SLE_JOB_RX_CB_SLOW_MS 5U
+#define SLE_JOB_RX_WORK_SLOW_MS 20U
+#define SLE_JOB_RX_WORK_USE_SEM 0
+#define SLE_JOB_RX_CB_LOG_FIRST 0U
+#define SLE_JOB_RX_CB_LOG_EVERY 0U
+#define SLE_JOB_RX_CB_GAP_SLOW_MS 250U
+
+typedef struct {
+    uint16_t conn_id;
+    uint16_t len;
+    uint32_t serial;
+    uint32_t cb_start_ms;
+    uint32_t enqueue_ms;
+    uint32_t ready_ms;
+    uint8_t data[SLE_JOB_PACKET_MAX_SIZE];
+} sle_job_rx_work_item_t;
+
+typedef struct {
+    bool header_ok;
+    bool is_data;
+    uint8_t type;
+    uint16_t seq;
+    uint16_t payload_len;
+    uint32_t job_id;
+    uint32_t offset;
+    uint16_t data_len;
+} sle_job_rx_cb_diag_t;
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
@@ -69,6 +98,19 @@ static volatile bool g_adv_enabled = false;
 static volatile bool g_adv_restart_pending = false;
 static uint8_t g_scan_rsp_data[SLE_JOB_ADV_DATA_LEN_MAX];
 static uint16_t g_scan_rsp_data_len = 0;
+static osal_mutex g_rx_work_mutex;
+static osal_semaphore g_rx_work_sem;
+static bool g_rx_work_sync_ready = false;
+static bool g_rx_work_task_started = false;
+static volatile bool g_rx_work_accepting = false;
+static uint8_t g_rx_work_head = 0;
+static uint8_t g_rx_work_tail = 0;
+static uint32_t g_rx_work_enqueued = 0;
+static uint32_t g_rx_work_dropped = 0;
+static uint8_t g_rx_work_max_used = 0;
+static uint32_t g_rx_cb_last_owner_ms = 0;
+static uint32_t g_rx_cb_data_index = 0;
+static sle_job_rx_work_item_t g_rx_work_queue[SLE_JOB_RX_WORK_QUEUE_SIZE];
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
@@ -109,6 +151,314 @@ static uint8_t conn_table_count(void)
         }
     }
     return count;
+}
+
+static uint8_t rx_work_queue_used_locked(void)
+{
+    if (g_rx_work_head >= g_rx_work_tail) {
+        return (uint8_t)(g_rx_work_head - g_rx_work_tail);
+    }
+    return (uint8_t)(SLE_JOB_RX_WORK_QUEUE_SIZE - g_rx_work_tail + g_rx_work_head);
+}
+
+static uint16_t rx_diag_le16(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
+
+static uint32_t rx_diag_le32(const uint8_t *data)
+{
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+}
+
+static sle_job_rx_cb_diag_t rx_cb_diag_parse_packet(const uint8_t *data, uint16_t len)
+{
+    sle_job_rx_cb_diag_t diag = {0};
+    if (data == NULL || len < SLE_JOB_PACKET_HEADER_LEN) {
+        return diag;
+    }
+
+    uint16_t magic = rx_diag_le16(&data[0]);
+    if (magic != SLE_JOB_PACKET_MAGIC) {
+        return diag;
+    }
+
+    diag.header_ok = true;
+    diag.type = data[2];
+    diag.seq = rx_diag_le16(&data[4]);
+    diag.payload_len = rx_diag_le16(&data[6]);
+
+    if (diag.type != SLE_JOB_PKT_JOB_DATA ||
+        diag.payload_len < sizeof(sle_job_data_payload_t) ||
+        len < (uint16_t)(SLE_JOB_PACKET_HEADER_LEN + sizeof(sle_job_data_payload_t))) {
+        return diag;
+    }
+
+    const uint8_t *payload = &data[SLE_JOB_PACKET_HEADER_LEN];
+    diag.is_data = true;
+    diag.job_id = rx_diag_le32(&payload[0]);
+    diag.offset = rx_diag_le32(&payload[4]);
+    diag.data_len = rx_diag_le16(&payload[8]);
+    return diag;
+}
+
+static void rx_work_queue_clear_locked(void)
+{
+    g_rx_work_head = 0;
+    g_rx_work_tail = 0;
+#if SLE_JOB_RX_WORK_USE_SEM
+    while (osal_sem_down_timeout(&g_rx_work_sem, 0) == OSAL_SUCCESS) {
+    }
+#endif
+}
+
+static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t len, uint32_t cb_start_ms)
+{
+    if (!g_rx_work_sync_ready || !g_rx_work_accepting || data == NULL || len == 0 ||
+        len > SLE_JOB_PACKET_MAX_SIZE) {
+        return false;
+    }
+
+    sle_job_rx_cb_diag_t diag = rx_cb_diag_parse_packet(data, len);
+    uint32_t prev_cb_ms = g_rx_cb_last_owner_ms;
+    uint32_t cb_gap_ms = (prev_cb_ms == 0U) ? 0U : (uint32_t)(cb_start_ms - prev_cb_ms);
+    g_rx_cb_last_owner_ms = cb_start_ms;
+    uint32_t data_index = 0;
+    if (diag.is_data) {
+        g_rx_cb_data_index++;
+        data_index = g_rx_cb_data_index;
+    }
+
+    uint32_t t_lock = (uint32_t)uapi_systick_get_ms();
+    uint32_t pre_lock_ms = t_lock - cb_start_ms;
+    osal_mutex_lock(&g_rx_work_mutex);
+    uint32_t lock_ms = (uint32_t)uapi_systick_get_ms() - t_lock;
+
+    uint8_t next = (uint8_t)((g_rx_work_head + 1U) % SLE_JOB_RX_WORK_QUEUE_SIZE);
+    if (next == g_rx_work_tail) {
+        g_rx_work_dropped++;
+        uint8_t used = rx_work_queue_used_locked();
+        osal_mutex_unlock(&g_rx_work_mutex);
+        osal_printk("[RX_CB_DROP] conn=%u len=%u used=%u drops=%u lock_ms=%u cb_ms=%u\r\n",
+                    (unsigned int)conn_id, (unsigned int)len, (unsigned int)used,
+                    (unsigned int)g_rx_work_dropped, (unsigned int)lock_ms,
+                    (unsigned int)((uint32_t)uapi_systick_get_ms() - cb_start_ms));
+        return false;
+    }
+
+    uint32_t serial = g_rx_work_enqueued + 1U;
+    uint32_t t_copy = (uint32_t)uapi_systick_get_ms();
+    sle_job_rx_work_item_t *item = &g_rx_work_queue[g_rx_work_head];
+    item->conn_id = conn_id;
+    item->len = len;
+    item->serial = serial;
+    item->cb_start_ms = cb_start_ms;
+    item->enqueue_ms = t_copy;
+    (void)memcpy_s(item->data, sizeof(item->data), data, len);
+    uint32_t copy_ms = (uint32_t)uapi_systick_get_ms() - t_copy;
+    uint32_t ready_ms = (uint32_t)uapi_systick_get_ms();
+    item->ready_ms = ready_ms;
+    g_rx_work_head = next;
+    g_rx_work_enqueued++;
+    uint8_t used = rx_work_queue_used_locked();
+    if (used > g_rx_work_max_used) {
+        g_rx_work_max_used = used;
+    }
+    uint32_t t_unlock = (uint32_t)uapi_systick_get_ms();
+    osal_mutex_unlock(&g_rx_work_mutex);
+    uint32_t unlock_ms = (uint32_t)uapi_systick_get_ms() - t_unlock;
+    uint32_t sem_up_ms = 0;
+#if SLE_JOB_RX_WORK_USE_SEM
+    uint32_t t_sem = (uint32_t)uapi_systick_get_ms();
+    osal_sem_up(&g_rx_work_sem);
+    sem_up_ms = (uint32_t)uapi_systick_get_ms() - t_sem;
+#endif
+
+    uint32_t cb_ms = (uint32_t)uapi_systick_get_ms() - cb_start_ms;
+    bool periodic_log = serial <= SLE_JOB_RX_CB_LOG_FIRST ||
+        (SLE_JOB_RX_CB_LOG_EVERY > 0U && (serial % SLE_JOB_RX_CB_LOG_EVERY) == 0U);
+    bool data_trace_log = diag.is_data &&
+        (data_index <= SLE_JOB_RX_CB_LOG_FIRST ||
+         (SLE_JOB_RX_CB_LOG_EVERY > 0U && (data_index % SLE_JOB_RX_CB_LOG_EVERY) == 0U));
+    bool cb_gap_slow = cb_gap_ms >= SLE_JOB_RX_CB_GAP_SLOW_MS;
+    if (periodic_log || cb_ms >= SLE_JOB_RX_CB_SLOW_MS || pre_lock_ms > 0U || copy_ms > 0U ||
+        lock_ms > 0U || unlock_ms > 0U || sem_up_ms > 0U ||
+        used > (SLE_JOB_RX_WORK_QUEUE_SIZE / 2U)) {
+        osal_printk("[RX_CB_TIMING] conn=%u len=%u serial=%u cb_ms=%u pre_lock_ms=%u "
+                    "lock_ms=%u copy_ms=%u unlock_ms=%u sem_up_ms=%u "
+                    "q_used=%u q_max=%u enq=%u drops=%u wake=%u\r\n",
+                    (unsigned int)conn_id, (unsigned int)len,
+                    (unsigned int)serial, (unsigned int)cb_ms,
+                    (unsigned int)pre_lock_ms, (unsigned int)lock_ms,
+                    (unsigned int)copy_ms, (unsigned int)unlock_ms,
+                    (unsigned int)sem_up_ms,
+                    (unsigned int)used, (unsigned int)g_rx_work_max_used,
+                    (unsigned int)g_rx_work_enqueued, (unsigned int)g_rx_work_dropped,
+                    (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
+    }
+    if (cb_gap_slow || data_trace_log) {
+        osal_printk("%s conn=%u len=%u serial=%u cb_gap_ms=%u cb_ms=%u "
+                    "type=0x%02x seq=%u payload=%u header=%u data_idx=%u "
+                    "job=%u off=%u data_len=%u q_used=%u q_max=%u drops=%u wake=%u\r\n",
+                    cb_gap_slow ? "[RX_CB_SLOW]" : "[RX_CB_TRACE]",
+                    (unsigned int)conn_id, (unsigned int)len,
+                    (unsigned int)serial, (unsigned int)cb_gap_ms,
+                    (unsigned int)cb_ms, (unsigned int)diag.type,
+                    (unsigned int)diag.seq, (unsigned int)diag.payload_len,
+                    (unsigned int)(diag.header_ok ? 1U : 0U),
+                    (unsigned int)data_index, (unsigned int)diag.job_id,
+                    (unsigned int)diag.offset, (unsigned int)diag.data_len,
+                    (unsigned int)used, (unsigned int)g_rx_work_max_used,
+                    (unsigned int)g_rx_work_dropped,
+                    (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
+    }
+    return true;
+}
+
+static bool rx_work_queue_pop(sle_job_rx_work_item_t *out)
+{
+    if (!g_rx_work_sync_ready || out == NULL) {
+        return false;
+    }
+#if SLE_JOB_RX_WORK_USE_SEM
+    if (osal_sem_down(&g_rx_work_sem) != OSAL_SUCCESS) {
+        return false;
+    }
+#endif
+
+    osal_mutex_lock(&g_rx_work_mutex);
+    if (g_rx_work_head == g_rx_work_tail) {
+        osal_mutex_unlock(&g_rx_work_mutex);
+        return false;
+    }
+    (void)memcpy_s(out, sizeof(*out), &g_rx_work_queue[g_rx_work_tail], sizeof(*out));
+    g_rx_work_tail = (uint8_t)((g_rx_work_tail + 1U) % SLE_JOB_RX_WORK_QUEUE_SIZE);
+    osal_mutex_unlock(&g_rx_work_mutex);
+    return true;
+}
+
+static uint8_t rx_work_queue_used(void);
+
+static int rx_work_task(void *arg)
+{
+    unused(arg);
+    sle_job_rx_work_item_t item;
+
+    while (1) {
+        if (!rx_work_queue_pop(&item)) {
+            osal_msleep(1);
+            continue;
+        }
+
+        uint32_t t_start = (uint32_t)uapi_systick_get_ms();
+        uint32_t wait_ms = t_start - item.enqueue_ms;
+        uint32_t cb_to_work_ms = t_start - item.cb_start_ms;
+        uint32_t ready_to_work_ms = t_start - item.ready_ms;
+        if (item.conn_id == g_owner_conn_id && g_packet_cb != NULL) {
+            g_packet_cb(item.conn_id, item.data, item.len);
+        } else {
+            osal_printk("[RX_WORK_DROP] conn=%u owner=%u len=%u wait_ms=%u cb=%u\r\n",
+                        (unsigned int)item.conn_id, (unsigned int)g_owner_conn_id,
+                        (unsigned int)item.len, (unsigned int)wait_ms,
+                        (unsigned int)(g_packet_cb != NULL));
+        }
+        uint32_t proc_ms = (uint32_t)uapi_systick_get_ms() - t_start;
+        if (wait_ms >= SLE_JOB_RX_WORK_SLOW_MS || proc_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
+            cb_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
+            ready_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS) {
+            osal_printk("[RX_WORK_TIMING] conn=%u len=%u serial=%u wait_ms=%u "
+                        "ready_to_work_ms=%u cb_to_work_ms=%u proc_ms=%u owner=%u q_used=%u\r\n",
+                        (unsigned int)item.conn_id, (unsigned int)item.len,
+                        (unsigned int)item.serial, (unsigned int)wait_ms,
+                        (unsigned int)ready_to_work_ms,
+                        (unsigned int)cb_to_work_ms, (unsigned int)proc_ms,
+                        (unsigned int)g_owner_conn_id,
+                        (unsigned int)rx_work_queue_used());
+        }
+    }
+
+    return 0;
+}
+
+static errcode_t rx_work_queue_start(void)
+{
+    if (!g_rx_work_sync_ready) {
+        if (osal_mutex_init(&g_rx_work_mutex) != OSAL_SUCCESS ||
+            osal_sem_init(&g_rx_work_sem, 0) != OSAL_SUCCESS) {
+            osal_printk("[RX_WORK] sync init failed\r\n");
+            return ERRCODE_FAIL;
+        }
+        g_rx_work_sync_ready = true;
+    }
+
+    osal_mutex_lock(&g_rx_work_mutex);
+    rx_work_queue_clear_locked();
+    g_rx_work_accepting = true;
+    g_rx_work_enqueued = 0;
+    g_rx_work_dropped = 0;
+    g_rx_work_max_used = 0;
+    g_rx_cb_last_owner_ms = 0;
+    g_rx_cb_data_index = 0;
+    osal_mutex_unlock(&g_rx_work_mutex);
+
+    if (g_rx_work_task_started) {
+        return ERRCODE_SUCC;
+    }
+
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(rx_work_task, NULL, "sle_rx_work", SLE_JOB_TASK_STACK_SIZE_SLE);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        osal_mutex_lock(&g_rx_work_mutex);
+        g_rx_work_accepting = false;
+        osal_mutex_unlock(&g_rx_work_mutex);
+        osal_printk("[RX_WORK] create task failed\r\n");
+        return ERRCODE_FAIL;
+    }
+    if (osal_kthread_set_priority(task, SLE_JOB_TASK_PRIO_SLE) != OSAL_SUCCESS) {
+        osal_printk("[RX_WORK] set priority failed\r\n");
+    }
+    osal_kfree(task);
+    g_rx_work_task_started = true;
+    osal_kthread_unlock();
+    osal_printk("[RX_WORK] started queue=%u prio=%u wake=%u\r\n",
+                (unsigned int)SLE_JOB_RX_WORK_QUEUE_SIZE,
+                (unsigned int)SLE_JOB_TASK_PRIO_SLE,
+                (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
+    return ERRCODE_SUCC;
+}
+
+static void rx_work_queue_stop(void)
+{
+    if (!g_rx_work_sync_ready) {
+        return;
+    }
+    osal_mutex_lock(&g_rx_work_mutex);
+    g_rx_work_accepting = false;
+    rx_work_queue_clear_locked();
+    osal_mutex_unlock(&g_rx_work_mutex);
+}
+
+static void rx_work_queue_clear(void)
+{
+    if (!g_rx_work_sync_ready) {
+        return;
+    }
+    osal_mutex_lock(&g_rx_work_mutex);
+    rx_work_queue_clear_locked();
+    osal_mutex_unlock(&g_rx_work_mutex);
+}
+
+static uint8_t rx_work_queue_used(void)
+{
+    if (!g_rx_work_sync_ready) {
+        return 0;
+    }
+    osal_mutex_lock(&g_rx_work_mutex);
+    uint8_t used = rx_work_queue_used_locked();
+    osal_mutex_unlock(&g_rx_work_mutex);
+    return used;
 }
 
 static void conn_table_add(uint16_t conn_id)
@@ -154,8 +504,15 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     ssaps_req_write_cb_t *write_cb_para, errcode_t status)
 {
     unused(server_id);
+    uint32_t t_cb = (uint32_t)uapi_systick_get_ms();
     if (status != ERRCODE_SLE_SUCCESS || write_cb_para == NULL ||
         write_cb_para->value == NULL || write_cb_para->length == 0) {
+        return;
+    }
+    if (write_cb_para->length > SLE_JOB_PACKET_MAX_SIZE) {
+        osal_printk("[RX_CB_DROP] reason=too_large conn=%u len=%u max=%u\r\n",
+                    (unsigned int)conn_id, (unsigned int)write_cb_para->length,
+                    (unsigned int)SLE_JOB_PACKET_MAX_SIZE);
         return;
     }
 
@@ -170,7 +527,12 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     }
 
     if (g_packet_cb != NULL) {
-        g_packet_cb(conn_id, write_cb_para->value, write_cb_para->length);
+        if (!rx_work_queue_push(conn_id, write_cb_para->value, write_cb_para->length, t_cb)) {
+            osal_printk("[RX_CB_DROP] reason=enqueue_fail conn=%u len=%u accepting=%u cb=%u\r\n",
+                        (unsigned int)conn_id, (unsigned int)write_cb_para->length,
+                        (unsigned int)g_rx_work_accepting,
+                        (unsigned int)(g_packet_cb != NULL));
+        }
     }
 }
 
@@ -307,6 +669,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
         (void)conn_table_remove(conn_id);
         if (was_owner) {
             g_owner_conn_id = SLE_CONN_INVALID;
+            rx_work_queue_clear();
         }
         if (g_server_stopping) {
             return;
@@ -550,6 +913,9 @@ errcode_t sle_job_route_server_init(void)
 {
     conn_table_reset();
     g_server_stopping = false;
+    if (rx_work_queue_start() != ERRCODE_SUCC) {
+        return ERRCODE_FAIL;
+    }
     sle_announce_register_cbks();
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
@@ -565,6 +931,7 @@ errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
     g_adv_data_ready = false;
+    rx_work_queue_stop();
     if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
         if (disc_ret != ERRCODE_SLE_SUCCESS) {

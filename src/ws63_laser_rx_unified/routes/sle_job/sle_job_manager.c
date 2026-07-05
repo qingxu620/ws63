@@ -23,7 +23,7 @@
 
 #define SLE_JOB_LINE_MAX 160
 #define SLE_JOB_EXEC_TASK_STACK_SIZE 0x2000
-#define SLE_JOB_EXEC_STREAM_CACHE_LOW_WATERMARK 4096U
+#define SLE_JOB_EXEC_STREAM_QUEUE_REFILL_WATERMARK 4U
 #define SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK 12U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_SLEEP_MS 5U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_LOG_MS 500U
@@ -48,6 +48,8 @@ static uint32_t g_executed_lines = 0;
 static uint32_t g_packet_count = 0;
 static uint32_t g_nack_count = 0;
 static uint32_t g_diag_rx_data_count = 0;
+static uint32_t g_last_data_rx_ms = 0;
+static uint32_t g_exec_stream_cache_target_watermark = 0;
 
 static uint8_t  g_last_ack_type = 0;
 static uint16_t g_last_ack_ack_seq = 0;
@@ -92,21 +94,32 @@ static errcode_t send_packet(uint8_t type, const void *payload, uint16_t payload
 {
     uint8_t buf[SLE_JOB_PACKET_MAX_SIZE];
     uint16_t out_len = 0;
+    uint32_t t_encode = (uint32_t)uapi_systick_get_ms();
     if (!sle_job_packet_encode(type, 0, next_resp_seq(), payload, payload_len,
                            buf, sizeof(buf), &out_len)) {
         osal_printk("[JOB_RX] encode response fail type=0x%02x\r\n", type);
         return ERRCODE_SLE_FAIL;
     }
+    uint32_t encode_ms = (uint32_t)uapi_systick_get_ms() - t_encode;
     uint32_t t_send = (uint32_t)uapi_systick_get_ms();
     errcode_t ret = sle_job_route_server_send_packet(buf, out_len);
-    uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
-    if (ret != ERRCODE_SLE_SUCCESS || send_ms >= SLE_JOB_SEND_SLOW_MS) {
-        osal_printk("[RX_SEND_TIMING] type=0x%02x len=%u ret=0x%x send_ms=%u owner=%u conns=%u state=%s\r\n",
+    uint32_t notify_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+    uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_encode;
+    if (ret != ERRCODE_SLE_SUCCESS || total_ms >= SLE_JOB_SEND_SLOW_MS) {
+        osal_printk("[RX_SEND_TIMING] type=0x%02x len=%u ret=0x%x encode_ms=%u notify_ms=%u "
+                    "total_ms=%u owner=%u conns=%u state=%s rx=%u consumed=%u avail=%u q=%u motion_busy=%u lines=%u\r\n",
                     type, (unsigned int)out_len, (unsigned int)ret,
-                    (unsigned int)send_ms,
+                    (unsigned int)encode_ms, (unsigned int)notify_ms,
+                    (unsigned int)total_ms,
                     (unsigned int)sle_job_route_server_get_owner_conn_id(),
                     (unsigned int)sle_job_route_server_get_connection_count(),
-                    state_name(g_state));
+                    state_name(g_state),
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                    (unsigned int)g_executed_lines);
     }
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[JOB_RX] send response fail type=0x%02x ret=0x%x\r\n", type, ret);
@@ -241,12 +254,24 @@ static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_sta
                               send_ret != ERRCODE_SLE_SUCCESS)) ||
         send_ret != ERRCODE_SLE_SUCCESS ||
         ack_send_ms >= SLE_JOB_SEND_SLOW_MS) {
-        osal_printk("[RX_ACK] t=%u type=0x%02x seq=%u st=%u off=%u credit=%u ret=0x%x send_ms=%u state=%s\r\n",
+        uint32_t now = (uint32_t)uapi_systick_get_ms();
+        uint32_t since_data_ms = (g_last_data_rx_ms == 0U) ? 0U : (uint32_t)(now - g_last_data_rx_ms);
+        osal_printk("[RX_ACK] t=%u type=0x%02x seq=%u st=%u off=%u credit=%u ret=0x%x "
+                    "send_ms=%u state=%s rx=%u consumed=%u avail=%u q=%u motion_busy=%u "
+                    "lines=%u since_data_ms=%u reason=%s\r\n",
                     (unsigned int)uapi_systick_get_ms(), (unsigned int)ack_type,
                     (unsigned int)ack_seq, (unsigned int)status,
                     (unsigned int)ack.offset, (unsigned int)ack.credit,
                     (unsigned int)send_ret, (unsigned int)ack_send_ms,
-                    state_name(g_state));
+                    state_name(g_state),
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                    (unsigned int)g_executed_lines,
+                    (unsigned int)since_data_ms,
+                    (reason != NULL) ? reason : "none");
     }
     if (status != SLE_JOB_STATUS_OK) {
         osal_printk("[JOB_RX_NACK_SEND] type=%u seq=%u status=%u state=%s reason=%s\r\n",
@@ -298,11 +323,23 @@ static void seq_commit(uint16_t seq)
 static bool handle_replayed_packet(const sle_job_packet_view_t *pkt)
 {
     if (g_last_seq != 0 && pkt->seq == g_last_seq) {
+        uint32_t t_resend = (uint32_t)uapi_systick_get_ms();
         osal_printk("[JOB_RX_SEQ] seq=%u expected=%u duplicate=1 cached_type=%u cached_status=%u cached_off=%u cached_credit=%u\r\n",
                     (unsigned int)pkt->seq, (unsigned int)g_expected_seq,
                     (unsigned int)g_last_ack_type, (unsigned int)g_last_ack_status,
                     (unsigned int)g_last_ack_offset, (unsigned int)g_last_ack_credit);
         send_ack(g_last_ack_type, g_last_ack_ack_seq, g_last_ack_status);
+        uint32_t resend_ms = (uint32_t)uapi_systick_get_ms() - t_resend;
+        osal_printk("[JOB_RX_DUP_ACK] seq=%u cached_seq=%u resend_ms=%u state=%s "
+                    "rx=%u consumed=%u avail=%u q=%u motion_busy=%u lines=%u\r\n",
+                    (unsigned int)pkt->seq, (unsigned int)g_last_ack_ack_seq,
+                    (unsigned int)resend_ms, state_name(g_state),
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                    (unsigned int)g_executed_lines);
         return true;
     }
     if (pkt->seq < g_last_seq) {
@@ -451,14 +488,49 @@ static void throttle_streaming_executor(void)
         return;
     }
 
-    uint32_t avail = sle_job_cache_available();
-    uint16_t queue = sle_job_motion_executor_queue_depth();
-    if (avail >= SLE_JOB_EXEC_STREAM_CACHE_LOW_WATERMARK &&
-        queue < SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK) {
-        return;
-    }
+    uint32_t throttle_start_ms = 0;
+    uint32_t last_log_ms = 0;
 
-    osal_msleep(SLE_JOB_EXEC_STREAM_THROTTLE_SLEEP_MS);
+    while (!g_abort_requested && !g_pause_requested && !sle_job_cache_is_all_received()) {
+        uint32_t avail = sle_job_cache_available();
+        uint16_t queue = sle_job_motion_executor_queue_depth();
+
+        uint32_t target = g_exec_stream_cache_target_watermark;
+        if (target == 0U) {
+            break;
+        }
+
+        if (avail >= target &&
+            queue < SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK) {
+            break;
+        }
+
+        if (queue < SLE_JOB_EXEC_STREAM_QUEUE_REFILL_WATERMARK && avail > 0U) {
+            break;
+        }
+
+        uint32_t now = (uint32_t)uapi_systick_get_ms();
+        if (throttle_start_ms == 0U) {
+            throttle_start_ms = now;
+            last_log_ms = now;
+        }
+        if ((uint32_t)(now - last_log_ms) >= SLE_JOB_EXEC_STREAM_THROTTLE_LOG_MS) {
+            osal_printk("[JOB_EXEC_THROTTLE] wait_ms=%u rx=%u consumed=%u avail=%u "
+                        "target=%u q=%u refill=%u high=%u motion_busy=%u lines=%u\r\n",
+                        (unsigned int)(now - throttle_start_ms),
+                        (unsigned int)sle_job_cache_received(),
+                        (unsigned int)sle_job_cache_consumed(),
+                        (unsigned int)avail,
+                        (unsigned int)target,
+                        (unsigned int)queue,
+                        (unsigned int)SLE_JOB_EXEC_STREAM_QUEUE_REFILL_WATERMARK,
+                        (unsigned int)SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK,
+                        (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                        (unsigned int)g_executed_lines);
+            last_log_ms = now;
+        }
+        osal_msleep(SLE_JOB_EXEC_STREAM_THROTTLE_SLEEP_MS);
+    }
 }
 
 static int job_exec_task(void *arg)
@@ -667,6 +739,8 @@ static void handle_job_begin(const sle_job_packet_view_t *pkt)
         g_pause_requested = false;
         g_executed_lines = 0;
         g_diag_rx_data_count = 0;
+        g_last_data_rx_ms = 0;
+        g_exec_stream_cache_target_watermark = 0;
         seq_commit(pkt->seq);
     }
     send_ack(pkt->type, pkt->seq, st);
@@ -688,6 +762,9 @@ static bool rx_should_log_data_timing(uint32_t data_index, uint32_t total_ms)
 static void handle_job_data(const sle_job_packet_view_t *pkt)
 {
     uint32_t t_start = (uint32_t)uapi_systick_get_ms();
+    uint32_t prev_data_rx_ms = g_last_data_rx_ms;
+    uint32_t rx_gap_ms = (prev_data_rx_ms == 0U) ? 0U : (uint32_t)(t_start - prev_data_rx_ms);
+    g_last_data_rx_ms = t_start;
 
     if (SLE_JOB_DIAG_LOG) {
         osal_printk("[JOB_DATA_IN] state=%s seq=%u pkt_len=%u payload=%p\r\n",
@@ -758,13 +835,21 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
     uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
     uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_start;
     if (rx_should_log_data_timing(data_index, total_ms) || st != SLE_JOB_STATUS_OK) {
-        osal_printk("[RX_TIMING] seq=%u data_idx=%u off=%u len=%u write_ms=%u ack_ms=%u "
-                    "total_ms=%u st=%u free=%u state=%s\r\n",
+        osal_printk("[RX_TIMING] seq=%u data_idx=%u off=%u len=%u gap_ms=%u write_ms=%u ack_ms=%u "
+                    "total_ms=%u st=%u free=%u rx=%u consumed=%u avail=%u q=%u motion_busy=%u "
+                    "lines=%u state=%s\r\n",
                     (unsigned int)pkt->seq, (unsigned int)data_index,
                     (unsigned int)hdr.offset, (unsigned int)hdr.data_len,
-                    (unsigned int)write_ms, (unsigned int)ack_ms,
+                    (unsigned int)rx_gap_ms, (unsigned int)write_ms, (unsigned int)ack_ms,
                     (unsigned int)total_ms, (unsigned int)st,
-                    (unsigned int)sle_job_cache_free(), state_name(g_state));
+                    (unsigned int)sle_job_cache_free(),
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                    (unsigned int)g_executed_lines,
+                    state_name(g_state));
     }
 }
 
@@ -814,6 +899,13 @@ static void handle_exec_start(const sle_job_packet_view_t *pkt)
         g_exec_active = true;
         g_abort_requested = false;
         g_pause_requested = false;
+        g_exec_stream_cache_target_watermark = sle_job_cache_available();
+        osal_printk("[EXEC_START] stream_target=%u rx=%u consumed=%u avail=%u q=%u\r\n",
+                    (unsigned int)g_exec_stream_cache_target_watermark,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth());
         g_state = SLE_JOB_STATE_EXECUTING;
         seq_commit(pkt->seq);
     }
@@ -1050,11 +1142,30 @@ void sle_job_manager_on_packet(uint16_t conn_id, const uint8_t *data, uint16_t l
             handle_exec_resume(&pkt);
             break;
         case SLE_JOB_PKT_STATUS_REQ:
-            if (pkt.seq == g_expected_seq) {
-                seq_commit(pkt.seq);
-            }
+        {
+            uint32_t t_status = (uint32_t)uapi_systick_get_ms();
+            uint32_t since_data_ms = (g_last_data_rx_ms == 0U) ? 0U : (uint32_t)(t_status - g_last_data_rx_ms);
+            uint16_t expected_seq = g_expected_seq;
+            uint16_t last_seq = g_last_seq;
+            /* STATUS_REQ is out-of-band and must not advance the ordered DATA/control seq. */
             send_status(SLE_JOB_STATUS_OK);
+            uint32_t status_ms = (uint32_t)uapi_systick_get_ms() - t_status;
+            if (g_state == SLE_JOB_STATE_EXECUTING || status_ms >= SLE_JOB_SEND_SLOW_MS) {
+                osal_printk("[RX_STATUS_REQ] seq=%u send_ms=%u since_data_ms=%u state=%s "
+                            "rx=%u consumed=%u avail=%u q=%u motion_busy=%u lines=%u "
+                            "expected=%u last=%u seq_neutral=1\r\n",
+                            (unsigned int)pkt.seq, (unsigned int)status_ms,
+                            (unsigned int)since_data_ms, state_name(g_state),
+                            (unsigned int)sle_job_cache_received(),
+                            (unsigned int)sle_job_cache_consumed(),
+                            (unsigned int)sle_job_cache_available(),
+                            (unsigned int)sle_job_motion_executor_queue_depth(),
+                            (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                            (unsigned int)g_executed_lines,
+                            (unsigned int)expected_seq, (unsigned int)last_seq);
+            }
             break;
+        }
         case SLE_JOB_PKT_ROUTE_SWITCH:
             handle_route_switch(&pkt);
             break;
@@ -1081,6 +1192,8 @@ void sle_job_manager_on_disconnect(void)
     g_last_ack_offset = 0;
     g_last_ack_credit = 0;
     g_route_switch_pending = false;
+    g_last_data_rx_ms = 0;
+    g_exec_stream_cache_target_watermark = 0;
 }
 
 bool sle_job_manager_is_idle(void)
@@ -1108,6 +1221,8 @@ void sle_job_manager_init(void)
     g_last_ack_offset = 0;
     g_last_ack_credit = 0;
     g_route_switch_pending = false;
+    g_last_data_rx_ms = 0;
+    g_exec_stream_cache_target_watermark = 0;
 #if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
     g_panel_status_seq = 1;
 #endif
