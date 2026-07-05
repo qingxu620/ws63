@@ -51,6 +51,7 @@
 #define SLE_JOB_ROUTE_MAX_CONNECTIONS 4U
 #define SLE_JOB_ADV_DATA_LEN_MAX 251U
 #define SLE_JOB_ADV_TX_POWER 20U
+#define SLE_JOB_CONNECTED_ANNOUNCE_ENABLE 0
 
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
@@ -288,8 +289,19 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         conn_table_add(conn_id);
+#if SLE_JOB_CONNECTED_ANNOUNCE_ENABLE
         errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
         unused(adv_ret);
+#else
+        if (g_adv_enabled) {
+            errcode_t adv_ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+            if (adv_ret == ERRCODE_SLE_SUCCESS) {
+                osal_printk("[job_rx] connected stop announce conn_id=%u\r\n", conn_id);
+            } else {
+                osal_printk("[job_rx] connected stop announce fail: 0x%x\r\n", adv_ret);
+            }
+        }
+#endif
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         bool was_owner = (conn_id == g_owner_conn_id);
         (void)conn_table_remove(conn_id);
@@ -303,7 +315,9 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             osal_printk("[job_rx] owner disconnected, force safe stop\r\n");
             g_disconnect_cb();
         }
-        sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (conn_table_count() == 0U) {
+            sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        }
     }
 }
 

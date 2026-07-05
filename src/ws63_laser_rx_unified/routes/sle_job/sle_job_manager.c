@@ -32,6 +32,8 @@
 #define SLE_JOB_PANEL_STATUS_PERIOD_MS 500U
 #define SLE_JOB_PANEL_STATUS_TASK_STACK_SIZE 0x1000U
 #define SLE_JOB_PANEL_STATUS_TASK_PRIO 6
+#define SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE 0
+#define SLE_JOB_SEND_SLOW_MS 50U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -50,8 +52,12 @@ static uint32_t g_diag_rx_data_count = 0;
 static uint8_t  g_last_ack_type = 0;
 static uint16_t g_last_ack_ack_seq = 0;
 static uint8_t  g_last_ack_status = 0;
+static uint32_t g_last_ack_offset = 0;
+static uint32_t g_last_ack_credit = 0;
 static volatile bool g_panel_status_task_started = false;
+#if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
 static uint16_t g_panel_status_seq = 1;
+#endif
 
 static const char *state_name(sle_job_state_t state)
 {
@@ -91,13 +97,24 @@ static errcode_t send_packet(uint8_t type, const void *payload, uint16_t payload
         osal_printk("[JOB_RX] encode response fail type=0x%02x\r\n", type);
         return ERRCODE_SLE_FAIL;
     }
+    uint32_t t_send = (uint32_t)uapi_systick_get_ms();
     errcode_t ret = sle_job_route_server_send_packet(buf, out_len);
+    uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+    if (ret != ERRCODE_SLE_SUCCESS || send_ms >= SLE_JOB_SEND_SLOW_MS) {
+        osal_printk("[RX_SEND_TIMING] type=0x%02x len=%u ret=0x%x send_ms=%u owner=%u conns=%u state=%s\r\n",
+                    type, (unsigned int)out_len, (unsigned int)ret,
+                    (unsigned int)send_ms,
+                    (unsigned int)sle_job_route_server_get_owner_conn_id(),
+                    (unsigned int)sle_job_route_server_get_connection_count(),
+                    state_name(g_state));
+    }
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[JOB_RX] send response fail type=0x%02x ret=0x%x\r\n", type, ret);
     }
     return ret;
 }
 
+#if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
 static errcode_t broadcast_packet(uint8_t type, const void *payload, uint16_t payload_len)
 {
     uint8_t buf[SLE_JOB_PACKET_MAX_SIZE];
@@ -171,9 +188,17 @@ static int panel_status_task(void *arg)
     }
     return 0;
 }
+#endif
 
 static void start_panel_status_task_once(void)
 {
+#if !SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
+    if (!g_panel_status_task_started) {
+        g_panel_status_task_started = true;
+        osal_printk("[PANEL_STATUS] disabled: adv_update=0 broadcast=0\r\n");
+    }
+    return;
+#else
     if (g_panel_status_task_started) {
         return;
     }
@@ -191,6 +216,7 @@ static void start_panel_status_task_once(void)
     g_panel_status_task_started = true;
     osal_kfree(task);
     osal_kthread_unlock();
+#endif
 }
 
 static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status, const char *reason)
@@ -205,13 +231,22 @@ static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_sta
     g_last_ack_type = ack_type;
     g_last_ack_ack_seq = ack_seq;
     g_last_ack_status = status;
+    g_last_ack_offset = ack.offset;
+    g_last_ack_credit = ack.credit;
+    uint32_t t_send = (uint32_t)uapi_systick_get_ms();
     errcode_t send_ret = send_packet((status == SLE_JOB_STATUS_OK) ? SLE_JOB_PKT_ACK : SLE_JOB_PKT_NACK, &ack, sizeof(ack));
+    uint32_t ack_send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
     if (ack_type != SLE_JOB_PKT_JOB_DATA ||
         (SLE_JOB_DIAG_LOG && (g_diag_rx_data_count <= 8U || status != SLE_JOB_STATUS_OK ||
-                              send_ret != ERRCODE_SLE_SUCCESS))) {
-        osal_printk("[RX_ACK] t=%u seq=%u st=%u off=%u ret=0x%x\r\n",
-                    (unsigned int)uapi_systick_get_ms(), (unsigned int)ack_seq,
-                    (unsigned int)status, (unsigned int)ack.offset, (unsigned int)send_ret);
+                              send_ret != ERRCODE_SLE_SUCCESS)) ||
+        send_ret != ERRCODE_SLE_SUCCESS ||
+        ack_send_ms >= SLE_JOB_SEND_SLOW_MS) {
+        osal_printk("[RX_ACK] t=%u type=0x%02x seq=%u st=%u off=%u credit=%u ret=0x%x send_ms=%u state=%s\r\n",
+                    (unsigned int)uapi_systick_get_ms(), (unsigned int)ack_type,
+                    (unsigned int)ack_seq, (unsigned int)status,
+                    (unsigned int)ack.offset, (unsigned int)ack.credit,
+                    (unsigned int)send_ret, (unsigned int)ack_send_ms,
+                    state_name(g_state));
     }
     if (status != SLE_JOB_STATUS_OK) {
         osal_printk("[JOB_RX_NACK_SEND] type=%u seq=%u status=%u state=%s reason=%s\r\n",
@@ -263,9 +298,10 @@ static void seq_commit(uint16_t seq)
 static bool handle_replayed_packet(const sle_job_packet_view_t *pkt)
 {
     if (g_last_seq != 0 && pkt->seq == g_last_seq) {
-        osal_printk("[JOB_RX_SEQ] seq=%u expected=%u duplicate=1 cached_type=%u cached_status=%u\r\n",
+        osal_printk("[JOB_RX_SEQ] seq=%u expected=%u duplicate=1 cached_type=%u cached_status=%u cached_off=%u cached_credit=%u\r\n",
                     (unsigned int)pkt->seq, (unsigned int)g_expected_seq,
-                    (unsigned int)g_last_ack_type, (unsigned int)g_last_ack_status);
+                    (unsigned int)g_last_ack_type, (unsigned int)g_last_ack_status,
+                    (unsigned int)g_last_ack_offset, (unsigned int)g_last_ack_credit);
         send_ack(g_last_ack_type, g_last_ack_ack_seq, g_last_ack_status);
         return true;
     }
@@ -1042,6 +1078,8 @@ void sle_job_manager_on_disconnect(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
+    g_last_ack_offset = 0;
+    g_last_ack_credit = 0;
     g_route_switch_pending = false;
 }
 
@@ -1067,7 +1105,11 @@ void sle_job_manager_init(void)
     g_last_ack_type = 0;
     g_last_ack_ack_seq = 0;
     g_last_ack_status = 0;
+    g_last_ack_offset = 0;
+    g_last_ack_credit = 0;
     g_route_switch_pending = false;
+#if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
     g_panel_status_seq = 1;
+#endif
     start_panel_status_task_once();
 }

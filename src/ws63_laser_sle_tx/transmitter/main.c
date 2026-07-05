@@ -67,9 +67,15 @@ static void set_host_job_topology_active(bool active)
     }
 
     g_host_job_topology_active = active;
-    sle_job_client_set_panel_link_allowed(!active);
-    osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u\r\n",
-                active ? 1U : 0U, active ? 0U : 1U);
+    if (active) {
+        sle_job_client_set_panel_link_allowed(false);
+        sle_job_client_set_background_seek_allowed(false);
+    } else {
+        sle_job_client_set_background_seek_allowed(true);
+        sle_job_client_set_panel_link_allowed(true);
+    }
+    osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u seek_bg=%u\r\n",
+                active ? 1U : 0U, active ? 0U : 1U, active ? 0U : 1U);
 }
 
 static bool topology_state_is_terminal(uint8_t state)
@@ -223,6 +229,7 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
         uint32_t t_send = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = sle_job_client_send_packet(packet, packet_len);
         uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+        uint32_t wait_ms = 0;
         if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ret != ERRCODE_SLE_SUCCESS)) {
             osal_printk("[TX_CFM] t=%u seq=%u ret=0x%x cost=%u\r\n",
                         (unsigned int)uapi_systick_get_ms(), seq,
@@ -256,13 +263,37 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
                 }
                 break;
             }
-            osal_printk("[TX_TO] t=%u seq=%u retry=%u waited=%u\r\n",
-                        (unsigned int)uapi_systick_get_ms(), seq,
-                        (unsigned int)retry,
-                        (unsigned int)((uint32_t)uapi_systick_get_ms() - t_ack));
+            wait_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
+            osal_printk("[TX_TO] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                        "retry=%u waited=%u send_ret=0x%x send_ms=%u got=%u st=%u link=%u status=%s\r\n",
+                        (unsigned int)uapi_systick_get_ms(), type, seq,
+                        (unsigned int)dbg_data_index, (unsigned int)dbg_off,
+                        (unsigned int)dbg_dlen, (unsigned int)retry,
+                        (unsigned int)wait_ms, (unsigned int)ret,
+                        (unsigned int)send_ms, (unsigned int)g_wait_got_ack,
+                        (unsigned int)g_wait_status,
+                        (unsigned int)sle_job_client_is_connected(),
+                        sle_job_client_get_status());
+        } else {
+            osal_printk("[TX_SEND_FAIL] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                        "retry=%u send_ret=0x%x send_ms=%u link=%u status=%s\r\n",
+                        (unsigned int)uapi_systick_get_ms(), type, seq,
+                        (unsigned int)dbg_data_index, (unsigned int)dbg_off,
+                        (unsigned int)dbg_dlen, (unsigned int)retry,
+                        (unsigned int)ret, (unsigned int)send_ms,
+                        (unsigned int)sle_job_client_is_connected(),
+                        sle_job_client_get_status());
         }
     }
 
+    osal_printk("[TX_FAIL] t=%u type=0x%02x seq=%u data_idx=%u off=%u len=%u "
+                "status=%u got=%u retries=%u link=%u client=%s\r\n",
+                (unsigned int)uapi_systick_get_ms(), type, seq,
+                (unsigned int)dbg_data_index, (unsigned int)dbg_off,
+                (unsigned int)dbg_dlen, (unsigned int)g_wait_status,
+                (unsigned int)g_wait_got_ack, (unsigned int)JOB_TX_RETRY_MAX,
+                (unsigned int)sle_job_client_is_connected(),
+                sle_job_client_get_status());
     g_wait_active = false;
     g_wait_ack_seq = 0;
     host_sendf("@NACK type=%u seq=%u status=%u\r\n", type, seq, g_wait_status);
@@ -316,9 +347,13 @@ static void response_cb(const uint8_t *data, uint16_t length)
         ack_payload_t ack;
         memcpy(&ack, pkt.payload, sizeof(ack));
         if (!g_wait_active || ack.ack_seq != g_wait_ack_seq) {
-            osal_printk("[TX_OLD] t=%u ack_seq=%u wait=%u active=%u\r\n",
-                        (unsigned int)uapi_systick_get_ms(), ack.ack_seq,
-                        (unsigned int)g_wait_ack_seq, (unsigned int)g_wait_active);
+            osal_printk("[TX_OLD] t=%u pkt_type=0x%02x ack_type=0x%02x ack_seq=%u wait=%u "
+                        "st=%u off=%u credit=%u active=%u cost=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), pkt.type, ack.ack_type,
+                        ack.ack_seq, (unsigned int)g_wait_ack_seq, ack.status,
+                        (unsigned int)ack.offset, (unsigned int)ack.credit,
+                        (unsigned int)g_wait_active,
+                        (unsigned int)(uapi_systick_get_ms() - g_wait_start_ms));
             return;
         }
         if (JOB_DIAG_LOG && (g_diag_data_count <= JOB_DIAG_LOG_MAX_DATA || ack.status != 0)) {

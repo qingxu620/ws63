@@ -59,6 +59,16 @@ RX_STATUS_COMPAT_RE = re.compile(
 RX_EXEC_DONE_RE = re.compile(
     r"\[JOB_EXEC\]\s+done\s+job=(\d+)\b"
 )
+NOISY_SDK_LOG_RE = re.compile(
+    r"^\[ACore\]\s+sle\s+(?:stop announce in|start announce in|adv cbk in, event:\d+ status:0)\b"
+)
+NOISY_RUNTIME_LOG_RE = re.compile(
+    r"^(?:"
+    r"xo update temp:\d+,diff:\d+,xo:0x[0-9a-fA-F]+"
+    r"|APP\|\[SYS INFO\]\s+mem:"
+    r"|@ACK type=2 seq=0 status=0 offset=\d+\b"
+    r")"
+)
 
 
 @dataclass
@@ -95,6 +105,18 @@ class PrerollPlan:
     effective: int
     safe_line_end: int
     reason: str
+
+
+def is_noisy_sdk_log(line: str) -> bool:
+    return NOISY_SDK_LOG_RE.search(line) is not None
+
+
+def is_noisy_runtime_log(line: str) -> bool:
+    return NOISY_RUNTIME_LOG_RE.search(line) is not None
+
+
+def should_display_serial_line(line: str) -> bool:
+    return not is_noisy_sdk_log(line) and not is_noisy_runtime_log(line)
 
 
 def parse_rx_status(line: str) -> Optional[RxStatus]:
@@ -280,9 +302,10 @@ class SleJobSerialClient:
                 ready, buf = parts[:-1], parts[-1]
             for raw in ready:
                 line = raw.strip()
-                if line:
+                if line and not is_noisy_sdk_log(line):
                     self._lines.put(line)
-                    self._on_log("rx", line)
+                    if not is_noisy_runtime_log(line):
+                        self._on_log("rx", line)
 
     def _drain_lines(self) -> None:
         while True:
@@ -771,5 +794,5 @@ class SerialLogMonitor:
                 ready, buf = parts[:-1], parts[-1]
             for raw in ready:
                 line = raw.strip()
-                if line:
+                if line and should_display_serial_line(line):
                     self._on_log(self._name.lower(), line)

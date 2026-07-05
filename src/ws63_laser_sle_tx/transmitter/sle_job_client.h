@@ -22,6 +22,7 @@ bool sle_job_client_is_connected(void);
 bool sle_job_client_panel_is_connected(void);
 bool sle_job_client_panel_link_allowed(void);
 void sle_job_client_set_panel_link_allowed(bool allowed);
+void sle_job_client_set_background_seek_allowed(bool allowed);
 void sle_job_client_poll_connect(void);
 const char *sle_job_client_get_status(void);
 void sle_job_client_set_response_cb(sle_job_response_cb_t cb);

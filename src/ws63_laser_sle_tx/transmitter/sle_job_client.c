@@ -27,6 +27,7 @@
 #define SLE_LINK_ROLE_NONE 0U
 #define SLE_LINK_ROLE_RX 1U
 #define SLE_LINK_ROLE_PANEL 2U
+#define JOB_SLE_WRITE_CALL_SLOW_MS 20U
 
 #ifndef SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME
 #define SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME 0x0B
@@ -44,6 +45,7 @@
 static uint16_t g_conn_id = SLE_CONN_INVALID;
 static uint16_t g_panel_conn_id = SLE_CONN_INVALID;
 static bool g_panel_link_allowed = true;
+static bool g_background_seek_allowed = true;
 static bool g_sle_enabled = false;
 static bool g_seek_active = false;
 static bool g_connecting = false;
@@ -204,7 +206,9 @@ static bool need_rx_link(void)
 
 static bool need_panel_link(void)
 {
-    return g_panel_link_allowed && g_panel_conn_id == SLE_CONN_INVALID;
+    return g_background_seek_allowed &&
+           g_panel_link_allowed &&
+           g_panel_conn_id == SLE_CONN_INVALID;
 }
 
 static void start_seek_if_needed(void)
@@ -234,6 +238,20 @@ static void start_seek_if_needed(void)
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[tx] start seek fail: 0x%x\r\n", ret);
+    }
+}
+
+static void stop_seek_if_no_rx_link_needed(const char *reason)
+{
+    if (!g_seek_active || need_rx_link()) {
+        return;
+    }
+
+    errcode_t ret = sle_stop_seek();
+    osal_printk("[tx_seek] stop background seek reason=%s ret=0x%x\r\n",
+                (reason != NULL) ? reason : "unspecified", ret);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[tx_seek] stop background seek fail: 0x%x\r\n", ret);
     }
 }
 
@@ -517,6 +535,7 @@ errcode_t sle_job_client_init(void)
     g_conn_id = SLE_CONN_INVALID;
     g_panel_conn_id = SLE_CONN_INVALID;
     g_panel_link_allowed = true;
+    g_background_seek_allowed = true;
     g_sle_enabled = false;
     g_seek_active = false;
     g_connecting = false;
@@ -580,10 +599,13 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
 #if JOB_TX_DATA_USE_WRITE_CMD
     uint8_t pkt_type = packet_type_from_encoded(data, len);
     if (pkt_type == PKT_JOB_DATA) {
+        uint32_t t_write = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = ssapc_write_cmd(SLE_CLIENT_ID, g_conn_id, &param);
-        if (ret != ERRCODE_SLE_SUCCESS) {
-            osal_printk("[JOB_SLE_WRITE_CMD_FAIL] ret=0x%x len=%u\r\n",
-                        ret, (unsigned int)len);
+        uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_write;
+        if (ret != ERRCODE_SLE_SUCCESS || call_ms >= JOB_SLE_WRITE_CALL_SLOW_MS) {
+            osal_printk("[JOB_SLE_WRITE_CMD_TIMING] ret=0x%x len=%u call_ms=%u conn=%u handle=0x%x\r\n",
+                        ret, (unsigned int)len, (unsigned int)call_ms,
+                        (unsigned int)g_conn_id, (unsigned int)g_data_handle);
         }
         return ret;
     }
@@ -600,9 +622,12 @@ errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
         osal_printk("[JOB_SLE_WRITE_CALL] conn=%u handle=0x%x len=%u\r\n",
                     (unsigned int)g_conn_id, (unsigned int)g_data_handle, (unsigned int)len);
     }
+    uint32_t t_write = (uint32_t)uapi_systick_get_ms();
     errcode_t ret = ssapc_write_req(SLE_CLIENT_ID, g_conn_id, &param);
-    if (JOB_DIAG_LOG || ret != ERRCODE_SLE_SUCCESS) {
-        osal_printk("[JOB_SLE_WRITE_RET] ret=0x%x len=%u\r\n", ret, (unsigned int)len);
+    uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_write;
+    if (JOB_DIAG_LOG || ret != ERRCODE_SLE_SUCCESS || call_ms >= JOB_SLE_WRITE_CALL_SLOW_MS) {
+        osal_printk("[JOB_SLE_WRITE_RET] ret=0x%x len=%u call_ms=%u\r\n",
+                    ret, (unsigned int)len, (unsigned int)call_ms);
     }
     if (ret != ERRCODE_SLE_SUCCESS) {
         return ret;
@@ -638,6 +663,9 @@ bool sle_job_client_panel_link_allowed(void)
 void sle_job_client_set_panel_link_allowed(bool allowed)
 {
     if (g_panel_link_allowed == allowed) {
+        if (!allowed) {
+            stop_seek_if_no_rx_link_needed("panel-disabled");
+        }
         return;
     }
 
@@ -656,6 +684,32 @@ void sle_job_client_set_panel_link_allowed(bool allowed)
                 osal_printk("[tx_panel] disconnect submit fail: 0x%x\r\n", ret);
             }
         }
+        stop_seek_if_no_rx_link_needed("panel-disabled");
+        return;
+    }
+
+    start_seek_if_needed();
+}
+
+void sle_job_client_set_background_seek_allowed(bool allowed)
+{
+    if (g_background_seek_allowed == allowed) {
+        if (!allowed) {
+            stop_seek_if_no_rx_link_needed("background-disabled");
+        }
+        return;
+    }
+
+    g_background_seek_allowed = allowed;
+    osal_printk("[tx_seek] background_allowed=%u\r\n", allowed ? 1U : 0U);
+
+    if (!allowed) {
+        if (g_pending_role == SLE_LINK_ROLE_PANEL) {
+            g_connecting = false;
+            g_pending_role = SLE_LINK_ROLE_NONE;
+            memset(&g_pending_addr, 0, sizeof(g_pending_addr));
+        }
+        stop_seek_if_no_rx_link_needed("background-disabled");
         return;
     }
 

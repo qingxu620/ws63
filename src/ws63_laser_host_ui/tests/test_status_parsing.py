@@ -14,9 +14,12 @@ from transports.sle_tx_transport import (
     TX_UART_RESYNC_BYTE,
     UploadInterrupted,
     WaitResult,
+    is_noisy_sdk_log,
+    is_noisy_runtime_log,
     parse_rx_status,
     plan_safe_preroll,
     prepare_gcode_for_rx,
+    should_display_serial_line,
 )
 
 
@@ -94,6 +97,27 @@ class StatusParsingTests(unittest.TestCase):
         )
 
         self.assertEqual(result.line, "@OK resync rx=aborted")
+
+    def test_noisy_sdk_log_filter_only_drops_sle_announce_spam(self) -> None:
+        self.assertTrue(is_noisy_sdk_log("[ACore] sle stop announce in, adv_id:1"))
+        self.assertTrue(is_noisy_sdk_log("[ACore] sle start announce in, adv_id:1"))
+        self.assertTrue(is_noisy_sdk_log("[ACore] sle adv cbk in, event:4 status:0"))
+        self.assertFalse(is_noisy_sdk_log("[ACore] sle adv cbk in, event:4 status:1"))
+        self.assertFalse(is_noisy_sdk_log("[ACore] serious fault"))
+        self.assertFalse(is_noisy_sdk_log("@STATUS state=1 status=0 job=1 rx=0 total=10 free=1 lines=0"))
+
+    def test_runtime_log_filter_hides_only_redundant_status_noise(self) -> None:
+        self.assertTrue(is_noisy_runtime_log("xo update temp:4,diff:0,xo:0x3083c"))
+        self.assertTrue(is_noisy_runtime_log("APP|[SYS INFO] mem: used:1, free:2; log: drop/all[0/2], at_recv 0."))
+        self.assertTrue(is_noisy_runtime_log("@ACK type=2 seq=0 status=0 offset=214"))
+
+        self.assertFalse(is_noisy_runtime_log("@NACK type=2 seq=0 status=9 offset=214"))
+        self.assertFalse(is_noisy_runtime_log("[TX_TO] type=0x02 seq=1 retry=0"))
+        self.assertFalse(is_noisy_runtime_log("[RX_SEND_TIMING] type=0x80 send_ms=300"))
+        self.assertFalse(is_noisy_runtime_log("[HOST_TIMING] chunk=1 off=214"))
+
+        self.assertFalse(should_display_serial_line("@ACK type=2 seq=0 status=0 offset=214"))
+        self.assertTrue(should_display_serial_line("@NACK type=2 seq=0 status=9 offset=214"))
 
     def test_preroll_plan_uses_nearby_line_boundary(self) -> None:
         gcode = (b"G1 X1\n" * 700) + b"S0\n" + (b"G1 X2\n" * 100)
