@@ -55,15 +55,20 @@
 #define SLE_SEEK_ACTIVE 0x01
 #endif
 
+#ifndef SLE_SEEK_PASSIVE
+#define SLE_SEEK_PASSIVE 0x00
+#endif
+
 #define PANEL_SLE_CONN_INVALID 0xFFFF
 #define PANEL_SLE_CLIENT_ID 0
 #define PANEL_SLE_UUID_LEN_2 2
 #define PANEL_SLE_CONNECT_RETRY_MS 1000U
 #define PANEL_SLE_WRITE_CFM_TIMEOUT_MS 1000U
 #define PANEL_SLE_FAST_CONN_INTERVAL 0x14U
+#define PANEL_SLE_ONLINE_CONN_INTERVAL 0x20U
 #define PANEL_SLE_FAST_CONN_TIMEOUT  0x1F4U
-#define PANEL_SLE_STATUS_LISTEN_PERIOD_MS 500U
-#define PANEL_SLE_STATUS_LISTEN_WINDOW_MS 80U
+#define PANEL_SLE_STATUS_LISTEN_PERIOD_MS 1000U
+#define PANEL_SLE_STATUS_LISTEN_WINDOW_MS 1200U
 #define PANEL_SLE_STATUS_LISTEN_TASK_STACK_SIZE 0x1000
 #define PANEL_SLE_STATUS_LISTEN_TASK_PRIORITY 26
 
@@ -705,8 +710,7 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
         return;
     }
 
-    bool matches_rx = seek_result_matches_receiver(seek_result);
-    if (matches_rx) {
+    if (g_seek_for_status_listen) {
         panel_status_payload_t status;
         if (adv_panel_status_parse(seek_result, &status)) {
             apply_panel_status(&status);
@@ -725,7 +729,13 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
                 }
                 return;
             }
-        } else if (g_seek_for_status_listen) {
+        }
+    }
+
+    bool matches_rx = seek_result_matches_receiver(seek_result);
+    if (matches_rx && g_seek_for_status_listen) {
+        panel_status_payload_t status;
+        if (!adv_panel_status_parse(seek_result, &status)) {
             static uint32_t s_status_parse_miss_count = 0;
             if ((s_status_parse_miss_count++ & 0x0FU) == 0U) {
                 osal_printk("[PANEL_SLE_LISTEN] rx adv no status len=%u\r\n",
@@ -807,8 +817,8 @@ static void sle_enable_cbk(errcode_t status)
     param.announce_channel_map = SLE_ADV_CHANNEL_MAP_DEFAULT;
     param.announce_interval_min = 0xC8;
     param.announce_interval_max = 0xC8;
-    param.conn_interval_min = 0x14;
-    param.conn_interval_max = 0x14;
+    param.conn_interval_min = PANEL_SLE_ONLINE_CONN_INTERVAL;
+    param.conn_interval_max = PANEL_SLE_ONLINE_CONN_INTERVAL;
     param.conn_max_latency = 0;
     param.conn_supervision_timeout = 0x1F4;
     param.announce_tx_power = 20;
@@ -1038,6 +1048,9 @@ bool panel_transport_sle_tx_is_connected(void)
 
 bool panel_transport_sle_can_control_rx(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        return false;
+    }
     return !panel_transport_sle_tx_is_connected() || g_standalone_session_active;
 }
 

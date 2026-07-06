@@ -28,6 +28,7 @@ JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES = 8192
 JOB_EXEC_PREROLL_MAX_BYTES = JOB_MAX_SIZE - JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
 DATA_ACK_TIMEOUT_MIN_S = 10.0
+DATA_ACK_KEEPALIVE_MAX_S = 180.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
 TX_RESYNC_TIMEOUT_MIN_S = 12.0
 PREROLL_CONTROL_TIMEOUT_MIN_S = 12.0
@@ -64,6 +65,7 @@ RX_STATUS_COMPAT_RE = re.compile(
 RX_EXEC_DONE_RE = re.compile(
     r"\[JOB_EXEC\]\s+done\s+job=(\d+)\b"
 )
+TX_DATA_BUSY_RE = re.compile(r"^@BUSY type=2\b")
 NOISY_SDK_LOG_RE = re.compile(
     r"^\[ACore\]\s+sle\s+(?:stop announce in|start announce in|adv cbk in, event:\d+ status:0)\b"
 )
@@ -360,13 +362,16 @@ class SleJobSerialClient:
 
     def wait_for(self, pattern: str, timeout: float, *,
                  regex: bool = False, collect_lines: bool = False,
-                 ignore_unknown_command: bool = False) -> WaitResult:
+                 ignore_unknown_command: bool = False,
+                 keepalive_pattern: Optional[re.Pattern[str]] = None,
+                 max_timeout: Optional[float] = None) -> WaitResult:
         started = time.monotonic()
         deadline = started + timeout
+        absolute_deadline = started + (max_timeout if max_timeout is not None else timeout)
         compiled = re.compile(pattern) if regex else None
         last_line = ""
         recent: list[str] = []
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and time.monotonic() < absolute_deadline:
             try:
                 line = self._lines.get(timeout=0.05)
             except queue.Empty:
@@ -379,6 +384,9 @@ class SleJobSerialClient:
             matched = bool(compiled.search(line)) if compiled else pattern in line
             if matched:
                 return WaitResult(line=line, elapsed_ms=int((time.monotonic() - started) * 1000))
+            if keepalive_pattern is not None and keepalive_pattern.search(line):
+                deadline = min(time.monotonic() + timeout, absolute_deadline)
+                continue
             if ignore_unknown_command and line == "@ERR unknown_command":
                 continue
             if line.startswith("@ERR") or line.startswith("@NACK"):
@@ -665,6 +673,8 @@ class SleJobSerialClient:
                         ack = self.wait_for(
                             rf"@ACK type=2 .*status=0 .*offset={expected_end}\b",
                             data_timeout, regex=True,
+                            keepalive_pattern=TX_DATA_BUSY_RE,
+                            max_timeout=max(data_timeout, DATA_ACK_KEEPALIVE_MAX_S),
                         )
                     except RuntimeError as exc:
                         if "@ERR unknown_command" in str(exc):

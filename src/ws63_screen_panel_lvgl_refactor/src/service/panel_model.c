@@ -408,6 +408,9 @@ void panel_model_tick(void)
 
 void panel_model_request_stop(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        return;
+    }
     if (g_model.view_mode == PANEL_VIEW_OFFLINE && !g_model.tx_connected) {
         g_model.owner = PANEL_OWNER_SCREEN;
         g_model.mode = PANEL_MODE_OFFLINE;
@@ -422,6 +425,9 @@ void panel_model_request_stop(void)
 
 void panel_model_request_abort(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        return;
+    }
     if (g_model.view_mode == PANEL_VIEW_OFFLINE && !g_model.tx_connected) {
         g_model.owner = PANEL_OWNER_SCREEN;
         g_model.mode = PANEL_MODE_OFFLINE;
@@ -437,6 +443,9 @@ void panel_model_request_abort(void)
 
 void panel_model_request_focus_off(void)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        return;
+    }
     g_model.state = SYS_STATE_REQUESTING_FOCUS_OFF;
     g_model.focus_active = false;
     g_model.laser_output_active = false;
@@ -786,7 +795,10 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
     g_model.progress = clamp_pct(g_model.progress);
 
     if (job_id != 0U) {
-        snprintf(g_model.job_name, sizeof(g_model.job_name), "RX_JOB_%03u", (unsigned int)job_id);
+        const char *prefix = (g_model.owner == PANEL_OWNER_HOST &&
+                              g_model.mode == PANEL_MODE_ONLINE) ? "HOST_JOB" : "RX_JOB";
+        snprintf(g_model.job_name, sizeof(g_model.job_name), "%s_%03u",
+                 prefix, (unsigned int)job_id);
     } else {
         snprintf(g_model.job_name, sizeof(g_model.job_name), "暂无任务");
     }
@@ -809,6 +821,9 @@ void panel_model_get_button_permissions(panel_button_permissions_t *out)
     out->requesting_stop = (g_model.state == SYS_STATE_REQUESTING_STOP);
     out->requesting_abort = (g_model.state == SYS_STATE_REQUESTING_ABORT);
     out->requesting_focus_off = (g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF);
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        return;
+    }
 
     bool link_bad = (g_model.mode == PANEL_MODE_LINK_LOST || g_model.state == SYS_STATE_LINK_LOST);
     bool error = (g_model.mode == PANEL_MODE_ERROR || g_model.state == SYS_STATE_ERROR);

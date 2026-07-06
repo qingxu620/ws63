@@ -22,6 +22,7 @@
 #include <string.h>
 
 /* Status bar */
+static lv_obj_t *g_title_dot;
 static lv_obj_t *g_lbl_rx;
 static lv_obj_t *g_lbl_sle;
 
@@ -101,12 +102,12 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_add_event_cb(bar, status_bar_click_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *title_dot = lv_obj_create(bar);
-    lv_obj_remove_style_all(title_dot);
-    lv_obj_set_size(title_dot, 8, 8);
-    lv_obj_set_style_bg_color(title_dot, COLOR_LASER_BLUE, 0);
-    lv_obj_set_style_bg_opa(title_dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(title_dot, LV_RADIUS_CIRCLE, 0);
+    g_title_dot = lv_obj_create(bar);
+    lv_obj_remove_style_all(g_title_dot);
+    lv_obj_set_size(g_title_dot, 8, 8);
+    lv_obj_set_style_bg_color(g_title_dot, COLOR_LASER_BLUE, 0);
+    lv_obj_set_style_bg_opa(g_title_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_title_dot, LV_RADIUS_CIRCLE, 0);
 
     lv_obj_t *title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
     lv_label_set_text(title, "WS63 激光主控");
@@ -438,7 +439,12 @@ static void apply_state(void)
         break;
 
     case SYS_STATE_READY:
-        lv_label_set_text(g_lbl_pct, "0%");
+        {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+            lv_label_set_text(g_lbl_pct, buf);
+        }
+        lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
         lv_label_set_text(g_lbl_state_badge, panel_model_state_label(g_model.state));
         lv_obj_set_style_text_color(g_lbl_state_badge, COLOR_LASER_GREEN, 0);
         lv_label_set_text(g_lbl_safety_val, "关闭");
@@ -570,6 +576,11 @@ static void apply_state(void)
         lv_label_set_text(g_lbl_job_time, time_buf);
     }
     lv_label_set_text(g_lbl_job_name, g_model.job_name);
+
+    if (g_title_dot != NULL) {
+        lv_obj_set_style_bg_color(g_title_dot,
+            g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
+    }
 
     lv_obj_set_style_text_color(g_lbl_rx,
         g_model.rx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);

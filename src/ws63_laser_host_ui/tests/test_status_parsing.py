@@ -12,6 +12,7 @@ from transports.sle_tx_transport import (
     JOB_MAX_SIZE,
     PREROLL_CONTROL_TIMEOUT_MIN_S,
     SleJobSerialClient,
+    TX_DATA_BUSY_RE,
     TX_UART_CONTROL_BYTE,
     TX_UART_RESYNC_BYTE,
     UploadInterrupted,
@@ -275,6 +276,21 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(waits[1], ("@DATA_READY job=1", 8.0))
         self.assertEqual(waits[2][1], DATA_ACK_TIMEOUT_MIN_S)
         self.assertEqual(waits[3], ("@JOB_READY job=1", JOB_COMMIT_TIMEOUT_MIN_S))
+
+    def test_wait_for_extends_on_data_busy_keepalive(self) -> None:
+        client = SleJobSerialClient(lambda channel, message: None)
+        client._lines.put("@BUSY type=2 offset=600 ack_offset=300 outstanding=300 window=900 waited=1000")
+        client._lines.put("@ACK type=2 seq=0 status=0 offset=600")
+
+        result = client.wait_for(
+            r"@ACK type=2 .*status=0 .*offset=600\b",
+            0.01,
+            regex=True,
+            keepalive_pattern=TX_DATA_BUSY_RE,
+            max_timeout=1.0,
+        )
+
+        self.assertIn("offset=600", result.line)
 
     def test_priority_control_is_sent_after_current_data_chunk(self) -> None:
         writes: list[bytes] = []

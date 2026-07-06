@@ -22,15 +22,18 @@
 #include <string.h>
 
 #define PANEL_OFFLINE_TASK_STACK_SIZE 0x3000
-#define PANEL_OFFLINE_TASK_PRIORITY   24
+#define PANEL_OFFLINE_TASK_PRIORITY   5
 #define PANEL_OFFLINE_JOB_ID          2U
 #define PANEL_OFFLINE_JOB_MAX_SIZE    131072U
 #define PANEL_OFFLINE_CONNECT_WAIT_MS 8000U
-#define PANEL_OFFLINE_ACK_TIMEOUT_MS  1000U
+#define PANEL_OFFLINE_ACK_TIMEOUT_MS  2000U
 #define PANEL_OFFLINE_RETRY_MAX       8U
 #define PANEL_OFFLINE_STATUS_MS       1000U
 #define PANEL_OFFLINE_EXEC_TIMEOUT_MS 600000U
-#define PANEL_OFFLINE_CHUNK_MAX       214U
+#define PANEL_OFFLINE_CHUNK_MAX       300U
+#define PANEL_OFFLINE_DATA_WINDOW_PACKETS 3U
+#define PANEL_OFFLINE_DATA_WINDOW_POLL_MS 5U
+#define PANEL_OFFLINE_DATA_DRAIN_TIMEOUT_MS 8000U
 #define PANEL_OFFLINE_USE_FULL_FILE_CRC 0
 #define PANEL_OFFLINE_READAHEAD_BYTES 8192U
 #define PANEL_OFFLINE_YIELD_PACKETS   16U
@@ -38,9 +41,9 @@
 #define PANEL_OFFLINE_PREROLL_REQUEST_BYTES 4096U
 #define PANEL_OFFLINE_PREROLL_FALLBACK_BYTES 8192U
 #define PANEL_OFFLINE_PREROLL_LINE_MAX 128U
-#define PANEL_OFFLINE_TIMING_FIRST_PACKETS 8U
-#define PANEL_OFFLINE_TIMING_EVERY_PACKETS 32U
-#define PANEL_OFFLINE_TIMING_SLOW_MS 250U
+#define PANEL_OFFLINE_TIMING_FIRST_PACKETS 0U
+#define PANEL_OFFLINE_TIMING_EVERY_PACKETS 0U
+#define PANEL_OFFLINE_TIMING_SLOW_MS 500U
 #define PANEL_OFFLINE_READ_LOG_BYTES 32768U
 #define PANEL_OFFLINE_READ_SLOW_MS 100U
 
@@ -69,6 +72,11 @@ static volatile uint16_t g_wait_ack_seq;
 static volatile uint8_t g_wait_status;
 static volatile bool g_busy;
 static volatile bool g_start_requested;
+static volatile uint32_t g_data_ack_offset;
+static volatile uint16_t g_data_ack_seq;
+static volatile uint8_t g_data_ack_status = JOB_STATUS_OK;
+static volatile uint32_t g_data_ack_credit;
+static volatile bool g_data_error;
 static uint8_t g_pending_index;
 static uint8_t g_readahead_buf[PANEL_OFFLINE_READAHEAD_BYTES];
 static uint32_t g_diag_data_count;
@@ -93,6 +101,69 @@ static bool should_log_packet_timing(uint8_t type, uint32_t data_index, uint32_t
            total_ms >= PANEL_OFFLINE_TIMING_SLOW_MS;
 }
 
+static uint32_t offline_data_window_bytes(void)
+{
+    uint32_t packets = PANEL_OFFLINE_DATA_WINDOW_PACKETS;
+    if (packets == 0U) {
+        packets = 1U;
+    }
+    return packets * PANEL_OFFLINE_CHUNK_MAX;
+}
+
+static void reset_data_ack_state(void)
+{
+    g_data_ack_offset = 0;
+    g_data_ack_seq = 0;
+    g_data_ack_status = JOB_STATUS_OK;
+    g_data_ack_credit = 0;
+    g_data_error = false;
+}
+
+static bool handle_data_ack(const ack_payload_t *ack)
+{
+    if (ack == NULL || ack->ack_type != PKT_JOB_DATA || !g_busy) {
+        return false;
+    }
+    if (g_wait_active && ack->ack_seq == g_wait_ack_seq) {
+        return false;
+    }
+
+    if (ack->status != JOB_STATUS_OK) {
+        g_data_ack_offset = ack->offset;
+        g_data_ack_seq = ack->ack_seq;
+        g_data_ack_status = ack->status;
+        g_data_ack_credit = ack->credit;
+        g_data_error = true;
+        osal_printk("[PANEL_DATA_NACK] t=%u seq=%u status=%u off=%u credit=%u wait=%u active=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq,
+                    (unsigned int)ack->status, (unsigned int)ack->offset,
+                    (unsigned int)ack->credit, (unsigned int)g_wait_ack_seq,
+                    (unsigned int)g_wait_active);
+        return true;
+    }
+
+    if (ack->offset < g_data_ack_offset) {
+        osal_printk("[PANEL_DATA_OLD_ACK] t=%u seq=%u off=%u current_off=%u credit=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq,
+                    (unsigned int)ack->offset, (unsigned int)g_data_ack_offset,
+                    (unsigned int)ack->credit);
+        return true;
+    }
+
+    g_data_ack_offset = ack->offset;
+    g_data_ack_seq = ack->ack_seq;
+    g_data_ack_status = ack->status;
+    g_data_ack_credit = ack->credit;
+
+    if (PANEL_OFFLINE_TIMING_EVERY_PACKETS > 0U &&
+        ((uint32_t)ack->ack_seq % PANEL_OFFLINE_TIMING_EVERY_PACKETS) == 0U) {
+        osal_printk("[PANEL_DATA_ACK] t=%u seq=%u off=%u credit=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), ack->ack_seq,
+                    (unsigned int)ack->offset, (unsigned int)ack->credit);
+    }
+    return true;
+}
+
 static void rx_response_cb(const uint8_t *data, uint16_t len)
 {
     sle_packet_view_t pkt;
@@ -107,6 +178,10 @@ static void rx_response_cb(const uint8_t *data, uint16_t len)
 
     ack_payload_t ack;
     (void)memcpy_s(&ack, sizeof(ack), pkt.payload, sizeof(ack));
+    if (handle_data_ack(&ack)) {
+        return;
+    }
+
     if (!g_wait_active || ack.ack_seq != g_wait_ack_seq) {
         return;
     }
@@ -207,6 +282,120 @@ static errcode_t send_packet_wait_ack(uint8_t type, const void *payload, uint16_
     g_wait_active = false;
     g_wait_ack_seq = 0;
     return ERRCODE_SLE_TIMEOUT;
+}
+
+static bool wait_data_window(uint16_t seq, uint32_t data_index,
+                             uint32_t offset, uint16_t len)
+{
+    uint32_t next_offset = offset + len;
+    uint32_t window = offline_data_window_bytes();
+    uint32_t start = (uint32_t)uapi_systick_get_ms();
+    bool logged_wait = false;
+
+    while (!g_data_error) {
+        uint32_t ack_offset = g_data_ack_offset;
+        uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+        if (outstanding <= window) {
+            uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+            if (waited >= PANEL_OFFLINE_TIMING_SLOW_MS || logged_wait) {
+                osal_printk("[PANEL_DATA_WIN_OK] t=%u seq=%u data_idx=%u off=%u len=%u "
+                            "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                            "credit=%u waited=%u\r\n",
+                            (unsigned int)uapi_systick_get_ms(), seq,
+                            (unsigned int)data_index, (unsigned int)offset,
+                            (unsigned int)len, (unsigned int)next_offset,
+                            (unsigned int)ack_offset, (unsigned int)g_data_ack_seq,
+                            (unsigned int)outstanding, (unsigned int)window,
+                            (unsigned int)g_data_ack_credit, (unsigned int)waited);
+            }
+            return true;
+        }
+
+        uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+        if (!logged_wait && waited >= PANEL_OFFLINE_TIMING_SLOW_MS) {
+            logged_wait = true;
+            osal_printk("[PANEL_DATA_WIN_WAIT] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "credit=%u waited=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_data_ack_credit, (unsigned int)waited);
+        }
+        if (waited >= PANEL_OFFLINE_DATA_DRAIN_TIMEOUT_MS) {
+            osal_printk("[PANEL_DATA_WIN_TIMEOUT] t=%u seq=%u data_idx=%u off=%u len=%u "
+                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
+                        "status=%u credit=%u waited=%u link=%u\r\n",
+                        (unsigned int)uapi_systick_get_ms(), seq,
+                        (unsigned int)data_index, (unsigned int)offset,
+                        (unsigned int)len, (unsigned int)next_offset,
+                        (unsigned int)ack_offset, (unsigned int)g_data_ack_seq,
+                        (unsigned int)outstanding, (unsigned int)window,
+                        (unsigned int)g_data_ack_status,
+                        (unsigned int)g_data_ack_credit,
+                        (unsigned int)waited,
+                        (unsigned int)panel_transport_sle_rx_is_connected());
+            return false;
+        }
+
+        panel_transport_sle_poll();
+        osal_msleep(PANEL_OFFLINE_DATA_WINDOW_POLL_MS);
+    }
+
+    osal_printk("[PANEL_DATA_WIN_ERR] t=%u seq=%u data_idx=%u off=%u len=%u "
+                "ack_off=%u ack_seq=%u status=%u credit=%u\r\n",
+                (unsigned int)uapi_systick_get_ms(), seq,
+                (unsigned int)data_index, (unsigned int)offset,
+                (unsigned int)len, (unsigned int)g_data_ack_offset,
+                (unsigned int)g_data_ack_seq, (unsigned int)g_data_ack_status,
+                (unsigned int)g_data_ack_credit);
+    return false;
+}
+
+static bool wait_data_drain(uint32_t target_offset)
+{
+    if (target_offset == 0U) {
+        return true;
+    }
+
+    uint32_t start = (uint32_t)uapi_systick_get_ms();
+    while (!g_data_error && g_data_ack_offset < target_offset) {
+        uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - start;
+        if (elapsed >= PANEL_OFFLINE_DATA_DRAIN_TIMEOUT_MS) {
+            osal_printk("[PANEL_DATA_DRAIN_TIMEOUT] target=%u ack_off=%u ack_seq=%u "
+                        "status=%u waited=%u link=%u\r\n",
+                        (unsigned int)target_offset,
+                        (unsigned int)g_data_ack_offset,
+                        (unsigned int)g_data_ack_seq,
+                        (unsigned int)g_data_ack_status,
+                        (unsigned int)elapsed,
+                        (unsigned int)panel_transport_sle_rx_is_connected());
+            return false;
+        }
+        panel_transport_sle_poll();
+        osal_msleep(10);
+    }
+
+    uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
+    if (g_data_error) {
+        osal_printk("[PANEL_DATA_DRAIN_ERR] target=%u ack_off=%u ack_seq=%u status=%u waited=%u\r\n",
+                    (unsigned int)target_offset,
+                    (unsigned int)g_data_ack_offset,
+                    (unsigned int)g_data_ack_seq,
+                    (unsigned int)g_data_ack_status,
+                    (unsigned int)waited);
+        return false;
+    }
+    if (waited >= PANEL_OFFLINE_TIMING_SLOW_MS) {
+        osal_printk("[PANEL_DATA_DRAIN_OK] target=%u ack_off=%u ack_seq=%u waited=%u\r\n",
+                    (unsigned int)target_offset,
+                    (unsigned int)g_data_ack_offset,
+                    (unsigned int)g_data_ack_seq,
+                    (unsigned int)waited);
+    }
+    return true;
 }
 
 static errcode_t send_packet_no_ack(uint8_t type, const void *payload, uint16_t payload_len)
@@ -390,8 +579,73 @@ static errcode_t send_job_data(uint32_t job_id, uint32_t offset, const uint8_t *
     p->offset = offset;
     p->data_len = len;
     (void)memcpy_s(p->data, PANEL_OFFLINE_CHUNK_MAX, data, len);
-    return send_packet_wait_ack(PKT_JOB_DATA, payload,
-                                (uint16_t)(sizeof(job_data_payload_t) + len));
+
+    uint16_t payload_len = (uint16_t)(sizeof(job_data_payload_t) + len);
+    uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t packet_len = 0;
+    uint16_t seq = panel_job_proto_next_seq();
+    g_diag_data_count++;
+    uint32_t data_index = g_diag_data_count;
+
+    if (!sle_packet_encode(PKT_JOB_DATA, 0, seq, payload, payload_len,
+                           packet, sizeof(packet), &packet_len)) {
+        osal_printk("[PANEL_OFFLINE] data encode fail off=%u len=%u\r\n",
+                    (unsigned int)offset, (unsigned int)len);
+        return ERRCODE_FAIL;
+    }
+
+    for (uint32_t retry = 0; retry <= PANEL_OFFLINE_RETRY_MAX; retry++) {
+        if (wait_rx_link(PANEL_OFFLINE_CONNECT_WAIT_MS) != ERRCODE_SUCC) {
+            osal_printk("[PANEL_OFFLINE] no RX link data off=%u len=%u\r\n",
+                        (unsigned int)offset, (unsigned int)len);
+            return ERRCODE_SLE_TIMEOUT;
+        }
+        if (!wait_data_window(seq, data_index, offset, len)) {
+            break;
+        }
+
+        uint32_t t_send = (uint32_t)uapi_systick_get_ms();
+        errcode_t ret = panel_transport_sle_send_rx_packet(packet, packet_len);
+        uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
+        if (ret == ERRCODE_SLE_SUCCESS && !g_data_error) {
+            uint32_t next_offset = offset + len;
+            uint32_t ack_offset = g_data_ack_offset;
+            uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+            if (should_log_packet_timing(PKT_JOB_DATA, data_index, send_ms)) {
+                osal_printk("[PANEL_DATA_WIN] t=%u seq=%u data_idx=%u off=%u len=%u "
+                            "next=%u send_ms=%u retry=%u ack_off=%u ack_seq=%u "
+                            "outstanding=%u window=%u credit=%u link=%u\r\n",
+                            (unsigned int)uapi_systick_get_ms(), seq,
+                            (unsigned int)data_index, (unsigned int)offset,
+                            (unsigned int)len, (unsigned int)next_offset,
+                            (unsigned int)send_ms, (unsigned int)retry,
+                            (unsigned int)ack_offset,
+                            (unsigned int)g_data_ack_seq,
+                            (unsigned int)outstanding,
+                            (unsigned int)offline_data_window_bytes(),
+                            (unsigned int)g_data_ack_credit,
+                            (unsigned int)panel_transport_sle_rx_is_connected());
+            }
+            return ERRCODE_SUCC;
+        }
+
+        osal_printk("[PANEL_DATA_SEND_FAIL] t=%u seq=%u data_idx=%u off=%u len=%u "
+                    "retry=%u ret=0x%x send_ms=%u rx_err=%u ack_off=%u ack_seq=%u link=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(), seq,
+                    (unsigned int)data_index, (unsigned int)offset,
+                    (unsigned int)len, (unsigned int)retry,
+                    (unsigned int)ret, (unsigned int)send_ms,
+                    (unsigned int)g_data_error,
+                    (unsigned int)g_data_ack_offset,
+                    (unsigned int)g_data_ack_seq,
+                    (unsigned int)panel_transport_sle_rx_is_connected());
+        if (g_data_error) {
+            break;
+        }
+        osal_msleep(PANEL_OFFLINE_DATA_WINDOW_POLL_MS);
+    }
+
+    return ERRCODE_FAIL;
 }
 
 static errcode_t send_job_end(uint32_t job_id, uint32_t total_size, uint16_t crc)
@@ -450,15 +704,18 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
     preroll_tracker_t preroll;
     preroll_tracker_init(&preroll, total_size);
     g_diag_data_count = 0;
+    reset_data_ack_state();
 
     errcode_t ret = send_job_begin(PANEL_OFFLINE_JOB_ID, total_size, crc);
     if (ret != ERRCODE_SUCC) {
         return PANEL_OFFLINE_FLOW_FAIL;
     }
 
-    osal_printk("[PANEL_OFFLINE] upload pump readahead=%u packet_max=%u\r\n",
+    osal_printk("[PANEL_OFFLINE] upload pump readahead=%u packet_max=%u window_pkts=%u window=%u\r\n",
                 (unsigned int)PANEL_OFFLINE_READAHEAD_BYTES,
-                (unsigned int)PANEL_OFFLINE_CHUNK_MAX);
+                (unsigned int)PANEL_OFFLINE_CHUNK_MAX,
+                (unsigned int)PANEL_OFFLINE_DATA_WINDOW_PACKETS,
+                (unsigned int)offline_data_window_bytes());
 
     while (offset < total_size) {
         panel_offline_flow_t flow = handle_priority_control(true);
@@ -526,6 +783,9 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
                             (unsigned int)trigger_offset,
                             (unsigned int)preroll.request_offset,
                             (unsigned int)preroll.fallback_offset);
+                if (!wait_data_drain(trigger_offset)) {
+                    return PANEL_OFFLINE_FLOW_FAIL;
+                }
                 ret = send_exec_start(PANEL_OFFLINE_JOB_ID);
                 if (ret != ERRCODE_SUCC) {
                     return PANEL_OFFLINE_FLOW_FAIL;
@@ -556,6 +816,10 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
     panel_offline_flow_t flow = handle_priority_control(true);
     if (flow != PANEL_OFFLINE_FLOW_OK) {
         return flow;
+    }
+
+    if (!wait_data_drain(total_size)) {
+        return PANEL_OFFLINE_FLOW_FAIL;
     }
 
     ret = send_job_end(PANEL_OFFLINE_JOB_ID, total_size, crc);

@@ -201,6 +201,10 @@ static uint32_t pop_next_pending(void)
 
 static errcode_t queue_cmd(uint32_t bit)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        osal_printk("[PANEL_CMD] reject online display-only bit=0x%x\r\n", (unsigned int)bit);
+        return ERRCODE_SLE_FAIL;
+    }
     if (!panel_transport_sle_can_control_rx()) {
         osal_printk("[PANEL_CMD] reject display-only bit=0x%x\r\n", (unsigned int)bit);
         return ERRCODE_SLE_FAIL;
@@ -367,6 +371,10 @@ errcode_t panel_rx_commands_request_abort(void)
 
 errcode_t panel_rx_commands_request_focus_on(uint8_t power)
 {
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        osal_printk("[PANEL_CMD] reject online display-only focus_on\r\n");
+        return ERRCODE_SLE_FAIL;
+    }
     if (!panel_transport_sle_can_control_rx()) {
         osal_printk("[PANEL_CMD] reject display-only focus_on\r\n");
         return ERRCODE_SLE_FAIL;

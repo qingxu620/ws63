@@ -6,6 +6,7 @@
 #define WS63_LASER_SLE_JOB_CLIENT_H
 
 #include "errcode.h"
+#include "protocol.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -19,6 +20,8 @@ errcode_t sle_job_client_init(void);
 errcode_t sle_job_client_send_packet(const void *data, uint16_t len);
 errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool force_write_req);
 errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len);
+errcode_t sle_job_client_update_panel_status_adv(const panel_status_payload_t *status);
+bool sle_job_client_pause_panel_status_adv(const char *reason);
 bool sle_job_client_is_connected(void);
 bool sle_job_client_panel_is_connected(void);
 bool sle_job_client_panel_link_allowed(void);
