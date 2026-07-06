@@ -11,10 +11,12 @@ panel_model_t g_model;
 static uint32_t g_live_job_start_tick_ms;
 static bool g_live_job_timer_active;
 
+#define PANEL_MODEL_TOTAL_SIZE_MAX UINT32_MAX
+
 enum {
     PANEL_FAKE_TOTAL_SIZE = 131072U,
     PANEL_FAKE_TOTAL_LINES = 1000U,
-    PANEL_FAKE_CACHE_SIZE = 131072U,
+    PANEL_FAKE_CACHE_SIZE = 65536U,
 };
 
 static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
@@ -99,7 +101,7 @@ static bool state_uses_job_timer(system_state_t state)
 static void update_progress_fields(void)
 {
     g_model.progress = clamp_pct(g_model.progress);
-    g_model.total_size = clamp_u32(g_model.total_size, 0, PANEL_FAKE_TOTAL_SIZE);
+    g_model.total_size = clamp_u32(g_model.total_size, 0, PANEL_MODEL_TOTAL_SIZE_MAX);
     g_model.total_lines = clamp_u32(g_model.total_lines, 0, PANEL_FAKE_TOTAL_LINES);
 
     if (g_model.state == SYS_STATE_READY || g_model.state == SYS_STATE_RUNNING ||
@@ -498,7 +500,7 @@ void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint
     g_model.mode = PANEL_MODE_OFFLINE;
     g_model.sd_mounted = true;
     g_model.job_id = 2;
-    g_model.total_size = clamp_u32(size_bytes, 0, PANEL_FAKE_TOTAL_SIZE);
+    g_model.total_size = clamp_u32(size_bytes, 0, PANEL_MODEL_TOTAL_SIZE_MAX);
     g_model.total_lines = clamp_u32(line_count, 0, PANEL_FAKE_TOTAL_LINES);
     g_model.received_size = 0;
     g_model.executed_lines = 0;
@@ -543,7 +545,7 @@ void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uin
     g_model.sle_connected = true;
     g_model.rx_connected = true;
     g_model.job_id = 2;
-    g_model.total_size = clamp_u32(size_bytes, 0, PANEL_FAKE_TOTAL_SIZE);
+    g_model.total_size = clamp_u32(size_bytes, 0, PANEL_MODEL_TOTAL_SIZE_MAX);
     g_model.total_lines = clamp_u32(line_count, 0, PANEL_FAKE_TOTAL_LINES);
     g_model.received_size = 0;
     g_model.executed_lines = 0;
@@ -808,7 +810,7 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
         snprintf(g_model.last_error, sizeof(g_model.last_error), "无");
     }
 
-    g_model.total_size = clamp_u32(g_model.total_size, 0, PANEL_FAKE_TOTAL_SIZE);
+    g_model.total_size = clamp_u32(g_model.total_size, 0, PANEL_MODEL_TOTAL_SIZE_MAX);
     g_model.received_size = clamp_u32(g_model.received_size, 0, g_model.total_size);
     g_model.cache_free = clamp_u32(g_model.cache_free, 0, PANEL_FAKE_CACHE_SIZE);
 }

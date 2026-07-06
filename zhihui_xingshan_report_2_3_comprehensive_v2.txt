@@ -1,0 +1,280 @@
+智绘星闪AI打标系统
+
+摘要
+本作品面向小型激光打标、创意图案加工、教学实验和现场维护等应用场景，设计并实现了一套基于WS63星闪无线链路的AI激光打标系统。系统以“PC上位机智能创作、TX通信桥接、RX统一执行、本地触控屏状态交互”为核心架构，将图像生成、图像转G-code、任务可靠传输、振镜运动控制、激光功率控制和本地状态显示串联为完整闭环。
+
+系统由四个主要软件工程组成：`src/ws63_laser_host_ui`是运行在Win11上的Python/PySide6上位机，负责AI生图接口、本地图像导入、图像矢量化、G-code编辑校验、串口连接、任务上传、执行控制和日志监控；`src/ws63_laser_sle_tx`运行在TX板上，接收Host通过UART1发送的控制命令和G-code数据，将其封装为结构化SLE Job报文，并负责ACK/NACK、状态查询、停止、放弃、恢复和调焦命令转发；`src/ws63_laser_rx_unified`运行在RX执行板上，是运动执行、任务状态、缓存状态和激光状态的唯一真相源，完成SLE任务接收、64KB任务缓存、G-code解析、运动队列调度、DAC8562双通道模拟输出和激光PWM控制；`src/ws63_screen_panel_lvgl_refactor`运行在MSP3223触控屏节点上，基于LVGL实现本地HMI、RX状态镜像、诊断显示、SD文件浏览和离线任务发送通道。
+
+系统采用明确的控制边界：Host和屏幕端只发出任务和控制意图，TX只负责协议桥接，RX负责最终执行和安全关断。SLE Job协议以BEGIN、DATA、END、EXEC_START、EXEC_STOP、ABORT、FOCUS、STATUS等报文组织任务生命周期，并通过任务ID、序号、偏移、CRC16、缓存剩余量和状态响应保证无线任务传输可追踪、可恢复和可诊断。执行端采用99 mm x 99 mm工作幅面、16位DAC坐标映射、5 kHz激光PWM、软件安全停止和异常断光策略，保证打标流程在资源受限的嵌入式环境中保持稳定。
+
+第一部分  作品概述
+
+1.1 功能与特性
+智绘星闪AI打标系统支持从创意输入到激光打标执行的完整流程。用户可在PC上位机中调用AI生图接口或导入本地图像，经过阈值处理、扫描填充、轮廓提取、路径简化和尺寸映射后生成RX兼容G-code；也可直接加载、编辑和校验已有G-code文件。任务通过TX板从UART命令流转换为SLE Job无线报文发送到RX板，RX板完成缓存、解析、运动插补、DAC振镜输出和PWM激光控制。系统支持上传、上传并执行、暂停/恢复、停止、放弃、状态查询和手动低功率调焦。本地屏幕端提供现场状态查看、链路诊断、任务进度显示和离线任务入口。
+
+图1.1-1 系统功能界面与实物组成示意图
+
+1.2 应用领域
+本作品适用于小幅面激光打标、创意文创加工、电子实验教学、嵌入式无线控制验证、轻量工业HMI展示和现场离线打标等场景。PC在线模式适合图案生成、参数调试、路径编辑和日志分析；本地屏幕模式适合脱离PC后的状态查看和现场操作；RX执行端的统一运动控制结构适合后续扩展到不同输入路由，例如保留的UART/WiFi路由和屏幕离线发送路由。系统强调低成本、模块化和可调试性，既能展示AI生成内容到物理打标的完整链路，也能作为星闪通信、嵌入式图形界面和运动控制联合实验平台。
+
+图1.2-1 典型应用场景：PC在线创作、现场控制、离线任务执行
+
+1.3 主要技术特点
+（1）采用Host-TX-RX-Screen分层架构，RX始终作为运动执行和激光状态真相源，避免多个控制端直接争夺激光输出。
+（2）采用结构化SLE Job协议，将控制报文和G-code数据报文分离，支持任务ID、序号、偏移、CRC16、ACK/NACK和STATUS状态反馈。
+（3）Host端具备图像到G-code的确定性转换流程，支持扫描填充、轮廓矢量化、LaserGRBL/Potrace风格参数清理、路径简化和G-code安全校验。
+（4）RX端采用统一路由管理，当前产品路径为SLE Job route，legacy UART/WiFi route作为可编译和后续扩展路径保留。
+（5）屏幕端采用LVGL与HAL/Service/UI三层结构，实现本地HMI、触摸交互、SD文件扫描和低频状态镜像。
+（6）安全策略贯穿全链路，停止、放弃、异常、断连、路线切换失败和任务完成均要求RX侧断光。
+
+1.4 主要性能指标
+
+| 指标项 | 当前工程配置/实现 |
+| --- | --- |
+| Host运行环境 | Win11，Python 3.10+，PySide6，pyserial |
+| TX命令串口 | UART1，默认115200 bps |
+| SLE任务MTU | 512 bytes |
+| Host上传数据分片 | 当前Host/TX配置为300 bytes级数据块 |
+| RX任务缓存 | 65536 bytes |
+| Host上传并执行预缓冲 | 默认4096 bytes，可在界面配置并按G-code行边界修正 |
+| 工作幅面 | 99 mm x 99 mm |
+| 坐标输出 | DAC8562双通道16位模拟输出 |
+| 激光功率范围 | G-code S值0-1000映射到PWM占空比 |
+| 激光PWM频率 | 5 kHz |
+| 运动队列 | 512项 |
+| 屏幕硬件 | MSP3223，ILI9341V 240x320 RGB565，FT6336U触摸 |
+| 固件归档 | TX、RX unified、Screen分别归档到`src/output/ws63/fwstage/latest/` |
+
+1.5 主要创新点
+（1）把AI生图、图像矢量化、无线任务传输和激光执行整合为端到端打标系统。
+（2）采用TX桥接、RX统一执行的边界设计，保证无线通信和激光安全职责清晰。
+（3）SLE Job协议以缓存偏移和CRC为核心，使嵌入式无线传输具备可诊断的可靠性。
+（4）Host上传并执行采用预缓冲策略，既保留大文件流式执行能力，又避免绕过用户配置。
+（5）本地屏幕端以状态镜像和离线发送为定位，不破坏RX真相源架构。
+
+1.6 设计流程
+设计流程为：需求分析与安全边界定义；Host图像/G-code工作流设计；SLE Job报文格式与TX桥接实现；RX统一路由、缓存、解析和运动执行实现；屏幕端LVGL界面与本地服务实现；最后通过构建脚本分别生成TX、RX unified和Screen固件，并结合Win11 Host进行串口、状态、调焦、短任务和大文件任务验证。
+
+图1.6-1 设计流程图
+
+第二部分  系统组成及功能说明
+
+2.1 整体介绍
+系统总体结构如下：
+
+```text
+Win11 Host UI
+  -> TX command UART1
+  -> WS63 TX board, src/ws63_laser_sle_tx
+  -> SLE Job packets
+  -> WS63 RX board, src/ws63_laser_rx_unified
+  -> DAC振镜 / PWM激光输出
+
+Screen board, src/ws63_screen_panel_lvgl_refactor
+  -> LVGL本地界面
+  -> 低频RX状态显示 / SD离线任务发送
+  -> 任务仍由RX统一执行
+```
+
+整体数据流分为在线任务和本地面板任务两类。在线任务由Host产生或加载G-code，经TX板封装为SLE Job报文后发送到RX；RX缓存数据并在达到预缓冲或完整上传后执行。屏幕端不直接控制运动和激光硬件，而是通过状态镜像展示RX真实状态，或在离线模式下把本地文件作为任务发送给RX。这样可以保证任何任务最终都经过RX的统一缓存、解析、运动队列和安全控制。
+
+图2.1-1 系统整体框图
+
+2.2 硬件系统介绍
+
+2.2.1 硬件整体介绍
+硬件由PC主机、TX通信板、RX执行板、激光/振镜执行部件和MSP3223触控屏节点组成。PC负责上位机软件运行和串口通信；TX板负责Host串口到星闪SLE的无线桥接；RX板负责SLE接收、DAC8562双通道模拟输出、PWM激光功率输出和执行状态管理；屏幕节点负责本地显示、触摸输入、SD文件扫描和低频状态观察。系统固件按角色分别构建和烧录：TX板使用`ws63-liteos-app_tx_all.fwpkg`，RX板使用`ws63-liteos-app_rx_unified_all.fwpkg`，屏幕板使用`ws63-liteos-app_screen_all.fwpkg`。
+
+图2.2-1 系统硬件组成照片
+
+2.2.2 机械设计介绍
+机械结构围绕小幅面振镜激光打标平台展开，主要包括激光器、振镜扫描机构、打标工作台、控制板固定结构、电源与走线区域、屏幕安装面板和外壳支撑结构。设计重点是保证光路固定、打标平面稳定、控制板散热和操作面板易观察。RX板与DAC/激光控制线路应靠近执行机构布置，以降低模拟输出和PWM控制线受干扰的风险；TX板与PC串口连接应便于调试；屏幕应安装在操作者可触达位置，用于查看状态和现场操作。
+
+图2.2-2 机械结构与控制板安装位置示意图
+
+2.2.3 电路各模块介绍
+（1）TX通信模块：TX板使用UART1接收Host命令，默认115200 bps。TX端不直接连接激光器和振镜，只负责将`@BEGIN`、G-code数据、`@EXEC_START`、`@EXEC_STOP`、`@ABORT`、`@STATUS`、`@FOCUS_ON/OFF`等Host命令转换为SLE Job报文。
+
+（2）RX执行模块：RX板通过DAC8562输出X/Y双通道模拟量。当前工程中DAC SPI使用SPI0，SCK为GPIO7，MOSI为GPIO9，CS为GPIO10；坐标按99 mm工作幅面映射到0-65535的16位DAC值。激光输出使用PWM通道，PWM引脚为GPIO2，频率5 kHz，S值0-1000映射为占空比。`M5`、停止、放弃和异常处理会触发物理PWM/GPIO断光。
+
+（3）屏幕显示模块：屏幕节点采用MSP3223 3.2英寸SPI触控屏，LCD控制器为ILI9341V，触摸控制器为FT6336U。当前计划引脚包括LCD_SCK GPIO7、LCD_MOSI GPIO9、LCD_MISO GPIO11、LCD_CS GPIO8、LCD_DC GPIO10、LCD_RST GPIO0、LCD_BL GPIO5、CTP_SCL GPIO16、CTP_SDA GPIO15、CTP_RST GPIO12、CTP_INT GPIO13、SD_CS GPIO14。屏幕端采用SPI总线互斥、LCD驱动、触摸驱动和SD/FAT读取分层管理。
+
+图2.2-3 TX、RX、Screen主要信号连接图
+
+2.3 软件系统介绍
+
+2.3.1 软件整体介绍
+本作品的软件系统围绕“AI与图像处理、任务可靠传输、RX统一执行、本地触控交互”四条主线展开。四个主要工程目录分别对应四个角色：
+
+| 工程目录 | 角色 | 核心职责 |
+| --- | --- | --- |
+| `src/ws63_laser_host_ui` | PC上位机 | AI图像生成、本地图像导入、G-code生成/校验、串口连接、上传执行、日志监控 |
+| `src/ws63_laser_sle_tx` | TX通信桥 | Host UART命令解析、SLE Job报文封装、ACK/NACK转发、状态/控制命令桥接 |
+| `src/ws63_laser_rx_unified` | RX执行端 | SLE任务接收、缓存、G-code解析、运动队列、DAC/PWM输出、安全关断 |
+| `src/ws63_screen_panel_lvgl_refactor` | 本地屏幕端 | LVGL界面、状态镜像、SD文件浏览、离线发送服务、现场诊断 |
+
+图2.3-1 软件系统总体架构图
+
+在线打标路径为Host -> TX -> SLE -> RX。Host生成或加载G-code后，先进行格式规范化和安全校验，再通过TX命令串口发送`@BEGIN job total crc preroll=...`和数据流；TX把数据流切成SLE Job DATA报文，并根据RX ACK反馈向Host返回上传偏移；RX验证任务ID、序号、偏移和CRC，写入64KB缓存，并在执行阶段按行解析G-code、生成运动命令、驱动DAC和激光PWM。屏幕端通过模型层显示RX状态，在线Host作业期间不抢占控制权；离线模式下屏幕可以作为任务来源，但执行仍由RX完成。
+
+2.3.2 PC上位机软件模块
+Host上位机采用Python/PySide6实现，入口为`main.py`，界面控制集中在`ui/main_window.py`，串口协议封装在`transports/sle_tx_transport.py`，图像与G-code处理位于`app/`目录，串口和AI生成等耗时操作通过`workers/`目录中的线程封装执行。
+
+（1）连接与配置模块
+连接模块负责枚举串口、连接TX命令UART、可选监听TX/RX日志串口，并通过JSON保存常用端口、超时、预缓冲和任务参数。Host运行在Win11上，WSL2仅用于源码编辑和固件构建，因此串口调试和实际运行在Windows环境完成。
+
+（2）AI生图模块
+`app/doubao_image_service.py`提供火山方舟/豆包图像生成REST接口封装，使用`ARK_API_KEY`环境变量鉴权，支持请求构造、超时处理、错误格式化、URL解析和图片下载。AI生成不是固件强依赖，未配置API Key时仍可使用本地图像导入和G-code编辑。
+
+（3）图像转G-code模块
+`app/image_gcode.py`提供确定性的图像处理能力，包括灰度阈值、扫描线填充、轮廓提取、噪点去除、平滑和路径优化。系统支持三类典型路径：扫描填充用于区域打标，矢量轮廓用于线条边界，LaserGRBL风格流程用于亮度/对比度清理、白底裁剪、黑点过滤和路径简化。生成结果会按99 mm工作区映射坐标，并生成RX支持的G0/G1/M3/M4/M5等指令。
+
+（4）G-code校验模块
+`app/gcode_validator.py`在上传前统一规范和检查G-code：统一换行、去除空行和注释、转大写、拆分紧凑指令、限制单行长度、拒绝英寸单位G20、拒绝圆弧G2/G3等未支持命令、检查X/Y坐标范围、检查S值0-1000和F值有效性，并拒绝保留的UART同步控制字节0x18。该模块保证异常输入尽量在Host侧被发现，而不是直接进入RX执行端。
+
+（5）SLE TX串口协议模块
+`transports/sle_tx_transport.py`封装Host与TX之间的ASCII命令协议。Host在上传前先发送0x18同步控制字节，请求TX和RX清理上一次残留任务；随后发送`@BEGIN`，等待`@DATA_READY`，再按数据块发送G-code，并根据`@ACK type=2 offset=...`更新上传进度。上传并执行模式使用默认4096字节预缓冲，并寻找附近完整G-code行边界，避免RX在半行处启动解析。执行期间Host低频轮询`@STATUS`，并可发送`@EXEC_STOP`、`@EXEC_RESUME`、`@ABORT`和`@FOCUS_OFF`等优先控制命令。
+
+（6）界面与日志模块
+Host界面包含连接、图像/G-code工作区、任务控制和日志页面。任务页显示接收字节、RX状态、缓存剩余、链路状态和执行结果；日志页对SDK噪声日志进行过滤，突出STATUS、ACK、NACK、ERROR和执行完成证据。执行完成既可由RX日志中的`EXEC_DONE`确认，也可由执行期`@STATUS`观察到RX回到IDLE确认。
+
+图2.3-2 PC上位机界面截图
+
+2.3.3 TX通信桥软件模块
+TX固件位于`src/ws63_laser_sle_tx`。其核心文件包括`transmitter/main.c`、`transmitter/sle_job_client.c`、`common/protocol.h`、`common/packet.c`和`common/crc16.c`。TX的职责是桥接，不参与运动解析，也不直接控制激光输出。
+
+（1）UART命令解析
+TX通过UART1接收Host命令和G-code字节流。命令模式识别`@BEGIN`、`@EXEC_START`、`@EXEC_STOP`、`@EXEC_RESUME`、`@ABORT`、`@STATUS`、`@FOCUS_ON Sx`、`@FOCUS_OFF`和显式路由切换命令；数据模式则把Host连续发送的G-code按当前任务上下文切分为DATA报文。
+
+（2）SLE Job报文封装
+协议头定义在`common/protocol.h`，报文包含magic、type、flags、seq、len、crc16和payload。任务生命周期报文包括`PKT_JOB_BEGIN`、`PKT_JOB_DATA`、`PKT_JOB_END`、`PKT_EXEC_START`、`PKT_EXEC_STOP`、`PKT_EXEC_RESUME`、`PKT_FOCUS_CTRL`、`PKT_STATUS_REQ`和响应类`PKT_ACK/PKT_NACK/PKT_STATUS_RESP`。BEGIN/END携带job_id、total_size和job_crc16；DATA携带job_id、offset、data_len和数据载荷；ACK携带ack_type、status、ack_seq、job_id、offset和credit。
+
+（3）传输反馈与背压
+TX根据RX ACK更新本地累计偏移，并向Host回传`@ACK type=2 offset=...`。当前工程中Host/TX数据块为300字节级，SLE MTU为512字节，TX保留小窗口和ACK超时/重试逻辑，以便在RX执行窗口变满或无线链路波动时提供背压。状态查询通过`PKT_STATUS_REQ`触发，RX返回当前任务状态、已接收字节、总字节数、缓存剩余量和已执行行数。
+
+（4）控制命令转发
+TX把Host控制命令转换为SLE控制报文。`@EXEC_STOP`对应软件停止，`@EXEC_RESUME`对应恢复，`@ABORT`对应任务放弃，`@FOCUS_ON/OFF`对应低功率调焦控制。TX自身不判断激光是否应该打开，最终允许条件和断光动作均由RX执行端决定。
+
+图2.3-3 TX桥接流程图
+
+2.3.4 RX统一执行软件模块
+RX统一固件位于`src/ws63_laser_rx_unified`，当前产品固件名称为`ws63-liteos-app_rx_unified_all.fwpkg`。RX入口`main.c`初始化DAC8562、激光PWM、安全状态和route manager，然后启动SLE Job route。RX是任务执行、运动状态、缓存状态和激光状态的唯一真相源。
+
+（1）路由管理模块
+`mode_select/route_manager.c`维护当前活动路由、推荐路由和切换约束。当前产品默认启动`RX_ROUTE_SLE_JOB`，legacy UART/WiFi route保留为可编译或后续扩展路径。路由切换需要满足激光关闭、无活动路由或安全状态、路由不忙等条件；启动失败会强制断光，避免切换失败后仍保留危险输出。
+
+（2）SLE Job接收与缓存模块
+SLE Job route位于`routes/sle_job/`。`sle_job_route_server.c`处理SLE服务和连接，`sle_job_packet.c`处理报文编码解码，`sle_job_cache.c`维护64KB任务缓存，`sle_job_manager.c`维护任务状态机。RX按任务ID、序号、偏移和CRC检查DATA报文，接受重复/累计进度语义，并通过ACK/NACK向TX反馈状态。任务状态包括IDLE、RECEIVING_JOB、JOB_READY、EXECUTING、PAUSED、ABORTED和ERROR。
+
+（3）G-code解析与运动执行
+RX在执行阶段从缓存中逐行读取G-code，`sle_job_gcode_parser.c`解析G0/G1、M3/M4/M5、F、S、X、Y等指令，`sle_job_gcode_processor.c`将指令转换为运动和激光控制语义，`sle_job_motion_executor.c`负责运动队列、采样周期和DAC输出调度。系统使用0.05 mm级路径步进参数、512项运动队列和1 ms级运动采样配置，在LiteOS-M任务调度下协调SLE接收、执行解析和运动输出。
+
+（4）DAC与激光控制
+`hardware/dac8562.c`通过SPI配置DAC8562，输出X/Y双通道16位值。`hardware/laser_ctrl.c`负责PWM初始化、占空比更新、PWM关闭和GPIO拉低。`laser_force_off()`不仅修改软件状态，还会关闭PWM并把激光引脚强制拉低，避免只依赖状态变量表示激光关闭。
+
+（5）安全控制
+RX侧安全策略覆盖任务开始、停止、恢复、放弃、错误、断连、焦点控制和任务完成。调焦只允许在安全状态下开启，关闭调焦不受状态限制；`EXEC_START`、`EXEC_STOP`、`ABORT`、任务完成和错误处理都会触发断光保护。当前停止/放弃属于软件安全控制，不等同于硬件急停；产品级急停仍应通过独立硬件电源/使能切断实现。
+
+图2.3-4 RX统一执行流程图
+
+2.3.5 本地触控屏软件模块
+屏幕端位于`src/ws63_screen_panel_lvgl_refactor`，基于LVGL v9.3.0和MSP3223硬件实现。入口`src/main.c`完成SPI总线、LCD、触摸、LVGL tick、模型层、UI层、离线任务服务、RX命令服务和SLE观察者启动。
+
+（1）HAL层
+`src/hal/`封装底层硬件，包括`spi_bus.c`统一管理SPI总线和片选，`lcd_driver.c`驱动ILI9341显示，`touch_driver.c`驱动FT6336触摸输入，`sd_spi.c`和`fat_reader.c`用于SD卡和FAT文件读取。屏幕实现避免使用大尺寸全帧缓存，优先采用LVGL缓冲和局部刷新思路，降低内存压力。
+
+（2）Service层
+`src/service/`包含`panel_model.c`状态模型、`panel_transport_sle.c`SLE状态镜像/离线发送通道、`panel_rx_commands.c`RX控制命令队列、`panel_file_manager.c`SD文件扫描、`panel_offline_job.c`离线任务上传、`panel_job_proto.c`任务协议辅助和`task_manager.c`LiteOS任务封装。模型中区分owner、mode、view_mode、progress、job_id、received_size、total_size、executed_lines、cache_free、focus_active和laser_output_active等字段。
+
+（3）UI层
+`src/ui/ui_manager.c`和`panel_theme.c`负责页面组织、工业深色主题、状态显示、按钮权限和页面刷新。界面状态来自`panel_model`，按钮权限也由模型统一计算，避免UI本地伪造RX状态。屏幕端可展示在线Host任务的接收、就绪、执行、完成、错误和链路丢失状态；离线视图用于选择本地G-code并发起上传。
+
+（4）与Host/RX的关系
+屏幕端不承担PC上位机的AI生图、G-code编辑和串口配置职责，也不成为第二个独立运动控制器。在线作业时，Host/TX/RX保持控制主链路，屏幕主要显示低频状态和提供安全类操作入口；离线模式下屏幕作为任务来源，但任务仍以协议包进入RX，由RX执行缓存、解析、运动和断光。
+
+图2.3-5 本地触控屏界面与状态模型图
+
+2.3.6 软件构建与版本归档
+工程使用脚本完成不同固件变体的配置切换、构建和归档：
+
+```bash
+./scripts/build_sle_job_firmwares.sh --tx-only
+./scripts/build_rx_unified_firmware.sh
+./scripts/build_screen_firmware.sh --panel
+```
+
+TX构建打开`CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE=y`和`CONFIG_LASER_SLE_JOB_TRANSMITTER=y`，RX unified构建打开`CONFIG_LASER_RX_UNIFIED=y`和`CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y`，屏幕构建关闭TX/RX样例并生成屏幕固件。由于SDK原始输出包路径会被每次构建覆盖，脚本会把对应结果立即归档到`src/output/ws63/fwstage/latest/`，避免TX、RX和Screen固件互相覆盖。
+
+第三部分  完成情况及性能参数
+
+3.1 整体介绍
+当前系统已经形成可运行的端到端工程结构：Win11 Host上位机可完成图像/G-code准备和任务控制；TX固件可完成UART到SLE Job的桥接；RX unified固件可作为产品执行端接收SLE任务并驱动DAC/PWM；屏幕端已具备LVGL工程化结构、本地状态模型、SD文件扫描和SLE观察/离线发送服务框架。
+
+图3.1-1 整机正面照片
+图3.1-2 整机斜45度照片
+
+3.2 工程成果
+
+3.2.1 机械成果
+系统机械成果包括激光/振镜执行机构、小幅面工作台、控制板安装结构、线束整理区域和本地屏幕安装位置。机械设计应保证打标平面与光路稳定，控制板与电源模块安装牢固，屏幕和调试接口便于现场操作。
+
+图3.2-1 机械结构实物照片
+
+3.2.2 电路成果
+电路成果包括TX通信板、RX执行板、DAC8562振镜控制接口、激光PWM控制接口、MSP3223屏幕接口和SD卡接口。RX侧完成DAC SPI输出和激光PWM输出的软件驱动，屏幕侧完成LCD SPI、FT6336 I2C触摸、背光控制和SD片选规划。
+
+图3.2-2 TX/RX/Screen电路与接线照片
+
+3.2.3 软件成果
+软件成果主要体现在四个工程：
+（1）Host UI：完成PySide6桌面界面、串口连接、图像处理、G-code编辑校验、上传执行、状态轮询和日志监控。
+（2）TX固件：完成Host命令解析、SLE连接、任务报文封装、ACK/NACK转发、状态查询和控制命令转发。
+（3）RX unified固件：完成SLE Job route启动、任务缓存、协议状态机、G-code解析、运动队列、DAC输出、PWM激光控制和安全断光。
+（4）Screen固件：完成LVGL入口、HAL/Service/UI三层拆分、触摸显示初始化、状态模型、SD文件扫描和SLE观察/离线服务入口。
+
+图3.2-3 Host界面截图
+图3.2-4 RX执行日志截图
+图3.2-5 屏幕端界面截图
+
+3.3 特性成果
+
+| 特性 | 完成情况 | 验证方式 |
+| --- | --- | --- |
+| Host图像到G-code | 支持AI接口、本地图像、扫描填充、轮廓矢量和参数化处理 | Host单元测试、界面预览、G-code人工检查 |
+| G-code安全校验 | 支持行长、坐标、S/F值、保留字节、未支持命令检查 | `tests/test_gcode_validator.py` |
+| Host-TX串口协议 | 支持0x18重同步、BEGIN/DATA/END/EXEC/STATUS/FOCUS | 串口日志、Host状态页 |
+| SLE Job无线任务 | 支持任务ID、CRC16、ACK/NACK、offset、credit和STATUS | TX/RX日志、状态查询 |
+| RX缓存执行 | 64KB缓存，支持上传并执行预缓冲路径 | 大文件`preroll=4096`任务验证 |
+| 振镜输出 | DAC8562双通道16位输出 | 短任务轨迹和输出日志验证 |
+| 激光控制 | 5 kHz PWM，S 0-1000功率映射，M5/异常断光 | 调焦、停止、放弃、完成后断光验证 |
+| 屏幕HMI | LVGL本地界面、状态模型、触摸输入、SD扫描 | 屏幕固件构建和上板观察 |
+| 构建归档 | TX/RX unified/Screen固件独立归档 | 构建脚本和`fwstage/latest`检查 |
+
+第四部分  总结
+
+4.1 可扩展之处
+后续可扩展方向包括：完善屏幕端离线任务的全流程实测与异常恢复；增加硬件级激光急停和门禁互锁；把RX状态广播做成更低干扰的面板监听机制；完善G-code圆弧、速度规划和边界保护；增加任务历史、材料参数库和打标模板；对SLE传输吞吐进行单变量实验，分别评估分片大小、连接间隔、ACK窗口和串口波特率对稳定性的影响；补充自动化联调脚本和更完整的Host UI回归测试。
+
+4.2 心得体会
+本项目最大的难点不是单个模块功能，而是多端系统的职责边界。PC上位机、TX、RX和屏幕都可以“发命令”，但激光设备不能允许多个端同时成为运动控制器。因此工程中明确规定RX是运动执行、任务状态、缓存状态和激光状态的真相源；TX只是桥接；Host负责创作、上传和监控；屏幕负责本地显示和离线任务入口。这一边界让系统在调试时更容易定位问题，也避免了屏幕端和Host端同时控制激光输出的安全风险。
+
+第二个体会是无线任务传输必须显式协议化。早期如果把G-code直接当普通串口流转发，遇到丢包、重复、缓存满、断连或执行中上传时，很难判断任务到底停在哪个位置。SLE Job协议把任务拆成BEGIN、DATA、END、EXEC_START和STATUS等阶段，每个DATA带有job_id、offset、data_len和CRC，RX返回ACK/NACK、offset和credit，Host再根据累计偏移更新进度。这样即使速度不是最高，也能获得清楚的诊断信息，适合比赛演示和后续产品化。
+
+第三个体会是嵌入式安全不能只写在界面上。Host按钮显示“停止”或“放弃”只是用户意图，真正安全动作必须落在RX执行端。当前RX的`laser_force_off()`会关闭PWM并把引脚拉低，`M5`和异常流程也会走物理输出关闭路径，比只修改软件变量更可靠。同时我们也认识到软件停止不是硬件急停，后续产品级系统必须加入独立的激光电源/使能硬切断。
+
+第四个体会是资源受限设备上的UI和通信要避免互相干扰。屏幕端采用LVGL局部刷新、延迟启动SLE观察者、HAL/Service/UI分层和模型驱动界面，目的就是让显示、触摸、SD和无线状态同步互不阻塞。RX端也采用路由管理而不是把UART、WiFi和SLE强行塞进同一个解析器，避免不同输入路径相互破坏时序。
+
+通过本项目，我们完成了从AI图像生成到物理激光打标的完整工程链路，积累了Host桌面软件、星闪无线通信、嵌入式协议设计、运动控制、PWM激光控制和LVGL本地HMI的综合实践经验。下一阶段重点应放在硬件安全增强、离线任务实测、屏幕状态广播稳定性和传输性能的可量化优化上。
+
+第五部分  参考文献
+
+[1] Huawei LiteOS-M相关开发资料与WS63 SDK接口说明。
+[2] LVGL v9.3.0 官方文档。
+[3] PySide6 官方文档。
+[4] pyserial 官方文档。
+[5] DAC8562 数据手册。
+[6] ILI9341V LCD控制器数据手册。
+[7] FT6336U电容触摸控制器数据手册。
+[8] LaserGRBL项目与图像转G-code工作流参考资料。
+[9] Potrace位图矢量化算法相关资料。
+[10] 火山方舟/豆包图像生成API文档。

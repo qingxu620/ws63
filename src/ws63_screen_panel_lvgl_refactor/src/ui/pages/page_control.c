@@ -1,18 +1,18 @@
 /**
  * @file page_control.c
- * @brief Control Panel page: focus arc + manual jog buttons.
+ * @brief Control Panel page: frame scan + manual jog buttons.
  */
 #include "page_control.h"
 #include "panel_theme.h"
 #include "ui_manager.h"
 #include "../service/panel_model.h"
-#include "../service/panel_rx_commands.h"
+#include "../service/panel_offline_job.h"
+#include "../service/panel_transport_sle.h"
 #include "soc_osal.h"
-#include <stdio.h>
 
-static lv_obj_t *g_arc_focus;
-static lv_obj_t *g_lbl_focus_val;
-static lv_obj_t *g_lbl_focus_state;
+static lv_obj_t *g_lbl_frame_state;
+static lv_obj_t *g_btn_frame_scan;
+static lv_obj_t *g_lbl_frame_scan;
 static uint32_t g_rendered_seq = UINT32_MAX;
 
 static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
@@ -29,51 +29,26 @@ static void back_btn_cb(lv_event_t *e)
     ui_manager_switch_page(PAGE_HOME);
 }
 
-static void focus_arc_cb(lv_event_t *e)
-{
-    lv_obj_t *arc = lv_event_get_target(e);
-    int val = lv_arc_get_value(arc);
-    char buf[8];
-    snprintf(buf, sizeof(buf), "S%d", val);
-    lv_label_set_text(g_lbl_focus_val, buf);
-}
-
-static void focus_on_cb(lv_event_t *e)
+static void frame_scan_cb(lv_event_t *e)
 {
     (void)e;
-    panel_button_permissions_t perms;
-    panel_model_get_button_permissions(&perms);
-    if (!perms.can_focus_on) {
-        lv_label_set_text(g_lbl_focus_state, "仅空闲允许");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
+    if (panel_offline_job_is_busy()) {
+        lv_label_set_text(g_lbl_frame_state, "任务忙");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_ORANGE, 0);
         return;
     }
-    int power = lv_arc_get_value(g_arc_focus);
-    if (power < 0) {
-        power = 0;
-    } else if (power > 100) {
-        power = 100;
+    if (!panel_transport_sle_can_control_rx()) {
+        lv_label_set_text(g_lbl_frame_state, "仅离线可用");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_ORANGE, 0);
+        return;
     }
-    if (panel_rx_commands_request_focus_on((uint8_t)power) == ERRCODE_SUCC) {
-        lv_label_set_text(g_lbl_focus_state, "调焦请求");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_BLUE, 0);
-        osal_printk("[CONTROL] focus_on queued s=%u\r\n", (unsigned int)power);
+    if (panel_offline_job_start_frame_scan() == ERRCODE_SUCC) {
+        lv_label_set_text(g_lbl_frame_state, "边框扫描中");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_BLUE, 0);
+        osal_printk("[CONTROL] frame scan queued\r\n");
     } else {
-        lv_label_set_text(g_lbl_focus_state, "发送失败");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
-    }
-}
-
-static void focus_off_cb(lv_event_t *e)
-{
-    (void)e;
-    if (panel_rx_commands_request_focus_off() == ERRCODE_SUCC) {
-        panel_model_request_focus_off();
-        lv_label_set_text(g_lbl_focus_state, "关光请求");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
-    } else {
-        lv_label_set_text(g_lbl_focus_state, "发送失败");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+        lv_label_set_text(g_lbl_frame_state, "发送失败");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_RED, 0);
     }
 }
 
@@ -153,97 +128,55 @@ void page_control_create(lv_obj_t *parent)
     lv_obj_t *body = lv_obj_create(scr);
     panel_page_body_setup(body, 8);
 
-    /* Focus control card */
-    lv_obj_t *focus_card = lv_obj_create(body);
-    lv_obj_set_size(focus_card, 290, 80);
-    lv_obj_remove_flag(focus_card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(focus_card, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(focus_card, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_add_style(focus_card, &style_card, 0);
+    /* Frame scan card */
+    lv_obj_t *frame_card = lv_obj_create(body);
+    lv_obj_set_size(frame_card, 290, 80);
+    lv_obj_remove_flag(frame_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(frame_card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(frame_card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(frame_card, 14, 0);
+    lv_obj_add_style(frame_card, &style_card, 0);
 
-    /* Left: info + buttons */
-    lv_obj_t *left = lv_obj_create(focus_card);
-    lv_obj_set_size(left, 170, 64);
-    lv_obj_remove_flag(left, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(left, 4, 0);
-    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(left, 0, 0);
-    lv_obj_set_style_pad_all(left, 0, 0);
+    lv_obj_t *info = lv_obj_create(frame_card);
+    lv_obj_set_size(info, 160, 56);
+    lv_obj_remove_flag(info, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(info, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(info, 5, 0);
+    lv_obj_set_style_pad_all(info, 0, 0);
+    lv_obj_set_style_bg_opa(info, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(info, 0, 0);
 
-    /* Focus header */
-    lv_obj_t *fh = lv_obj_create(left);
-    lv_obj_set_size(fh, 160, 16);
-    lv_obj_remove_flag(fh, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(fh, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(fh, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(fh, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(fh, 0, 0);
-    lv_obj_set_style_pad_all(fh, 0, 0);
+    lv_obj_t *title_frame = lv_label_create(info);
+    lv_label_set_text(title_frame, LV_SYMBOL_LOOP " 扫描边框");
+    lv_obj_set_style_text_font(title_frame, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(title_frame, COLOR_LASER_BLUE, 0);
 
-    lv_obj_t *ft = lv_label_create(fh);
-    lv_label_set_text(ft, LV_SYMBOL_EYE_OPEN " 弱光功率");
-    lv_obj_set_style_text_font(ft, PANEL_FONT_CN, 0);
-    lv_obj_set_style_text_color(ft, COLOR_LASER_ORANGE, 0);
+    lv_obj_t *detail = lv_label_create(info);
+    lv_label_set_text(detail, "99mm矩形预览");
+    lv_obj_set_style_text_font(detail, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(detail, COLOR_TEXT_MUTED, 0);
 
-    g_lbl_focus_val = lv_label_create(fh);
-    lv_label_set_text(g_lbl_focus_val, "S10");
-    lv_obj_set_style_text_font(g_lbl_focus_val, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(g_lbl_focus_val, COLOR_TEXT_BRIGHT, 0);
+    g_lbl_frame_state = lv_label_create(info);
+    lv_label_set_text(g_lbl_frame_state, "离线空闲可用");
+    lv_obj_set_style_text_font(g_lbl_frame_state, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_GREEN, 0);
 
-    g_lbl_focus_state = lv_label_create(fh);
-    lv_label_set_text(g_lbl_focus_state, "调焦关闭");
-    lv_obj_set_style_text_font(g_lbl_focus_state, PANEL_FONT_CN, 0);
-    lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
+    g_btn_frame_scan = lv_button_create(frame_card);
+    lv_obj_remove_style_all(g_btn_frame_scan);
+    lv_obj_set_size(g_btn_frame_scan, 96, 44);
+    lv_obj_set_style_bg_color(g_btn_frame_scan, COLOR_LASER_BLUE, 0);
+    lv_obj_set_style_bg_opa(g_btn_frame_scan, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_btn_frame_scan, 8, 0);
+    lv_obj_set_style_border_width(g_btn_frame_scan, 0, 0);
+    lv_obj_add_event_cb(g_btn_frame_scan, frame_scan_cb, LV_EVENT_CLICKED, NULL);
 
-    /* ON/OFF buttons */
-    lv_obj_t *btns = lv_obj_create(left);
-    lv_obj_set_size(btns, 160, 28);
-    lv_obj_remove_flag(btns, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btns, 0, 0);
-    lv_obj_set_style_pad_all(btns, 0, 0);
-
-    lv_obj_t *btn_on = lv_button_create(btns);
-    lv_obj_set_size(btn_on, 72, 24);
-    lv_obj_set_style_bg_color(btn_on, COLOR_LASER_RED, 0);
-    lv_obj_set_style_radius(btn_on, 6, 0);
-    lv_obj_t *lbl_on = lv_label_create(btn_on);
-    lv_label_set_text(lbl_on, "调焦ON");
-    lv_obj_set_style_text_font(lbl_on, PANEL_FONT_CN, 0);
-    lv_obj_set_style_text_color(lbl_on, lv_color_white(), 0);
-    lv_obj_center(lbl_on);
-    lv_obj_add_event_cb(btn_on, focus_on_cb, LV_EVENT_CLICKED, NULL);
-    bind_click(lbl_on, focus_on_cb, NULL);
-
-    lv_obj_t *btn_off = lv_button_create(btns);
-    lv_obj_set_size(btn_off, 72, 24);
-    lv_obj_set_style_bg_color(btn_off, COLOR_LASER_GREEN, 0);
-    lv_obj_set_style_radius(btn_off, 6, 0);
-    lv_obj_t *lbl_off = lv_label_create(btn_off);
-    lv_label_set_text(lbl_off, "FOCUS_OFF");
-    lv_obj_set_style_text_font(lbl_off, PANEL_FONT_CN, 0);
-    lv_obj_set_style_text_color(lbl_off, lv_color_white(), 0);
-    lv_obj_center(lbl_off);
-    lv_obj_add_event_cb(btn_off, focus_off_cb, LV_EVENT_CLICKED, NULL);
-    bind_click(lbl_off, focus_off_cb, NULL);
-
-    /* Right: focus power arc */
-    g_arc_focus = lv_arc_create(focus_card);
-    lv_obj_set_size(g_arc_focus, 60, 60);
-    lv_arc_set_bg_angles(g_arc_focus, 0, 360);
-    lv_arc_set_angles(g_arc_focus, 0, 36);
-    lv_arc_set_range(g_arc_focus, 0, 100);
-    lv_arc_set_value(g_arc_focus, 10);
-    lv_obj_set_style_arc_width(g_arc_focus, 6, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(g_arc_focus, COLOR_BORDER, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(g_arc_focus, 6, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(g_arc_focus, COLOR_LASER_RED, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(g_arc_focus, COLOR_TEXT_BRIGHT, LV_PART_KNOB);
-    lv_obj_add_event_cb(g_arc_focus, focus_arc_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    g_lbl_frame_scan = lv_label_create(g_btn_frame_scan);
+    lv_label_set_text(g_lbl_frame_scan, "扫描");
+    lv_obj_set_style_text_font(g_lbl_frame_scan, PANEL_FONT_CN, 0);
+    lv_obj_set_style_text_color(g_lbl_frame_scan, lv_color_white(), 0);
+    lv_obj_center(g_lbl_frame_scan);
+    bind_click(g_lbl_frame_scan, frame_scan_cb, NULL);
 
     /* Jog control card */
     lv_obj_t *jog_card = lv_obj_create(body);
@@ -301,15 +234,18 @@ void page_control_update(void)
     if (g_rendered_seq == g_model.seq) {
         return;
     }
-    if (g_model.state == SYS_STATE_REQUESTING_FOCUS_OFF) {
-        lv_label_set_text(g_lbl_focus_state, "关光请求");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_ORANGE, 0);
-    } else if (g_model.focus_active) {
-        lv_label_set_text(g_lbl_focus_state, "调焦开启");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_RED, 0);
+    bool can_scan = panel_transport_sle_can_control_rx() && !panel_offline_job_is_busy();
+    if (panel_offline_job_is_busy()) {
+        lv_label_set_text(g_lbl_frame_state, "任务进行中");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_ORANGE, 0);
+    } else if (!panel_transport_sle_can_control_rx()) {
+        lv_label_set_text(g_lbl_frame_state, "仅离线可用");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_TEXT_MUTED, 0);
     } else {
-        lv_label_set_text(g_lbl_focus_state, "调焦关闭");
-        lv_obj_set_style_text_color(g_lbl_focus_state, COLOR_LASER_GREEN, 0);
+        lv_label_set_text(g_lbl_frame_state, "离线空闲可用");
+        lv_obj_set_style_text_color(g_lbl_frame_state, COLOR_LASER_GREEN, 0);
     }
+    lv_obj_set_style_bg_opa(g_btn_frame_scan, can_scan ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(g_lbl_frame_scan, can_scan ? LV_OPA_COVER : LV_OPA_50, 0);
     g_rendered_seq = g_model.seq;
 }
