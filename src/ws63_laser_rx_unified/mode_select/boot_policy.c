@@ -1,6 +1,6 @@
 /**
  * @file boot_policy.c
- * @brief R5D SLE + WiFi coexist demo boot policy.
+ * @brief RX boot policy for SLE-first operation with WiFi coexist disabled by default.
  */
 #include "boot_policy.h"
 #include "common_def.h"
@@ -50,7 +50,14 @@ static void rx_boot_start_wifi_coexist_once(void)
 
 #if !RX_BOOT_WIFI_COEXIST_ENABLE
     if (!g_wifi_coexist_disabled_logged) {
-        osal_printk("[RX_BOOT] WiFi coexist disabled for SLE latency test\r\n");
+        osal_printk("[RX_BOOT] WiFi transport compiled=%u coexist_start=0 reason=disabled_default "
+                    "primary=SLE_JOB\r\n",
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+                    1U
+#else
+                    0U
+#endif
+                    );
         g_wifi_coexist_disabled_logged = true;
     }
     return;

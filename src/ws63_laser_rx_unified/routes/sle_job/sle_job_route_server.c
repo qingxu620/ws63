@@ -7,6 +7,7 @@
 #include "sle_job_config.h"
 #include "errcode.h"
 #include "sle_job_protocol.h"
+#include "sle_job_motion_executor.h"
 #include "securec.h"
 #include "soc_osal.h"
 #include "systick.h"
@@ -60,6 +61,7 @@
 #define SLE_JOB_RX_CB_LOG_FIRST 0U
 #define SLE_JOB_RX_CB_LOG_EVERY 0U
 #define SLE_JOB_RX_CB_GAP_SLOW_MS 250U
+#define SLE_JOB_NOTIFY_CALL_SLOW_MS 20U
 
 typedef struct {
     uint16_t conn_id;
@@ -298,9 +300,29 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
                     (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
     }
     if (cb_gap_slow || data_trace_log) {
+        bool motion_busy = false;
+        uint16_t motion_q = 0;
+        unsigned long motion_enq = 0;
+        unsigned long motion_exec = 0;
+        unsigned long motion_late = 0;
+        unsigned long motion_missed = 0;
+        unsigned long motion_max_late = 0;
+        unsigned long motion_last_activity = 0;
+        if (cb_gap_slow) {
+            motion_busy = sle_job_motion_executor_is_busy();
+            motion_q = sle_job_motion_executor_queue_depth();
+            motion_enq = sle_job_motion_executor_enqueued_count();
+            motion_exec = sle_job_motion_executor_executed_count();
+            motion_late = sle_job_motion_executor_late_sample_count();
+            motion_missed = sle_job_motion_executor_missed_sample_count();
+            motion_max_late = sle_job_motion_executor_max_sample_late_us();
+            motion_last_activity = sle_job_motion_executor_last_activity_ms();
+        }
         osal_printk("%s conn=%u len=%u serial=%u cb_gap_ms=%u cb_ms=%u "
                     "type=0x%02x seq=%u payload=%u header=%u data_idx=%u "
-                    "job=%u off=%u data_len=%u q_used=%u q_max=%u drops=%u wake=%u\r\n",
+                    "job=%u off=%u data_len=%u q_used=%u q_max=%u drops=%u wake=%u "
+                    "motion_busy=%u motion_q=%u motion_enq=%lu motion_exec=%lu "
+                    "motion_late=%lu motion_missed=%lu motion_max_late_us=%lu motion_last=%lu\r\n",
                     cb_gap_slow ? "[RX_CB_SLOW]" : "[RX_CB_TRACE]",
                     (unsigned int)conn_id, (unsigned int)len,
                     (unsigned int)serial, (unsigned int)cb_gap_ms,
@@ -311,7 +333,15 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
                     (unsigned int)diag.offset, (unsigned int)diag.data_len,
                     (unsigned int)used, (unsigned int)g_rx_work_max_used,
                     (unsigned int)g_rx_work_dropped,
-                    (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
+                    (unsigned int)SLE_JOB_RX_WORK_USE_SEM,
+                    (unsigned int)(motion_busy ? 1U : 0U),
+                    (unsigned int)motion_q,
+                    motion_enq,
+                    motion_exec,
+                    motion_late,
+                    motion_missed,
+                    motion_max_late,
+                    motion_last_activity);
     }
     return true;
 }
@@ -642,6 +672,57 @@ static errcode_t sle_job_route_server_add(void)
     return ERRCODE_SLE_SUCCESS;
 }
 
+static void tune_job_link_after_connect(uint16_t conn_id)
+{
+#if SLE_JOB_LINK_DATA_LEN_ENABLE
+    errcode_t ret = sle_set_data_len(conn_id, SLE_JOB_LINK_DATA_LEN_OCTETS);
+    osal_printk("[job_rx_link_tune] conn=%u data_len=%u ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)SLE_JOB_LINK_DATA_LEN_OCTETS,
+                (unsigned int)ret);
+#endif
+
+#if SLE_JOB_LINK_HIGH_THROUGHPUT_ENABLE
+    sle_set_phy_t phy_param = {
+        .tx_format = SLE_RADIO_FRAME_2,
+        .rx_format = SLE_RADIO_FRAME_2,
+        .tx_phy = SLE_PHY_4M,
+        .rx_phy = SLE_PHY_4M,
+        .tx_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1,
+        .rx_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1,
+        .g_feedback = 0,
+        .t_feedback = 0,
+    };
+    errcode_t phy_ret = sle_set_phy_param(conn_id, &phy_param);
+    osal_printk("[job_rx_link_phy] conn=%u frame=%u phy=%u pilot=%u ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)SLE_RADIO_FRAME_2,
+                (unsigned int)SLE_PHY_4M,
+                (unsigned int)SLE_PHY_PILOT_DENSITY_16_TO_1,
+                (unsigned int)phy_ret);
+#endif
+}
+
+#if SLE_JOB_LINK_HIGH_THROUGHPUT_ENABLE
+static void sle_set_phy_cbk(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param)
+{
+    uint8_t tx_phy = (param != NULL) ? param->tx_phy : 0xFF;
+    uint8_t rx_phy = (param != NULL) ? param->rx_phy : 0xFF;
+    errcode_t mcs_ret = ERRCODE_SLE_FAIL;
+    if (status == ERRCODE_SLE_SUCCESS) {
+        mcs_ret = sle_set_mcs(conn_id, SLE_MCS_10);
+    }
+    osal_printk("[job_rx_link_phy_cb] conn=%u status=0x%x tx_phy=%u rx_phy=%u "
+                "mcs=%u mcs_ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)status,
+                (unsigned int)tx_phy,
+                (unsigned int)rx_phy,
+                (unsigned int)SLE_MCS_10,
+                (unsigned int)mcs_ret);
+}
+#endif
+
 static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
@@ -651,6 +732,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         conn_table_add(conn_id);
+        tune_job_link_after_connect(conn_id);
 #if SLE_JOB_CONNECTED_ANNOUNCE_ENABLE
         errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
         unused(adv_ret);
@@ -706,6 +788,9 @@ static void sle_conn_register_cbks(void)
     cbk.connect_state_changed_cb = sle_connect_state_changed_cbk;
     cbk.pair_complete_cb = sle_pair_complete_cbk;
     cbk.auth_complete_cb = sle_auth_complete_cbk;
+#if SLE_JOB_LINK_HIGH_THROUGHPUT_ENABLE
+    cbk.set_phy_cb = sle_set_phy_cbk;
+#endif
     sle_connection_register_callbacks(&cbk);
 }
 
@@ -959,12 +1044,60 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
         return ERRCODE_SLE_FAIL;
     }
 
+    const uint8_t *bytes = (const uint8_t *)data;
+    uint8_t pkt_type = 0;
+    uint16_t pkt_seq = 0;
+    uint16_t payload_len = 0;
+    bool ack_packet = false;
+    uint8_t ack_type = 0;
+    uint8_t ack_status = 0;
+    uint16_t ack_seq = 0;
+    uint32_t ack_offset = 0;
+    uint32_t ack_credit = 0;
+    if (len >= SLE_JOB_PACKET_HEADER_LEN && rx_diag_le16(&bytes[0]) == SLE_JOB_PACKET_MAGIC) {
+        pkt_type = bytes[2];
+        pkt_seq = rx_diag_le16(&bytes[4]);
+        payload_len = rx_diag_le16(&bytes[6]);
+        if ((pkt_type == SLE_JOB_PKT_ACK || pkt_type == SLE_JOB_PKT_NACK) &&
+            payload_len == sizeof(sle_job_ack_payload_t) &&
+            len >= (uint16_t)(SLE_JOB_PACKET_HEADER_LEN + sizeof(sle_job_ack_payload_t))) {
+            const uint8_t *payload = &bytes[SLE_JOB_PACKET_HEADER_LEN];
+            ack_packet = true;
+            ack_type = payload[0];
+            ack_status = payload[1];
+            ack_seq = rx_diag_le16(&payload[2]);
+            ack_offset = rx_diag_le32(&payload[8]);
+            ack_credit = rx_diag_le32(&payload[12]);
+        }
+    }
+
     ssaps_ntf_ind_t param = {0};
     param.handle = g_resp_property_handle;
     param.type = SSAP_PROPERTY_TYPE_VALUE;
     param.value_len = len;
     param.value = (uint8_t *)data;
-    return ssaps_notify_indicate(g_server_id, g_owner_conn_id, &param);
+    uint32_t t_notify = (uint32_t)uapi_systick_get_ms();
+    errcode_t ret = ssaps_notify_indicate(g_server_id, g_owner_conn_id, &param);
+    uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_notify;
+    if ((ack_packet && (ack_type != SLE_JOB_PKT_JOB_DATA || ack_status != SLE_JOB_STATUS_OK)) ||
+        ret != ERRCODE_SLE_SUCCESS || call_ms >= SLE_JOB_NOTIFY_CALL_SLOW_MS) {
+        osal_printk("[RX_NOTIFY_TRACE] t=%u pkt=0x%02x pkt_seq=%u ack=%u ack_type=0x%02x "
+                    "ack_seq=%u st=%u off=%u credit=%u len=%u ret=0x%x call_ms=%u conn=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(),
+                    (unsigned int)pkt_type,
+                    (unsigned int)pkt_seq,
+                    (unsigned int)(ack_packet ? 1U : 0U),
+                    (unsigned int)ack_type,
+                    (unsigned int)ack_seq,
+                    (unsigned int)ack_status,
+                    (unsigned int)ack_offset,
+                    (unsigned int)ack_credit,
+                    (unsigned int)len,
+                    (unsigned int)ret,
+                    (unsigned int)call_ms,
+                    (unsigned int)g_owner_conn_id);
+    }
+    return ret;
 }
 
 errcode_t sle_job_route_server_broadcast_packet(const void *data, uint16_t len)

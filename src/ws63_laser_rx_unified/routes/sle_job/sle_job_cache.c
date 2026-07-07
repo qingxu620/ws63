@@ -153,6 +153,20 @@ sle_job_status_t sle_job_cache_write(uint32_t job_id, uint32_t offset, const uin
     return SLE_JOB_STATUS_OK;
 }
 
+bool sle_job_cache_is_duplicate_data(uint32_t job_id, uint32_t offset, uint16_t len)
+{
+    if (job_id != g_job_id || len == 0U || offset > g_received) {
+        return false;
+    }
+
+    uint32_t end = offset + (uint32_t)len;
+    if (end < offset) {
+        return false;
+    }
+
+    return end <= g_received;
+}
+
 sle_job_status_t sle_job_cache_finish(uint32_t job_id, uint32_t total_size, uint16_t expected_crc)
 {
     if (!g_receiving || job_id != g_job_id || total_size != g_total_size) {

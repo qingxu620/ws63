@@ -146,8 +146,8 @@ switch_to_rx_unified() {
     set_config_n CONFIG_LASER_SLE_JOB_RECEIVER
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER
 
-    # R5D experiment compiles all three routes, starts SLE Job, then starts
-    # Legacy WiFi as a coexist demo listener after the SLE server is ready.
+    # Compile all three routes for coverage, but the product boot policy starts
+    # SLE Job only. Legacy WiFi coexist remains runtime-disabled by default.
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
@@ -206,7 +206,8 @@ verify_rx_unified_config() {
 
     echo "  Unified RX config OK: CONFIG_LASER_RX_UNIFIED=y"
     echo "  Standalone SLE role selectors OK: RECEIVER=not set, TRANSMITTER=not set"
-    echo "  R5D OK: SLE + WiFi coexist demo; no owner/arbitration"
+    echo "  Routes compiled: SLE Job + Legacy WiFi + Legacy UART"
+    echo "  Runtime policy: SLE Job primary; WiFi coexist disabled by default"
     echo "  SLE job cache fixed at 65536 bytes"
     echo "  Work area fixed at 99x99 mm"
 }
@@ -292,7 +293,7 @@ generate_manifest() {
 
     cat > "$manifest" <<EOF
 firmware_type=rx_unified
-phase=r5d_sle_wifi_coexist_demo
+phase=sle_job_primary_wifi_compiled_coexist_disabled
 build_time=${TIMESTAMP}
 git_commit=${git_hash}
 git_dirty=${git_dirty}

@@ -179,28 +179,6 @@ static void sd_file_card_cb(lv_event_t *e)
     }
 }
 
-static void frame_scan_card_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
-    if (panel_offline_job_is_busy()) {
-        osal_printk("[HOME] frame scan rejected: offline job busy\r\n");
-        return;
-    }
-    if (!panel_transport_sle_can_control_rx()) {
-        osal_printk("[HOME] frame scan rejected: display-only\r\n");
-        return;
-    }
-    if (panel_offline_job_start_frame_scan() != ERRCODE_SUCC) {
-        osal_printk("[HOME] frame scan queue failed\r\n");
-        return;
-    }
-    lv_label_set_text(g_lbl_safety_val, "任务中");
-    lv_obj_set_style_text_color(g_lbl_safety_val, COLOR_LASER_ORANGE, 0);
-    osal_printk("[HOME] frame scan queued\r\n");
-}
-
 static void create_info_block(lv_obj_t *parent)
 {
     lv_obj_t *block = lv_obj_create(parent);
@@ -242,15 +220,12 @@ static void create_info_block(lv_obj_t *parent)
     lv_obj_t *safety_card = create_card(block, 174, 32);
     lv_obj_set_flex_flow(safety_card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(safety_card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    bind_click(safety_card, frame_scan_card_cb, NULL);
 
     lv_obj_t *safety_lbl = create_label(safety_card, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(safety_lbl, "扫描边框");
-    bind_click(safety_lbl, frame_scan_card_cb, NULL);
+    lv_label_set_text(safety_lbl, "激光状态");
 
     g_lbl_safety_val = create_label(safety_card, PANEL_FONT_CN, COLOR_LASER_YELLOW);
-    lv_label_set_text(g_lbl_safety_val, "执行");
-    bind_click(g_lbl_safety_val, frame_scan_card_cb, NULL);
+    lv_label_set_text(g_lbl_safety_val, "关闭");
 
     lv_obj_t *file_card = create_card(block, 174, 44);
     lv_obj_set_flex_flow(file_card, LV_FLEX_FLOW_ROW);
@@ -621,16 +596,6 @@ static void apply_state(void)
         lv_label_set_text(g_lbl_sd_file, selected->name);
     } else {
         lv_label_set_text(g_lbl_sd_file, "点击选择");
-    }
-
-    {
-        bool frame_busy = panel_offline_job_is_busy();
-        bool frame_ready = panel_transport_sle_can_control_rx() && !frame_busy;
-        lv_label_set_text(g_lbl_safety_val,
-            frame_busy ? "任务中" : (frame_ready ? "执行" : "离线"));
-        lv_obj_set_style_text_color(g_lbl_safety_val,
-            frame_busy ? COLOR_LASER_ORANGE :
-            (frame_ready ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED), 0);
     }
 
     lv_obj_set_style_bg_opa(g_btn_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);

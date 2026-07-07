@@ -34,6 +34,7 @@
 #define SLE_JOB_PANEL_STATUS_TASK_PRIO 6
 #define SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE 0
 #define SLE_JOB_SEND_SLOW_MS 50U
+#define SLE_JOB_EXEC_START_ACK_GRACE_MS 0U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -354,15 +355,45 @@ static bool handle_replayed_packet(const sle_job_packet_view_t *pkt)
     return false;
 }
 
-static void wait_motion_idle(uint32_t timeout_ms)
+static bool wait_motion_idle(uint32_t inactive_timeout_ms)
 {
-    unsigned long start = (unsigned long)uapi_systick_get_ms();
+    uint32_t wait_start = (uint32_t)uapi_systick_get_ms();
+    uint32_t inactive_start = wait_start;
+    uint32_t last_log_ms = inactive_start;
+    unsigned long last_activity = sle_job_motion_executor_last_activity_ms();
+
     while (sle_job_motion_executor_is_busy()) {
-        if (((unsigned long)uapi_systick_get_ms() - start) >= timeout_ms) {
-            break;
+        uint32_t now = (uint32_t)uapi_systick_get_ms();
+        unsigned long activity = sle_job_motion_executor_last_activity_ms();
+        if (activity != 0UL && activity != last_activity) {
+            last_activity = activity;
+            inactive_start = now;
+        }
+        if ((uint32_t)(now - inactive_start) >= inactive_timeout_ms) {
+            osal_printk("[JOB_MOTION_DRAIN_TIMEOUT] inactive_ms=%u q=%u busy=%u "
+                        "enq=%lu exec=%lu last_activity=%lu\r\n",
+                        (unsigned int)(now - inactive_start),
+                        (unsigned int)sle_job_motion_executor_queue_depth(),
+                        (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                        sle_job_motion_executor_enqueued_count(),
+                        sle_job_motion_executor_executed_count(),
+                        last_activity);
+            return false;
+        }
+        if ((uint32_t)(now - last_log_ms) >= 5000U) {
+            osal_printk("[JOB_MOTION_DRAIN] wait_ms=%u inactive_ms=%u q=%u busy=%u "
+                        "enq=%lu exec=%lu\r\n",
+                        (unsigned int)(now - wait_start),
+                        (unsigned int)(now - inactive_start),
+                        (unsigned int)sle_job_motion_executor_queue_depth(),
+                        (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U),
+                        sle_job_motion_executor_enqueued_count(),
+                        sle_job_motion_executor_executed_count());
+            last_log_ms = now;
         }
         osal_msleep(1);
     }
+    return true;
 }
 
 static void wait_exec_inactive(uint32_t timeout_ms)
@@ -476,7 +507,9 @@ static bool execute_line(const char *line)
         if (SLE_JOB_DIAG_LOG) {
             osal_printk("[JOB_EXEC] M5 detected, draining motion queue\r\n");
         }
-        wait_motion_idle(SLE_JOB_MOTION_END_DRAIN_TIMEOUT_MS);
+        if (!wait_motion_idle(SLE_JOB_MOTION_END_DRAIN_TIMEOUT_MS)) {
+            return false;
+        }
         laser_force_off();
     }
     return true;
@@ -554,17 +587,27 @@ static int job_exec_task(void *arg)
             if (sle_job_cache_is_all_received()) {
                 break;
             }
+            uint16_t queue = sle_job_motion_executor_queue_depth();
+            bool motion_busy = sle_job_motion_executor_is_busy();
+            if (motion_busy || queue > 0U) {
+                wait_start_ms = 0;
+                osal_msleep(1);
+                continue;
+            }
             if (wait_start_ms == 0) {
                 wait_start_ms = (uint32_t)uapi_systick_get_ms();
             }
             uint32_t wait_elapsed = (uint32_t)uapi_systick_get_ms() - wait_start_ms;
             if (wait_elapsed >= SLE_JOB_EXEC_WAIT_DATA_TIMEOUT_MS) {
-                osal_printk("[RX_WAIT_TIMEOUT] consumed=%u available=%u total=%u all_received=%d state=%s\r\n",
+                osal_printk("[RX_WAIT_TIMEOUT] consumed=%u available=%u total=%u all_received=%d "
+                            "state=%s q=%u motion_busy=%u\r\n",
                             (unsigned int)sle_job_cache_received(),
                             (unsigned int)sle_job_cache_available(),
                             (unsigned int)sle_job_cache_total_size(),
                             (int)sle_job_cache_is_all_received(),
-                            state_name(g_state));
+                            state_name(g_state),
+                            (unsigned int)queue,
+                            (unsigned int)(motion_busy ? 1U : 0U));
                 sle_job_manager_safe_stop("exec-wait-timeout");
                 g_exec_active = false;
                 return 0;
@@ -644,7 +687,11 @@ static int job_exec_task(void *arg)
         return 0;
     }
 
-    wait_motion_idle(SLE_JOB_MOTION_END_DRAIN_TIMEOUT_MS);
+    if (!wait_motion_idle(SLE_JOB_MOTION_END_DRAIN_TIMEOUT_MS)) {
+        sle_job_manager_safe_stop("motion-drain-timeout");
+        g_exec_active = false;
+        return 0;
+    }
     laser_force_off();
     focus_force_off();
     if (!g_abort_requested) {
@@ -653,7 +700,8 @@ static int job_exec_task(void *arg)
         int32_t y_um = (int32_t)(sle_job_motion_executor_get_y() * 1000.0);
         osal_printk("[JOB_EXEC] done job=%u lines=%u x_um=%d y_um=%d "
                     "seg=%lu short=%lu late=%lu missed=%lu max_late_us=%lu "
-                    "q=%u min_mark_us=%u sample_us=%u profile=%u\r\n",
+                    "q=%u min_mark_us=%u sample_us=%u profile=%u "
+                    "dac_write=%lu dac_skip=%lu sleep_th_us=%u\r\n",
                     (unsigned int)sle_job_cache_job_id(), (unsigned int)g_executed_lines,
                     (int)x_um, (int)y_um,
                     sle_job_motion_executor_motion_segment_count(),
@@ -664,7 +712,10 @@ static int job_exec_task(void *arg)
                     (unsigned int)sle_job_motion_executor_queue_depth(),
                     (unsigned int)SLE_JOB_MOTION_MIN_MARK_SEGMENT_US,
                     (unsigned int)SLE_JOB_MOTION_SAMPLE_PERIOD_US,
-                    (unsigned int)SLE_JOB_MOTION_SPEED_PROFILE);
+                    (unsigned int)SLE_JOB_MOTION_SPEED_PROFILE,
+                    sle_job_motion_executor_dac_write_count(),
+                    sle_job_motion_executor_dac_skip_count(),
+                    (unsigned int)SLE_JOB_MOTION_SLEEP_THRESHOLD_US);
         sle_job_cache_clear();
     }
     g_exec_active = false;
@@ -814,12 +865,69 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
         return;
     }
 
+    if (sle_job_cache_is_duplicate_data(hdr.job_id, hdr.offset, hdr.data_len)) {
+        seq_commit(pkt->seq);
+        g_diag_rx_data_count++;
+        uint32_t data_index = g_diag_rx_data_count;
+        uint32_t t_ack = (uint32_t)uapi_systick_get_ms();
+        send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_OK, "dup_data");
+        uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
+        uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_start;
+        osal_printk("[JOB_DATA_DUP] seq=%u data_idx=%u job=%u off=%u len=%u "
+                    "rx=%u consumed=%u ack_ms=%u total_ms=%u state=%s\r\n",
+                    (unsigned int)pkt->seq, (unsigned int)data_index,
+                    (unsigned int)hdr.job_id, (unsigned int)hdr.offset,
+                    (unsigned int)hdr.data_len,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)ack_ms, (unsigned int)total_ms,
+                    state_name(g_state));
+        return;
+    }
+
     uint32_t t_write = (uint32_t)uapi_systick_get_ms();
     sle_job_status_t st = sle_job_cache_write(hdr.job_id, hdr.offset,
                                           &pkt->payload[sizeof(sle_job_data_payload_t)], hdr.data_len);
     uint32_t write_ms = (uint32_t)uapi_systick_get_ms() - t_write;
     if (st == SLE_JOB_STATUS_OK) {
         seq_commit(pkt->seq);
+        uint32_t total_size = sle_job_cache_total_size();
+        if (total_size > 0U && sle_job_cache_received() >= total_size &&
+            !sle_job_cache_is_all_received()) {
+            sle_job_status_t finish_st = sle_job_cache_finish(hdr.job_id, total_size, 0);
+            if (finish_st == SLE_JOB_STATUS_OK) {
+                sle_job_cache_set_all_received();
+                if (g_state == SLE_JOB_STATE_RECEIVING_JOB) {
+                    g_state = SLE_JOB_STATE_JOB_READY;
+                }
+                osal_printk("[JOB_DATA_AUTO_FINISH] t=%u seq=%u job=%u rx=%u total=%u "
+                            "crc=0x%04x state=%s\r\n",
+                            (unsigned int)uapi_systick_get_ms(),
+                            (unsigned int)pkt->seq,
+                            (unsigned int)hdr.job_id,
+                            (unsigned int)sle_job_cache_received(),
+                            (unsigned int)total_size,
+                            (unsigned int)sle_job_cache_crc(),
+                            state_name(g_state));
+            } else {
+                st = finish_st;
+                if (g_state == SLE_JOB_STATE_RECEIVING_JOB) {
+                    g_state = SLE_JOB_STATE_ERROR;
+                }
+                g_abort_requested = true;
+                g_pause_requested = false;
+                osal_printk("[JOB_DATA_AUTO_FINISH_FAIL] t=%u seq=%u job=%u rx=%u total=%u "
+                            "st=%u crc=0x%04x state=%s\r\n",
+                            (unsigned int)uapi_systick_get_ms(),
+                            (unsigned int)pkt->seq,
+                            (unsigned int)hdr.job_id,
+                            (unsigned int)sle_job_cache_received(),
+                            (unsigned int)total_size,
+                            (unsigned int)finish_st,
+                            (unsigned int)sle_job_cache_crc(),
+                            state_name(g_state));
+            }
+        }
     }
     g_diag_rx_data_count++;
     uint32_t data_index = g_diag_rx_data_count;
@@ -853,18 +961,55 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
     }
 }
 
+static bool job_end_is_idempotent(const sle_job_end_payload_t *end)
+{
+    if (end == NULL || !sle_job_cache_is_all_received() ||
+        end->job_id != sle_job_cache_job_id() ||
+        end->total_size != sle_job_cache_total_size() ||
+        sle_job_cache_received() < end->total_size) {
+        return false;
+    }
+    if (end->job_crc16 != 0U && sle_job_cache_crc() != end->job_crc16) {
+        return false;
+    }
+    return true;
+}
+
 static void handle_job_end(const sle_job_packet_view_t *pkt)
 {
-    if ((g_state != SLE_JOB_STATE_RECEIVING_JOB && g_state != SLE_JOB_STATE_EXECUTING &&
-         g_state != SLE_JOB_STATE_PAUSED) ||
-        pkt->len != sizeof(sle_job_end_payload_t)) {
-        osal_printk("[JOB_END_REJECT] state=%s seq=%u pkt_len=%u\r\n",
+    if (pkt->len != sizeof(sle_job_end_payload_t)) {
+        osal_printk("[JOB_END_REJECT] reason=bad_len state=%s seq=%u pkt_len=%u\r\n",
                     state_name(g_state), (unsigned int)pkt->seq, (unsigned int)pkt->len);
+        send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB);
+        return;
+    }
+
+    sle_job_end_payload_t end;
+    memcpy(&end, pkt->payload, sizeof(end));
+
+    if (job_end_is_idempotent(&end)) {
+        seq_commit(pkt->seq);
+        send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_OK);
+        osal_printk("[JOB_END_DUP] t=%u seq=%u job=%u rx=%u total=%u state=%s\r\n",
+                    (unsigned int)uapi_systick_get_ms(),
+                    (unsigned int)pkt->seq,
+                    (unsigned int)end.job_id,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_total_size(),
+                    state_name(g_state));
+        return;
+    }
+
+    if (g_state != SLE_JOB_STATE_RECEIVING_JOB && g_state != SLE_JOB_STATE_EXECUTING &&
+        g_state != SLE_JOB_STATE_PAUSED) {
+        osal_printk("[JOB_END_REJECT] reason=bad_state state=%s seq=%u job=%u total=%u rx=%u\r\n",
+                    state_name(g_state), (unsigned int)pkt->seq,
+                    (unsigned int)end.job_id, (unsigned int)end.total_size,
+                    (unsigned int)sle_job_cache_received());
         send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_STATE);
         return;
     }
-    sle_job_end_payload_t end;
-    memcpy(&end, pkt->payload, sizeof(end));
+
     sle_job_status_t st = sle_job_cache_finish(end.job_id, end.total_size, end.job_crc16);
     if (st == SLE_JOB_STATUS_OK) {
         if (g_state == SLE_JOB_STATE_RECEIVING_JOB) {
@@ -931,6 +1076,26 @@ static void handle_exec_start(const sle_job_packet_view_t *pkt)
                 (unsigned int)sle_job_motion_executor_queue_depth(),
                 state_name(g_state));
     if (st == SLE_JOB_STATUS_OK) {
+#if SLE_JOB_EXEC_START_ACK_GRACE_MS > 0
+        uint32_t grace_start_ms = (uint32_t)uapi_systick_get_ms();
+        osal_printk("[EXEC_START_ACK_GRACE] begin t=%u wait=%u rx=%u consumed=%u avail=%u q=%u motion_busy=%u\r\n",
+                    (unsigned int)grace_start_ms,
+                    (unsigned int)SLE_JOB_EXEC_START_ACK_GRACE_MS,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U));
+        osal_msleep(SLE_JOB_EXEC_START_ACK_GRACE_MS);
+        osal_printk("[EXEC_START_ACK_GRACE] end t=%u waited=%u rx=%u consumed=%u avail=%u q=%u motion_busy=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(),
+                    (unsigned int)((uint32_t)uapi_systick_get_ms() - grace_start_ms),
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available(),
+                    (unsigned int)sle_job_motion_executor_queue_depth(),
+                    (unsigned int)(sle_job_motion_executor_is_busy() ? 1U : 0U));
+#endif
         sle_job_status_t launch_st = launch_job_execution();
         if (launch_st != SLE_JOB_STATUS_OK) {
             osal_printk("[EXEC_START] launch failed st=%u\r\n", launch_st);

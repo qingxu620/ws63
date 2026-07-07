@@ -740,10 +740,24 @@ class SleJobSerialClient:
                         self._on_log("status", f"PREROLL offset={acked_offset} elapsed={int((time.perf_counter()-t_begin)*1000)}ms")
                         if status_cb:
                             status_cb("预缓冲完成，启动执行", pct)
+                        exec_t0 = time.perf_counter()
                         self.send_line(f"@EXEC_START {job_id}")
-                        self.wait_for("@ACK type=16", preroll_control_timeout)
+                        exec_ack = self.wait_for("@ACK type=16", preroll_control_timeout)
+                        self._on_log(
+                            "status",
+                            f"[HOST_EXEC_START_TIMING] wait_ms={exec_ack.elapsed_ms} "
+                            f"total_ms={int((time.perf_counter() - exec_t0) * 1000)} "
+                            f"line={exec_ack.line}",
+                        )
+                        resume_t0 = time.perf_counter()
                         self.send_line("@DATA_RESUME")
-                        self.wait_for("@OK data_resume", preroll_control_timeout)
+                        resume_ack = self.wait_for("@OK data_resume", preroll_control_timeout)
+                        self._on_log(
+                            "status",
+                            f"[HOST_DATA_RESUME_TIMING] wait_ms={resume_ack.elapsed_ms} "
+                            f"total_ms={int((time.perf_counter() - resume_t0) * 1000)} "
+                            f"line={resume_ack.line}",
+                        )
                         self._on_log("status", "DATA_RESUME OK")
                         if status_cb:
                             status_cb(f"继续上传 {acked_offset}/{total} bytes", pct)

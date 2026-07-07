@@ -35,6 +35,8 @@ unsigned long sle_job_motion_executor_missed_sample_count(void);
 unsigned long sle_job_motion_executor_motion_segment_count(void);
 unsigned long sle_job_motion_executor_short_segment_count(void);
 unsigned long sle_job_motion_executor_max_sample_late_us(void);
+unsigned long sle_job_motion_executor_dac_write_count(void);
+unsigned long sle_job_motion_executor_dac_skip_count(void);
 
 #ifdef __cplusplus
 }

@@ -63,23 +63,6 @@ typedef enum {
     PANEL_OFFLINE_FLOW_ABORTED,
 } panel_offline_flow_t;
 
-typedef enum {
-    PANEL_OFFLINE_REQUEST_FILE = 0,
-    PANEL_OFFLINE_REQUEST_FRAME_SCAN,
-} panel_offline_request_t;
-
-static const uint8_t g_frame_scan_gcode[] =
-    "M5\n"
-    "G90\n"
-    "G0 X0 Y0 F100000\n"
-    "M3 S200\n"
-    "G1 X99 Y0 F500\n"
-    "G1 X99 Y99 F500\n"
-    "G1 X0 Y99 F500\n"
-    "G1 X0 Y0 F500\n"
-    "M5\n"
-    "M30\n";
-
 static osal_semaphore g_ack_sem;
 static volatile bool g_ack_sem_ready;
 static volatile bool g_wait_active;
@@ -94,7 +77,6 @@ static volatile uint8_t g_data_ack_status = JOB_STATUS_OK;
 static volatile uint32_t g_data_ack_credit;
 static volatile bool g_data_error;
 static uint8_t g_pending_index;
-static volatile panel_offline_request_t g_pending_request;
 static uint8_t g_readahead_buf[PANEL_OFFLINE_READAHEAD_BYTES];
 static uint32_t g_diag_data_count;
 
@@ -866,91 +848,6 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
     return PANEL_OFFLINE_FLOW_OK;
 }
 
-static panel_offline_flow_t upload_memory_job(const char *name, const uint8_t *data,
-                                              uint32_t total_size, uint16_t crc)
-{
-    uint32_t offset = 0;
-    uint32_t packet_count = 0;
-    uint32_t t_start = (uint32_t)uapi_systick_get_ms();
-    bool exec_started = false;
-    preroll_tracker_t preroll;
-    preroll_tracker_init(&preroll, total_size);
-    g_diag_data_count = 0;
-    reset_data_ack_state();
-
-    errcode_t ret = send_job_begin(PANEL_OFFLINE_JOB_ID, total_size, crc);
-    if (ret != ERRCODE_SUCC) {
-        return PANEL_OFFLINE_FLOW_FAIL;
-    }
-
-    while (offset < total_size) {
-        panel_offline_flow_t flow = handle_priority_control(true);
-        if (flow != PANEL_OFFLINE_FLOW_OK) {
-            return flow;
-        }
-
-        uint32_t remain = total_size - offset;
-        uint16_t chunk_len = (remain > PANEL_OFFLINE_CHUNK_MAX) ?
-            (uint16_t)PANEL_OFFLINE_CHUNK_MAX : (uint16_t)remain;
-        const uint8_t *chunk = &data[offset];
-
-        ret = send_job_data(PANEL_OFFLINE_JOB_ID, offset, chunk, chunk_len);
-        if (ret != ERRCODE_SUCC) {
-            return PANEL_OFFLINE_FLOW_FAIL;
-        }
-
-        uint32_t trigger_offset = 0;
-        if (!exec_started &&
-            preroll_tracker_consume(&preroll, chunk, chunk_len, offset, &trigger_offset)) {
-            if (!wait_data_drain(trigger_offset)) {
-                return PANEL_OFFLINE_FLOW_FAIL;
-            }
-            ret = send_exec_start(PANEL_OFFLINE_JOB_ID);
-            if (ret != ERRCODE_SUCC) {
-                return PANEL_OFFLINE_FLOW_FAIL;
-            }
-            exec_started = true;
-            panel_model_offline_execution_started();
-            osal_printk("[PANEL_OFFLINE] exec start memory job=%s at off=%u\r\n",
-                        name, (unsigned int)(offset + (uint32_t)chunk_len));
-        }
-
-        offset += (uint32_t)chunk_len;
-        packet_count++;
-        panel_model_offline_upload_progress(offset);
-        if ((packet_count % PANEL_OFFLINE_YIELD_PACKETS) == 0U) {
-            osal_yield();
-        }
-    }
-
-    panel_offline_flow_t flow = handle_priority_control(true);
-    if (flow != PANEL_OFFLINE_FLOW_OK) {
-        return flow;
-    }
-    if (!wait_data_drain(total_size)) {
-        return PANEL_OFFLINE_FLOW_FAIL;
-    }
-
-    ret = send_job_end(PANEL_OFFLINE_JOB_ID, total_size, crc);
-    if (ret != ERRCODE_SUCC) {
-        return PANEL_OFFLINE_FLOW_FAIL;
-    }
-
-    if (!exec_started) {
-        ret = send_exec_start(PANEL_OFFLINE_JOB_ID);
-        if (ret != ERRCODE_SUCC) {
-            return PANEL_OFFLINE_FLOW_FAIL;
-        }
-        panel_model_offline_execution_started();
-    }
-
-    uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - t_start;
-    osal_printk("[PANEL_OFFLINE] memory upload done job=%s bytes=%u packets=%u elapsed=%ums\r\n",
-                name, (unsigned int)total_size, (unsigned int)packet_count,
-                (unsigned int)elapsed);
-    return PANEL_OFFLINE_FLOW_OK;
-}
-
 static void poll_execution_until_idle(void)
 {
     uint32_t start = (uint32_t)uapi_systick_get_ms();
@@ -1040,33 +937,6 @@ static void run_offline_job(uint8_t index)
     poll_execution_until_idle();
 }
 
-static void run_frame_scan_job(void)
-{
-    if (!panel_transport_sle_can_control_rx()) {
-        panel_model_offline_error("DISPLAY_ONLY");
-        osal_printk("[PANEL_OFFLINE] frame rejected: tx mirror present, display-only mode\r\n");
-        return;
-    }
-
-    const uint32_t total_size = (uint32_t)(sizeof(g_frame_scan_gcode) - 1U);
-    panel_model_offline_upload_begin("SCAN_FRAME", total_size, 10U);
-    osal_printk("[PANEL_OFFLINE] frame scan begin size=%u\r\n", (unsigned int)total_size);
-
-    panel_offline_flow_t flow = upload_memory_job("SCAN_FRAME", g_frame_scan_gcode, total_size, 0);
-    if (flow == PANEL_OFFLINE_FLOW_ABORTED) {
-        osal_printk("[PANEL_OFFLINE] frame scan aborted by screen control\r\n");
-        return;
-    }
-    if (flow != PANEL_OFFLINE_FLOW_OK) {
-        abort_rx_best_effort();
-        panel_model_offline_error("FRAME_FAIL");
-        return;
-    }
-
-    panel_model_offline_upload_progress(total_size);
-    poll_execution_until_idle();
-}
-
 static int panel_offline_job_task(void *arg)
 {
     (void)arg;
@@ -1081,11 +951,7 @@ static int panel_offline_job_task(void *arg)
         g_busy = true;
         panel_transport_sle_set_standalone_session_active(true);
         panel_rx_commands_set_offline_upload_active(true);
-        if (g_pending_request == PANEL_OFFLINE_REQUEST_FRAME_SCAN) {
-            run_frame_scan_job();
-        } else {
-            run_offline_job(g_pending_index);
-        }
+        run_offline_job(g_pending_index);
         panel_rx_commands_set_offline_upload_active(false);
         panel_transport_sle_set_standalone_session_active(false);
         g_busy = false;
@@ -1114,21 +980,8 @@ errcode_t panel_offline_job_start_selected(void)
         return ERRCODE_FAIL;
     }
     g_pending_index = (uint8_t)mgr->selected_index;
-    g_pending_request = PANEL_OFFLINE_REQUEST_FILE;
     g_start_requested = true;
     osal_printk("[PANEL_OFFLINE] start request index=%u\r\n", (unsigned int)g_pending_index);
-    return ERRCODE_SUCC;
-}
-
-errcode_t panel_offline_job_start_frame_scan(void)
-{
-    if (g_busy || g_start_requested || !panel_transport_sle_can_control_rx()) {
-        return ERRCODE_FAIL;
-    }
-    g_pending_index = 0;
-    g_pending_request = PANEL_OFFLINE_REQUEST_FRAME_SCAN;
-    g_start_requested = true;
-    osal_printk("[PANEL_OFFLINE] frame scan request\r\n");
     return ERRCODE_SUCC;
 }
 

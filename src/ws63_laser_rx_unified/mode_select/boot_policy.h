@@ -1,6 +1,6 @@
 /**
  * @file boot_policy.h
- * @brief R5D SLE + WiFi coexist demo boot policy.
+ * @brief RX SLE-first boot policy with WiFi coexist disabled by default.
  */
 #ifndef WS63_LASER_RX_UNIFIED_BOOT_POLICY_H
 #define WS63_LASER_RX_UNIFIED_BOOT_POLICY_H

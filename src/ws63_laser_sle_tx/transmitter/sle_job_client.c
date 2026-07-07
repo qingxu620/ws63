@@ -96,6 +96,41 @@ static uint16_t g_panel_adv_data_len = 0;
 static uint8_t g_panel_scan_rsp_data[TX_PANEL_ADV_DATA_LEN_MAX];
 static uint16_t g_panel_scan_rsp_data_len = 0;
 
+static void tune_job_link_after_connect(uint16_t conn_id, uint8_t role)
+{
+    if (role != SLE_LINK_ROLE_RX) {
+        return;
+    }
+
+#if JOB_SLE_LINK_DATA_LEN_ENABLE
+    errcode_t ret = sle_set_data_len(conn_id, JOB_SLE_LINK_DATA_LEN_OCTETS);
+    osal_printk("[tx_link_tune] conn=%u data_len=%u ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)JOB_SLE_LINK_DATA_LEN_OCTETS,
+                (unsigned int)ret);
+#endif
+
+#if JOB_SLE_LINK_HIGH_THROUGHPUT_ENABLE
+    sle_set_phy_t phy_param = {
+        .tx_format = SLE_RADIO_FRAME_2,
+        .rx_format = SLE_RADIO_FRAME_2,
+        .tx_phy = SLE_PHY_4M,
+        .rx_phy = SLE_PHY_4M,
+        .tx_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1,
+        .rx_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1,
+        .g_feedback = 0,
+        .t_feedback = 0,
+    };
+    errcode_t phy_ret = sle_set_phy_param(conn_id, &phy_param);
+    osal_printk("[tx_link_phy] conn=%u frame=%u phy=%u pilot=%u ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)SLE_RADIO_FRAME_2,
+                (unsigned int)SLE_PHY_4M,
+                (unsigned int)SLE_PHY_PILOT_DENSITY_16_TO_1,
+                (unsigned int)phy_ret);
+#endif
+}
+
 /* Compatible with current ws63_sle_laser and ws63_test receiver defaults. */
 static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
@@ -246,7 +281,7 @@ static void stop_panel_announce_if_enabled(const char *reason)
 
 static void try_start_panel_announce(void)
 {
-    if (!g_sle_enabled || !g_panel_adv_data_ready || g_panel_adv_enabled ||
+    if (!g_background_seek_allowed || !g_sle_enabled || !g_panel_adv_data_ready || g_panel_adv_enabled ||
         g_seek_active || g_connecting || g_conn_id == SLE_CONN_INVALID || !g_handles_ready) {
         return;
     }
@@ -678,6 +713,7 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
                     (unsigned int)conn_id, (unsigned int)role,
                     (unsigned int)interval_units,
                     (unsigned int)param_ret);
+        tune_job_link_after_connect(conn_id, role);
 
         /* Start service discovery */
         ssap_exchange_info_t info = {0};
@@ -803,6 +839,28 @@ static void write_cfm_cbk(uint8_t client_id, uint16_t conn_id,
     }
 }
 
+#if JOB_SLE_LINK_HIGH_THROUGHPUT_ENABLE
+static void set_phy_cbk(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param)
+{
+    if (conn_id != g_conn_id) {
+        return;
+    }
+    uint8_t tx_phy = (param != NULL) ? param->tx_phy : 0xFF;
+    uint8_t rx_phy = (param != NULL) ? param->rx_phy : 0xFF;
+    errcode_t mcs_ret = ERRCODE_SLE_FAIL;
+    if (status == ERRCODE_SLE_SUCCESS) {
+        mcs_ret = sle_set_mcs(conn_id, SLE_MCS_10);
+    }
+    osal_printk("[tx_link_phy_cb] conn=%u status=0x%x tx_phy=%u rx_phy=%u mcs=%u mcs_ret=0x%x\r\n",
+                (unsigned int)conn_id,
+                (unsigned int)status,
+                (unsigned int)tx_phy,
+                (unsigned int)rx_phy,
+                (unsigned int)SLE_MCS_10,
+                (unsigned int)mcs_ret);
+}
+#endif
+
 static void notification_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_handle_value_t *data, errcode_t status)
 {
@@ -883,6 +941,9 @@ errcode_t sle_job_client_init(void)
     conn_cbk.connect_state_changed_cb = connect_state_changed_cbk;
     conn_cbk.pair_complete_cb = pair_complete_cbk;
     conn_cbk.auth_complete_cb = auth_complete_cbk;
+#if JOB_SLE_LINK_HIGH_THROUGHPUT_ENABLE
+    conn_cbk.set_phy_cb = set_phy_cbk;
+#endif
     sle_connection_register_callbacks(&conn_cbk);
 
     ssapc_callbacks_t ssapc_cbk = {0};
@@ -1035,6 +1096,7 @@ void sle_job_client_set_background_seek_allowed(bool allowed)
     osal_printk("[tx_seek] background_allowed=%u\r\n", allowed ? 1U : 0U);
 
     if (!allowed) {
+        stop_panel_announce_if_enabled("background-disabled");
         if (g_pending_role == SLE_LINK_ROLE_PANEL) {
             g_connecting = false;
             g_pending_role = SLE_LINK_ROLE_NONE;
@@ -1093,6 +1155,9 @@ errcode_t sle_job_client_update_panel_status_adv(const panel_status_payload_t *s
 {
     if (status == NULL) {
         return ERRCODE_SLE_FAIL;
+    }
+    if (!g_background_seek_allowed) {
+        return ERRCODE_SLE_SUCCESS;
     }
 
     g_panel_adv_data_len = build_panel_adv_data(status);
