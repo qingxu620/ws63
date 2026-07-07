@@ -150,11 +150,6 @@ static bool delay_until_us_interruptible(uint64_t target_us)
         }
 
         uint64_t remain_us = target_us - now_us;
-        if (remain_us >= SLE_JOB_MOTION_SLEEP_THRESHOLD_US) {
-            osal_msleep(1);
-            continue;
-        }
-
         uint32_t chunk_us = (remain_us > SLE_JOB_MOTION_DELAY_CHUNK_US) ?
                             SLE_JOB_MOTION_DELAY_CHUNK_US : (uint32_t)remain_us;
         if (g_abort_requested) {
@@ -309,18 +304,8 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
 #endif
 }
 
-void sle_job_motion_executor_init(void)
+void sle_job_motion_executor_reset_stats(void)
 {
-    g_current_x = 0.0;
-    g_current_y = 0.0;
-    g_command_active = false;
-    g_motion_active = false;
-    g_abort_requested = false;
-    g_last_activity_ms = 0;
-    g_queue_head = 0;
-    g_queue_tail = 0;
-    g_worker_started = false;
-    g_output_armed = false;
     g_enqueued_count = 0;
     g_executed_count = 0;
     g_late_sample_count = 0;
@@ -335,6 +320,21 @@ void sle_job_motion_executor_init(void)
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
     g_last_move_slow_log_ms = 0;
 #endif
+}
+
+void sle_job_motion_executor_init(void)
+{
+    g_current_x = 0.0;
+    g_current_y = 0.0;
+    g_command_active = false;
+    g_motion_active = false;
+    g_abort_requested = false;
+    g_last_activity_ms = 0;
+    g_queue_head = 0;
+    g_queue_tail = 0;
+    g_worker_started = false;
+    g_output_armed = false;
+    sle_job_motion_executor_reset_stats();
     g_last_dac_x = 0;
     g_last_dac_y = 0;
     g_last_dac_valid = false;

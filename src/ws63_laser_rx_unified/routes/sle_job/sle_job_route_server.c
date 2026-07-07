@@ -298,12 +298,18 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
         used > (SLE_JOB_RX_WORK_QUEUE_SIZE / 2U)) {
         osal_printk("[RX_CB_TIMING] conn=%u len=%u serial=%u cb_ms=%u pre_lock_ms=%u "
                     "lock_ms=%u copy_ms=%u unlock_ms=%u sem_up_ms=%u "
-                    "q_used=%u q_max=%u enq=%u drops=%u wake=%u\r\n",
+                    "type=0x%02x seq=%u payload=%u header=%u data_idx=%u "
+                    "job=%u off=%u data_len=%u q_used=%u q_max=%u enq=%u drops=%u wake=%u\r\n",
                     (unsigned int)conn_id, (unsigned int)len,
                     (unsigned int)serial, (unsigned int)cb_ms,
                     (unsigned int)pre_lock_ms, (unsigned int)lock_ms,
                     (unsigned int)copy_ms, (unsigned int)unlock_ms,
                     (unsigned int)sem_up_ms,
+                    (unsigned int)diag.type, (unsigned int)diag.seq,
+                    (unsigned int)diag.payload_len,
+                    (unsigned int)(diag.header_ok ? 1U : 0U),
+                    (unsigned int)data_index, (unsigned int)diag.job_id,
+                    (unsigned int)diag.offset, (unsigned int)diag.data_len,
                     (unsigned int)used, (unsigned int)g_rx_work_max_used,
                     (unsigned int)g_rx_work_enqueued, (unsigned int)g_rx_work_dropped,
                     (unsigned int)SLE_JOB_RX_WORK_USE_SEM);
@@ -394,6 +400,7 @@ static int rx_work_task(void *arg)
         uint32_t wait_ms = t_start - item.enqueue_ms;
         uint32_t cb_to_work_ms = t_start - item.cb_start_ms;
         uint32_t ready_to_work_ms = t_start - item.ready_ms;
+        sle_job_rx_cb_diag_t diag = rx_cb_diag_parse_packet(item.data, item.len);
         if (item.conn_id == g_owner_conn_id && g_packet_cb != NULL) {
             g_packet_cb(item.conn_id, item.data, item.len);
         } else {
@@ -407,11 +414,20 @@ static int rx_work_task(void *arg)
             cb_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
             ready_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS) {
             osal_printk("[RX_WORK_TIMING] conn=%u len=%u serial=%u wait_ms=%u "
-                        "ready_to_work_ms=%u cb_to_work_ms=%u proc_ms=%u owner=%u q_used=%u\r\n",
+                        "ready_to_work_ms=%u cb_to_work_ms=%u proc_ms=%u "
+                        "type=0x%02x seq=%u payload=%u header=%u "
+                        "job=%u off=%u data_len=%u owner=%u q_used=%u\r\n",
                         (unsigned int)item.conn_id, (unsigned int)item.len,
                         (unsigned int)item.serial, (unsigned int)wait_ms,
                         (unsigned int)ready_to_work_ms,
                         (unsigned int)cb_to_work_ms, (unsigned int)proc_ms,
+                        (unsigned int)diag.type,
+                        (unsigned int)diag.seq,
+                        (unsigned int)diag.payload_len,
+                        (unsigned int)(diag.header_ok ? 1U : 0U),
+                        (unsigned int)diag.job_id,
+                        (unsigned int)diag.offset,
+                        (unsigned int)diag.data_len,
                         (unsigned int)g_owner_conn_id,
                         (unsigned int)rx_work_queue_used());
         }

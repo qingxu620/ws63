@@ -1687,6 +1687,13 @@ static void handle_command_line(char *line)
             g_panel_local_job_state = JOB_STATE_EXECUTING;
             tx_panel_publish_local_status(true);
             host_sendf("@ACK type=16 seq=0 status=0\r\n");
+        } else {
+            g_panel_local_last_error = g_wait_status;
+            tx_panel_publish_local_status(true);
+            osal_printk("[JOB_TX_EXEC_START_FAIL] job=%u status=%u\r\n",
+                        (unsigned int)start.job_id,
+                        (unsigned int)g_wait_status);
+            host_sendf("@ERR exec_start_failed status=%u\r\n", (unsigned int)g_wait_status);
         }
         return;
     }
@@ -1884,9 +1891,32 @@ static int uart_rx_task(void *arg)
                                    (unsigned int)next_host_offset,
                                    (unsigned int)ack_offset,
                                    (unsigned int)outstanding,
-                                   (unsigned int)tx_async_data_window_bytes(),
-                                   (unsigned int)idle_ms,
-                                   (unsigned int)g_job_chunk_len);
+                                    (unsigned int)tx_async_data_window_bytes(),
+                                    (unsigned int)idle_ms,
+                                    (unsigned int)g_job_chunk_len);
+                    }
+                    if (g_job_chunk_len > 0U && idle_ms >= JOB_TX_DATA_UART_IDLE_BUSY_MS) {
+                        uint32_t partial_offset = g_job_offset;
+                        if (flush_job_chunk() == ERRCODE_SUCC) {
+                            host_sendf("@ACK type=%u seq=0 status=%u offset=%u partial=1\r\n",
+                                       PKT_JOB_DATA, JOB_STATUS_OK,
+                                       (unsigned int)partial_offset);
+                            data_idle_ticks = 0;
+                            data_idle_start_ms = 0;
+                            data_idle_last_log_ms = 0;
+                            data_idle_last_busy_ms = 0;
+                            continue;
+                        }
+                        osal_printk("[JOB_TX] idle partial flush fail off=%u len=%u\r\n",
+                                    (unsigned int)partial_offset,
+                                    (unsigned int)g_job_chunk_len);
+                        (void)abort_rx_and_clear_transaction("idle-partial-flush-fail");
+                        host_sendf("@ERR partial_flush_failed_abort\r\n");
+                        data_idle_ticks = 0;
+                        data_idle_start_ms = 0;
+                        data_idle_last_log_ms = 0;
+                        data_idle_last_busy_ms = 0;
+                        continue;
                     }
                 }
                 data_idle_ticks++;

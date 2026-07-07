@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 void sle_job_motion_executor_init(void);
+void sle_job_motion_executor_reset_stats(void);
 errcode_t sle_job_motion_executor_start_task(void);
 bool sle_job_motion_executor_enqueue(const sle_job_motion_cmd_t *cmd);
 void sle_job_motion_executor_flush(void);

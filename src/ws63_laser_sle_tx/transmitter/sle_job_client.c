@@ -32,6 +32,8 @@
 #define TX_PANEL_ADV_INTERVAL_UNITS 0xC8U
 #define TX_PANEL_ADV_TX_POWER 20
 #define TX_PANEL_ADV_NAME "ws63_tx"
+#define PANEL_BACKGROUND_SEEK_BURST_MS 1200U
+#define PANEL_BACKGROUND_SEEK_RETRY_MS 5000U
 
 #ifndef SLE_ADV_HANDLE_DEFAULT
 #define SLE_ADV_HANDLE_DEFAULT 1
@@ -95,6 +97,7 @@ static uint8_t g_panel_adv_data[TX_PANEL_ADV_DATA_LEN_MAX];
 static uint16_t g_panel_adv_data_len = 0;
 static uint8_t g_panel_scan_rsp_data[TX_PANEL_ADV_DATA_LEN_MAX];
 static uint16_t g_panel_scan_rsp_data_len = 0;
+static uint32_t g_seek_started_ms = 0;
 
 static void tune_job_link_after_connect(uint16_t conn_id, uint8_t role)
 {
@@ -409,8 +412,10 @@ static void start_seek_if_needed(void)
     }
 
     uint32_t now = (uint32_t)uapi_systick_get_ms();
+    bool panel_only_seek = !need_rx_link() && need_panel_link();
+    uint32_t retry_ms = panel_only_seek ? PANEL_BACKGROUND_SEEK_RETRY_MS : CONNECT_RETRY_INTERVAL_MS;
     if (g_last_connect_ms != 0 &&
-        (uint32_t)(now - g_last_connect_ms) < CONNECT_RETRY_INTERVAL_MS) {
+        (uint32_t)(now - g_last_connect_ms) < retry_ms) {
         return;
     }
 
@@ -425,9 +430,29 @@ static void start_seek_if_needed(void)
     (void)sle_set_seek_param(&param);
 
     g_last_connect_ms = now;
+    g_seek_started_ms = now;
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
+        g_seek_started_ms = 0;
         osal_printk("[tx] start seek fail: 0x%x\r\n", ret);
+    }
+}
+
+static void stop_panel_background_seek_if_expired(void)
+{
+    if (!g_seek_active || g_connecting || need_rx_link() || !need_panel_link() ||
+        g_seek_started_ms == 0) {
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if ((uint32_t)(now - g_seek_started_ms) < PANEL_BACKGROUND_SEEK_BURST_MS) {
+        return;
+    }
+
+    errcode_t ret = sle_stop_seek();
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[tx_seek] stop panel background seek fail: 0x%x\r\n", ret);
     }
 }
 
@@ -526,11 +551,15 @@ static void seek_result_cbk(sle_seek_result_info_t *seek_result)
 static void seek_enable_cbk(errcode_t status)
 {
     g_seek_active = (status == ERRCODE_SLE_SUCCESS);
+    if (!g_seek_active) {
+        g_seek_started_ms = 0;
+    }
 }
 
 static void seek_disable_cbk(errcode_t status)
 {
     g_seek_active = false;
+    g_seek_started_ms = 0;
     if (status != ERRCODE_SLE_SUCCESS || !g_connecting) {
         g_connecting = false;
         g_pending_role = SLE_LINK_ROLE_NONE;
@@ -1158,6 +1187,7 @@ bool sle_job_client_pause_panel_status_adv(const char *reason)
 
 void sle_job_client_poll_connect(void)
 {
+    stop_panel_background_seek_if_expired();
     start_seek_if_needed();
     try_start_panel_announce();
 }

@@ -67,6 +67,7 @@ RX_EXEC_DONE_RE = re.compile(
     r"\[JOB_EXEC\]\s+done\s+job=(\d+)\b"
 )
 TX_DATA_BUSY_RE = re.compile(r"^@BUSY type=2\b")
+TX_DATA_ACK_RE = re.compile(r"^@ACK type=2\b.*\bstatus=0\b.*\boffset=(\d+)\b")
 NOISY_SDK_LOG_RE = re.compile(
     r"^\[ACore\]\s+sle\s+(?:stop announce in|start announce in|adv cbk in, event:\d+ status:0)\b"
 )
@@ -673,7 +674,7 @@ class SleJobSerialClient:
                     expected_end = int(pending["end"])
                     try:
                         ack = self.wait_for(
-                            rf"@ACK type=2 .*status=0 .*offset={expected_end}\b",
+                            rf"@ACK type=2 (?=.*offset={expected_end}\b|.*offset=\d+\b).*status=0 .*offset=\d+\b",
                             data_timeout, regex=True,
                             keepalive_pattern=TX_DATA_BUSY_RE,
                             max_timeout=max(data_timeout, DATA_ACK_KEEPALIVE_MAX_S),
@@ -700,7 +701,27 @@ class SleJobSerialClient:
                             ) from exc
                         raise
 
-                    acked_offset = expected_end
+                    ack_match = TX_DATA_ACK_RE.match(ack.line)
+                    if not ack_match:
+                        raise RuntimeError(f"无法解析 DATA ACK: {ack.line}")
+                    acked_offset = int(ack_match.group(1))
+                    if acked_offset < expected_end:
+                        if acked_offset <= int(pending["end"]) - int(pending["len"]):
+                            raise RuntimeError(
+                                f"TX DATA ACK 未前进: ack={acked_offset} expected={expected_end}"
+                            )
+                        self._on_log(
+                            "status",
+                            f"[HOST_PARTIAL_ACK] ack={acked_offset} expected={expected_end} "
+                            f"resend_from={acked_offset}",
+                        )
+                        send_offset = acked_offset
+                        pending_chunks.clear()
+                    elif acked_offset > expected_end:
+                        send_offset = max(send_offset, acked_offset)
+                        pending_chunks = [
+                            p for p in pending_chunks if int(p["end"]) > acked_offset
+                        ]
                     chunk_ms = int((time.perf_counter() - float(pending["t0"])) * 1000)
                     write_ms = int(pending["write_ms"])
                     ack_wait_ms = max(0, chunk_ms - write_ms)

@@ -913,6 +913,7 @@ static void handle_job_begin(const sle_job_packet_view_t *pkt)
     if (st == SLE_JOB_STATUS_OK) {
         clear_completed_job_summary();
         sle_job_motion_executor_clear_abort();
+        sle_job_motion_executor_reset_stats();
         g_state = SLE_JOB_STATE_RECEIVING_JOB;
         g_abort_requested = false;
         g_pause_requested = false;
@@ -1071,16 +1072,18 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
     uint32_t ack_ms = 0;
     bool fast_ack = data_fast_cum_ack_active(pkt);
     bool force_ack = (pkt->flags & SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK) != 0U;
+    uint32_t pre_ack_ms = (uint32_t)uapi_systick_get_ms() - t_start;
     bool ack_sent = maybe_send_data_progress_ack(pkt->seq, fast_ack, force_ack,
                                                  st, "cache_write", &ack_ms);
     uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_start;
     if (rx_should_log_data_timing(data_index, total_ms) || st != SLE_JOB_STATUS_OK) {
         osal_printk("[RX_TIMING] seq=%u data_idx=%u off=%u len=%u gap_ms=%u write_ms=%u "
-                    "ack_sent=%u ack_ms=%u total_ms=%u st=%u free=%u rx=%u consumed=%u "
-                    "avail=%u q=%u motion_busy=%u lines=%u state=%s\r\n",
+                    "pre_ack_ms=%u ack_sent=%u ack_ms=%u total_ms=%u st=%u free=%u "
+                    "rx=%u consumed=%u avail=%u q=%u motion_busy=%u lines=%u state=%s\r\n",
                     (unsigned int)pkt->seq, (unsigned int)data_index,
                     (unsigned int)hdr.offset, (unsigned int)hdr.data_len,
                     (unsigned int)rx_gap_ms, (unsigned int)write_ms,
+                    (unsigned int)pre_ack_ms,
                     (unsigned int)(ack_sent ? 1U : 0U), (unsigned int)ack_ms,
                     (unsigned int)total_ms, (unsigned int)st,
                     (unsigned int)sle_job_cache_free(),

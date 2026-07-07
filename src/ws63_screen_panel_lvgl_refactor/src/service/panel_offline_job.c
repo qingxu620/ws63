@@ -570,7 +570,8 @@ static errcode_t send_job_begin(uint32_t job_id, uint32_t total_size, uint16_t c
     return send_packet_wait_ack(PKT_JOB_BEGIN, &begin, sizeof(begin));
 }
 
-static errcode_t send_job_data(uint32_t job_id, uint32_t offset, const uint8_t *data, uint16_t len)
+static errcode_t send_job_data(uint32_t job_id, uint32_t offset, const uint8_t *data,
+                               uint16_t len, uint8_t flags)
 {
     uint8_t payload[SLE_JOB_PACKET_MAX_PAYLOAD];
     job_data_payload_t *p = (job_data_payload_t *)payload;
@@ -586,7 +587,7 @@ static errcode_t send_job_data(uint32_t job_id, uint32_t offset, const uint8_t *
     g_diag_data_count++;
     uint32_t data_index = g_diag_data_count;
 
-    if (!sle_packet_encode(PKT_JOB_DATA, 0, seq, payload, payload_len,
+    if (!sle_packet_encode(PKT_JOB_DATA, flags, seq, payload, payload_len,
                            packet, sizeof(packet), &packet_len)) {
         osal_printk("[PANEL_OFFLINE] data encode fail off=%u len=%u\r\n",
                     (unsigned int)offset, (unsigned int)len);
@@ -765,7 +766,15 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
                 (uint16_t)PANEL_OFFLINE_CHUNK_MAX : (uint16_t)remain;
             const uint8_t *chunk = &g_readahead_buf[read_pos];
 
-            ret = send_job_data(PANEL_OFFLINE_JOB_ID, offset, chunk, chunk_len);
+            uint32_t trigger_offset = 0;
+            uint8_t data_flags = SLE_JOB_PACKET_FLAG_DATA_FAST_ACK;
+            bool starts_exec_after_chunk = !exec_started &&
+                preroll_tracker_consume(&preroll, chunk, chunk_len, offset, &trigger_offset);
+            if (starts_exec_after_chunk) {
+                data_flags |= SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK;
+            }
+
+            ret = send_job_data(PANEL_OFFLINE_JOB_ID, offset, chunk, chunk_len, data_flags);
             if (ret != ERRCODE_SUCC) {
                 return PANEL_OFFLINE_FLOW_FAIL;
             }
@@ -775,9 +784,8 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
                 return flow;
             }
 
-            uint32_t trigger_offset = 0;
             if (!exec_started &&
-                preroll_tracker_consume(&preroll, chunk, chunk_len, offset, &trigger_offset)) {
+                starts_exec_after_chunk) {
                 osal_printk("[PANEL_OFFLINE] preroll ready offset=%u request=%u fallback=%u\r\n",
                             (unsigned int)trigger_offset,
                             (unsigned int)preroll.request_offset,
