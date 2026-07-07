@@ -525,6 +525,23 @@ class UiContractTests(unittest.TestCase):
         self.assertFalse(window.page_job.arc._spinning)
         self.assertEqual(window.page_job.arc._caption, "执行完成")
 
+    def test_late_executing_status_cannot_restart_completed_poll(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.tx_state = LinkState.CONNECTED
+        window.client.is_open = lambda: True
+        window.state.rx_job_id = 1
+        window._mark_execution_complete()
+
+        window._parse_rx_line(
+            "@STATUS state=3 status=0 job=1 rx=184 total=184 free=102400 lines=13"
+        )
+
+        self.assertTrue(window.state.execution_complete)
+        self.assertFalse(window.state.execution_expected)
+        self.assertFalse(window._exec_poll_timer.isActive())
+        self.assertFalse(window.page_job.arc._spinning)
+
     def test_focus_button_turns_red_when_focus_is_active(self) -> None:
         page = JobPage()
 
@@ -600,6 +617,31 @@ class UiContractTests(unittest.TestCase):
 
         self.assertNotIn(("error", "[EXEC_POLL] 查询状态失败: 等待 @STATUS 超时"), logs)
 
+    def test_exec_status_timeout_is_status_delay_not_error(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        logs: list[tuple[str, str]] = []
+        timeouts: list[float] = []
+        window.worker.log.connect(lambda channel, message: logs.append((channel, message)))
+
+        class FakeClient:
+            def transact_status(self, timeout: float):
+                timeouts.append(timeout)
+                raise TimeoutError("等待 @STATUS 超时")
+
+            def close(self) -> None:
+                pass
+
+        window.client = FakeClient()
+        window.state.execution_expected = True
+        window._exec_poll_timer.start()
+
+        window._execution_status_poll_worker()
+
+        self.assertEqual(timeouts, [6.0])
+        self.assertIn(("status", "[EXEC_POLL] 状态查询延迟: 等待 @STATUS 超时"), logs)
+        self.assertNotIn(("error", "[EXEC_POLL] 查询状态失败: 等待 @STATUS 超时"), logs)
+
     def test_upload_only_explicitly_disables_preroll_execution(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -651,7 +693,7 @@ class UiContractTests(unittest.TestCase):
         self.assertFalse(uploads[-1]["start_on_preroll"])
         self.assertEqual(controls, ["@EXEC_START 7"])
 
-    def test_upload_execute_does_not_force_preroll_for_jobs_larger_than_cache(self) -> None:
+    def test_upload_execute_rejects_jobs_larger_than_cache_without_preroll(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
         uploads: list[dict[str, object]] = []
@@ -671,12 +713,11 @@ class UiContractTests(unittest.TestCase):
         large_job = b"G1 X1\n" * ((JOB_MAX_SIZE // 6) + 2)
         self.assertGreater(len(large_job), JOB_MAX_SIZE)
 
-        window._upload_exec_worker(large_job, 8, 20.0, 0)
+        with self.assertRaisesRegex(RuntimeError, "超过 RX cache"):
+            window._upload_exec_worker(large_job, 8, 20.0, 0)
 
-        self.assertEqual(uploads[-1]["preroll_bytes"], 0)
-        self.assertFalse(uploads[-1]["start_on_preroll"])
-        self.assertFalse(uploads[-1]["enforce_job_size_limit"])
-        self.assertEqual(controls, ["@EXEC_START 8"])
+        self.assertEqual(uploads, [])
+        self.assertEqual(controls, [])
 
     def test_upload_execute_worker_releases_after_exec_start_ack(self) -> None:
         window = MainWindow()

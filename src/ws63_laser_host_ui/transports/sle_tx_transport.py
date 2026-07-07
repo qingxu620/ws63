@@ -23,7 +23,7 @@ except ImportError:
 BAUD_DEFAULT = 115200
 BAUD_LOG_DEFAULT = 115200
 JOB_DATA_CHUNK_SIZE = 300
-JOB_MAX_SIZE = 65536
+JOB_MAX_SIZE = 100 * 1024
 JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES = 8192
 JOB_EXEC_PREROLL_MAX_BYTES = JOB_MAX_SIZE - JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES
 GCODE_LINE_MAX_BYTES = 120  # RX SLE_JOB_GCODE_LINE_MAX=128, leave 8-byte safety margin
@@ -32,6 +32,7 @@ DATA_ACK_KEEPALIVE_MAX_S = 180.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
 TX_RESYNC_TIMEOUT_MIN_S = 12.0
 PREROLL_CONTROL_TIMEOUT_MIN_S = 12.0
+EXEC_START_ACK_TIMEOUT_MIN_S = 18.0
 TX_UART_RESYNC_BYTE = 0x18
 TX_UART_CONTROL_BYTE = 0x19
 SERIAL_WRITE_BURST_SIZE = 128
@@ -622,6 +623,7 @@ class SleJobSerialClient:
                 data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
                 pending_chunks: list[dict[str, float | int]] = []
                 preroll_control_timeout = max(timeout, PREROLL_CONTROL_TIMEOUT_MIN_S)
+                exec_start_timeout = max(timeout, EXEC_START_ACK_TIMEOUT_MIN_S)
 
                 while acked_offset < total:
                     while send_offset < total and len(pending_chunks) < HOST_UPLOAD_WINDOW_CHUNKS:
@@ -742,7 +744,7 @@ class SleJobSerialClient:
                             status_cb("预缓冲完成，启动执行", pct)
                         exec_t0 = time.perf_counter()
                         self.send_line(f"@EXEC_START {job_id}")
-                        exec_ack = self.wait_for("@ACK type=16", preroll_control_timeout)
+                        exec_ack = self.wait_for("@ACK type=16", exec_start_timeout)
                         self._on_log(
                             "status",
                             f"[HOST_EXEC_START_TIMING] wait_ms={exec_ack.elapsed_ms} "

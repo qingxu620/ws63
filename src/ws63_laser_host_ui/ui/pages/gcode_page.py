@@ -46,7 +46,7 @@ from app.image_gcode import (
 )
 
 
-RX_JOB_MAX_BYTES = 65536
+RX_JOB_MAX_BYTES = 100 * 1024
 OUTLINE_SCAN_FEED_MM_MIN = 10000
 OUTLINE_SCAN_POWER_S = 80
 OUTLINE_SCAN_LOOPS = 2
@@ -1510,7 +1510,7 @@ class GcodePage(QWidget):
             if mode in ("vector", "lasergrbl_vector")
             else ""
         )
-        size_warning = " · 超过64KiB上传上限" if output_bytes > RX_JOB_MAX_BYTES else ""
+        size_warning = " · 超过100KiB上传上限" if output_bytes > RX_JOB_MAX_BYTES else ""
         self._converted_status = (
             f"{mode_label} · {algorithm} · 图形 {actual_width:.1f}×{actual_height:.1f} mm · "
             f"X {offset_x:.1f}-{offset_x + actual_width:.1f} · "

@@ -131,10 +131,9 @@ static void tune_job_link_after_connect(uint16_t conn_id, uint8_t role)
 #endif
 }
 
-/* Compatible with current ws63_sle_laser and ws63_test receiver defaults. */
-static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
-static uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
 
 static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
 {
@@ -362,128 +361,27 @@ static void trace_response_notification(uint16_t conn_id, uint16_t handle,
     }
 }
 
-static bool adv_name_match(const sle_seek_result_info_t *seek_result, const char *name)
+static bool addr_matches_mac(const sle_addr_t *addr, const uint8_t *mac)
 {
-    if (seek_result == NULL || seek_result->data == NULL || name == NULL) {
+    if (addr == NULL || mac == NULL) {
         return false;
     }
-
-    uint8_t *data = seek_result->data;
-    uint16_t len = seek_result->data_length;
-    size_t name_len = strlen(name);
-    for (uint16_t i = 0; i < len;) {
-        if ((i + 1U) >= len) {
-            break;
-        }
-
-        uint8_t ad_type = data[i];
-        uint8_t ad_len = data[i + 1U];
-        if ((uint16_t)(i + 2U + ad_len) > len) {
-            break;
-        }
-
-        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME && ad_len == name_len &&
-            memcmp(&data[i + 2U], name, name_len) == 0) {
-            return true;
-        }
-        i = (uint16_t)(i + 2U + ad_len);
-    }
-
-    return false;
+    return memcmp(addr->addr, mac, SLE_ADDR_LEN) == 0;
 }
 
-static bool adv_service_match(const sle_seek_result_info_t *seek_result)
+static bool seek_result_addr_matches(const sle_seek_result_info_t *seek_result, const uint8_t *mac)
 {
-    if (seek_result == NULL || seek_result->data == NULL) {
-        return false;
-    }
-
-    uint8_t *data = seek_result->data;
-    uint16_t len = seek_result->data_length;
-    for (uint16_t i = 0; i < len;) {
-        if ((i + 1U) >= len) {
-            break;
-        }
-
-        uint8_t ad_type = data[i];
-        uint8_t ad_len = data[i + 1U];
-        if ((uint16_t)(i + 2U + ad_len) > len) {
-            break;
-        }
-
-        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS && ad_len >= UUID_LEN_2) {
-            for (uint8_t j = 0; (uint8_t)(j + 1U) < ad_len; j = (uint8_t)(j + UUID_LEN_2)) {
-                uint16_t uuid = (uint16_t)data[i + 2U + j] | ((uint16_t)data[i + 3U + j] << 8);
-                if (uuid == SLE_JOB_SERVICE_UUID) {
-                    return true;
-                }
-            }
-        }
-        i = (uint16_t)(i + 2U + ad_len);
-    }
-
-    return false;
+    return seek_result != NULL && addr_matches_mac(&seek_result->addr, mac);
 }
 
 static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_result)
 {
-    if (seek_result == NULL) {
-        return false;
-    }
-
-    if (memcmp(seek_result->addr.addr, g_receiver_mac, SLE_ADDR_LEN) == 0 ||
-        memcmp(seek_result->addr.addr, g_test_receiver_mac, SLE_ADDR_LEN) == 0) {
-        return true;
-    }
-
-    if (adv_name_match(seek_result, SLE_JOB_RECEIVER_NAME) || adv_name_match(seek_result, "LaserRX")) {
-        return true;
-    }
-
-    return adv_service_match(seek_result);
-}
-
-static bool adv_panel_service_match(const sle_seek_result_info_t *seek_result)
-{
-    if (seek_result == NULL || seek_result->data == NULL) {
-        return false;
-    }
-
-    uint8_t *data = seek_result->data;
-    uint16_t len = seek_result->data_length;
-    for (uint16_t i = 0; i < len;) {
-        if ((i + 1U) >= len) {
-            break;
-        }
-
-        uint8_t ad_type = data[i];
-        uint8_t ad_len = data[i + 1U];
-        if ((uint16_t)(i + 2U + ad_len) > len) {
-            break;
-        }
-
-        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS && ad_len >= UUID_LEN_2) {
-            for (uint8_t j = 0; (uint8_t)(j + 1U) < ad_len; j = (uint8_t)(j + UUID_LEN_2)) {
-                uint16_t uuid = (uint16_t)data[i + 2U + j] | ((uint16_t)data[i + 3U + j] << 8);
-                if (uuid == SLE_PANEL_SERVICE_UUID) {
-                    return true;
-                }
-            }
-        }
-        i = (uint16_t)(i + 2U + ad_len);
-    }
-
-    return false;
+    return seek_result_addr_matches(seek_result, g_receiver_mac);
 }
 
 static bool seek_result_matches_panel(const sle_seek_result_info_t *seek_result)
 {
-    if (seek_result == NULL) {
-        return false;
-    }
-    return adv_name_match(seek_result, SLE_PANEL_SERVER_NAME) ||
-           adv_name_match(seek_result, "WS63_PANEL") ||
-           adv_panel_service_match(seek_result);
+    return seek_result_addr_matches(seek_result, g_panel_mac);
 }
 
 static bool need_rx_link(void)
@@ -518,7 +416,7 @@ static void start_seek_if_needed(void)
 
     sle_seek_param_t param = {0};
     param.own_addr_type = 0;
-    param.filter_duplicates = 0;
+    param.filter_duplicates = 1;
     param.seek_filter_policy = 0;
     param.seek_phys = 1;
     param.seek_type[0] = SLE_SEEK_ACTIVE;
@@ -667,6 +565,18 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         if (role == SLE_LINK_ROLE_NONE) {
             g_connecting = false;
             g_pending_role = SLE_LINK_ROLE_NONE;
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
+            start_seek_if_needed();
+            return;
+        }
+        const uint8_t *expected_mac = (role == SLE_LINK_ROLE_PANEL) ? g_panel_mac : g_receiver_mac;
+        if (!addr_matches_mac(addr, expected_mac)) {
+            g_connecting = false;
+            g_pending_role = SLE_LINK_ROLE_NONE;
+            osal_printk("[tx] reject non-whitelist peer conn=%u role=%u\r\n",
+                        (unsigned int)conn_id, (unsigned int)role);
             if (addr != NULL) {
                 (void)sle_disconnect_remote_device(addr);
             }
@@ -884,7 +794,7 @@ static void indication_cbk(uint8_t client_id, uint16_t conn_id,
     notification_cbk(client_id, conn_id, data, status);
 }
 
-#if JOB_TX_DATA_USE_WRITE_CMD
+#if JOB_TX_DATA_USE_WRITE_CMD || JOB_TX_CONTROL_USE_WRITE_CMD
 static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
 {
     const uint8_t *bytes = (const uint8_t *)data;
@@ -892,6 +802,36 @@ static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
         return 0;
     }
     return bytes[2];
+}
+
+static bool packet_should_use_write_cmd(uint8_t pkt_type, bool force_write_req)
+{
+    if (force_write_req) {
+        return false;
+    }
+#if JOB_TX_DATA_USE_WRITE_CMD
+    if (pkt_type == PKT_JOB_DATA) {
+        return true;
+    }
+#endif
+#if JOB_TX_CONTROL_USE_WRITE_CMD
+    switch (pkt_type) {
+        case PKT_JOB_BEGIN:
+        case PKT_JOB_END:
+        case PKT_JOB_ABORT:
+        case PKT_EXEC_START:
+        case PKT_EXEC_RESUME:
+        case PKT_EXEC_STOP:
+        case PKT_FOCUS_CTRL:
+        case PKT_ROUTE_SWITCH:
+        case PKT_STATUS_REQ:
+            return true;
+        default:
+            return false;
+    }
+#else
+    return false;
+#endif
 }
 #endif
 
@@ -974,15 +914,17 @@ errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool for
     param.data_len = len;
     param.data = (uint8_t *)data;
 
-#if JOB_TX_DATA_USE_WRITE_CMD
+#if JOB_TX_DATA_USE_WRITE_CMD || JOB_TX_CONTROL_USE_WRITE_CMD
     uint8_t pkt_type = packet_type_from_encoded(data, len);
-    if (pkt_type == PKT_JOB_DATA && !force_write_req) {
+    if (packet_should_use_write_cmd(pkt_type, force_write_req)) {
         uint32_t t_write = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = ssapc_write_cmd(SLE_CLIENT_ID, g_conn_id, &param);
         uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_write;
         if (ret != ERRCODE_SLE_SUCCESS || call_ms >= JOB_SLE_WRITE_CALL_SLOW_MS) {
-            osal_printk("[JOB_SLE_WRITE_CMD_TIMING] ret=0x%x len=%u call_ms=%u conn=%u handle=0x%x\r\n",
-                        ret, (unsigned int)len, (unsigned int)call_ms,
+            osal_printk("[JOB_SLE_WRITE_CMD_TIMING] ret=0x%x type=0x%02x len=%u "
+                        "call_ms=%u conn=%u handle=0x%x\r\n",
+                        ret, (unsigned int)pkt_type,
+                        (unsigned int)len, (unsigned int)call_ms,
                         (unsigned int)g_conn_id, (unsigned int)g_data_handle);
         }
         return ret;
@@ -1156,13 +1098,14 @@ errcode_t sle_job_client_update_panel_status_adv(const panel_status_payload_t *s
     if (status == NULL) {
         return ERRCODE_SLE_FAIL;
     }
-    if (!g_background_seek_allowed) {
-        return ERRCODE_SLE_SUCCESS;
-    }
 
     g_panel_adv_data_len = build_panel_adv_data(status);
     g_panel_scan_rsp_data_len = build_panel_scan_rsp_data(status);
     g_panel_adv_data_ready = true;
+
+    if (!g_background_seek_allowed) {
+        return ERRCODE_SLE_SUCCESS;
+    }
 
     if (configure_panel_announce_once() != ERRCODE_SLE_SUCCESS) {
         return ERRCODE_SLE_FAIL;

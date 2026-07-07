@@ -71,13 +71,25 @@ static volatile uint8_t g_async_data_status = JOB_STATUS_OK;
 static volatile uint32_t g_async_data_credit = 0;
 static volatile bool g_async_data_error = false;
 static volatile uint32_t g_async_data_last_ack_ms = 0;
+static uint8_t g_async_retx_packet[SLE_JOB_PACKET_MAX_SIZE];
+static uint16_t g_async_retx_packet_len = 0;
+static uint16_t g_async_retx_seq = 0;
+static uint32_t g_async_retx_data_index = 0;
+static uint32_t g_async_retx_offset = 0;
+static uint16_t g_async_retx_data_len = 0;
+static uint32_t g_async_retx_next_offset = 0;
+static uint32_t g_async_retx_last_send_ms = 0;
+static uint32_t g_async_retx_count = 0;
+static bool g_async_retx_valid = false;
 static uint32_t g_panel_status_seq = 1;
+static uint16_t g_panel_packet_seq = 1;
 static uint32_t g_panel_status_last_ms = 0;
 static uint8_t g_panel_local_job_state = JOB_STATE_IDLE;
 static bool g_panel_local_exec_started = false;
 static uint32_t g_panel_local_last_error = JOB_STATUS_OK;
 
 static void tx_panel_publish_local_status(bool force);
+static void clear_async_data_retx(void);
 
 static void set_host_job_topology_active(bool active)
 {
@@ -88,14 +100,14 @@ static void set_host_job_topology_active(bool active)
     g_host_job_topology_active = active;
     if (active) {
         sle_job_client_set_background_seek_allowed(false);
-        sle_job_client_set_panel_link_allowed(false);
     } else {
         sle_job_client_set_background_seek_allowed(true);
-        sle_job_client_set_panel_link_allowed(false);
     }
     sle_job_client_poll_connect();
     osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u seek_bg=%u\r\n",
-                active ? 1U : 0U, 0U, active ? 0U : 1U);
+                active ? 1U : 0U,
+                sle_job_client_panel_link_allowed() ? 1U : 0U,
+                active ? 0U : 1U);
 }
 
 static bool topology_state_is_terminal(uint8_t state)
@@ -125,6 +137,7 @@ static void clear_local_job_state(void)
     g_async_data_credit = 0;
     g_async_data_error = false;
     g_async_data_last_ack_ms = 0;
+    clear_async_data_retx();
     g_panel_local_job_state = JOB_STATE_IDLE;
     g_panel_local_exec_started = false;
     g_panel_local_last_error = JOB_STATUS_OK;
@@ -144,6 +157,93 @@ static uint32_t min_u32(uint32_t a, uint32_t b)
     return (a < b) ? a : b;
 }
 
+static void clear_async_data_retx(void)
+{
+    g_async_retx_packet_len = 0;
+    g_async_retx_seq = 0;
+    g_async_retx_data_index = 0;
+    g_async_retx_offset = 0;
+    g_async_retx_data_len = 0;
+    g_async_retx_next_offset = 0;
+    g_async_retx_last_send_ms = 0;
+    g_async_retx_count = 0;
+    g_async_retx_valid = false;
+}
+
+static void note_async_data_ack_offset(uint32_t ack_offset)
+{
+    if (g_async_retx_valid && ack_offset >= g_async_retx_next_offset) {
+        clear_async_data_retx();
+    }
+}
+
+static void register_async_data_retx(const uint8_t *packet, uint16_t packet_len,
+                                     uint16_t seq, uint32_t data_index,
+                                     uint32_t offset, uint16_t data_len,
+                                     uint32_t send_ms)
+{
+    uint32_t next_offset = offset + data_len;
+    if (packet == NULL || packet_len == 0U || packet_len > sizeof(g_async_retx_packet) ||
+        g_async_data_ack_offset >= next_offset) {
+        clear_async_data_retx();
+        return;
+    }
+
+    memcpy(g_async_retx_packet, packet, packet_len);
+    g_async_retx_packet_len = packet_len;
+    g_async_retx_seq = seq;
+    g_async_retx_data_index = data_index;
+    g_async_retx_offset = offset;
+    g_async_retx_data_len = data_len;
+    g_async_retx_next_offset = next_offset;
+    g_async_retx_last_send_ms = send_ms;
+    g_async_retx_count = 0;
+    g_async_retx_valid = true;
+}
+
+static void maybe_retransmit_async_data(uint32_t waited)
+{
+    if (!g_async_retx_valid || g_async_retx_packet_len == 0U ||
+        g_async_retx_count >= JOB_TX_DATA_RETX_MAX ||
+        g_async_data_ack_offset >= g_async_retx_next_offset) {
+        note_async_data_ack_offset(g_async_data_ack_offset);
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    uint32_t idle_ms = (g_async_retx_last_send_ms == 0U) ? waited :
+                       (uint32_t)(now - g_async_retx_last_send_ms);
+    if (idle_ms < JOB_TX_DATA_RETX_IDLE_MS) {
+        return;
+    }
+
+    errcode_t ret = sle_job_client_send_packet_ex(g_async_retx_packet,
+                                                  g_async_retx_packet_len,
+                                                  false);
+    g_async_retx_last_send_ms = now;
+    if (ret == ERRCODE_SLE_SUCCESS) {
+        g_async_retx_count++;
+    }
+    osal_printk("[TX_DATA_RETX] t=%u seq=%u data_idx=%u off=%u len=%u next=%u "
+                "retx=%u/%u idle_ms=%u waited=%u ret=0x%x ack_off=%u ack_seq=%u "
+                "link=%u client=%s\r\n",
+                (unsigned int)now,
+                (unsigned int)g_async_retx_seq,
+                (unsigned int)g_async_retx_data_index,
+                (unsigned int)g_async_retx_offset,
+                (unsigned int)g_async_retx_data_len,
+                (unsigned int)g_async_retx_next_offset,
+                (unsigned int)g_async_retx_count,
+                (unsigned int)JOB_TX_DATA_RETX_MAX,
+                (unsigned int)idle_ms,
+                (unsigned int)waited,
+                (unsigned int)ret,
+                (unsigned int)g_async_data_ack_offset,
+                (unsigned int)g_async_data_ack_seq,
+                (unsigned int)sle_job_client_is_connected(),
+                sle_job_client_get_status());
+}
+
 static uint8_t tx_panel_current_job_state(void)
 {
     if (g_panel_local_job_state != JOB_STATE_IDLE) {
@@ -156,6 +256,24 @@ static uint8_t tx_panel_current_job_state(void)
         return g_panel_local_exec_started ? JOB_STATE_EXECUTING : JOB_STATE_JOB_READY;
     }
     return JOB_STATE_IDLE;
+}
+
+static void tx_panel_mirror_status(const panel_status_payload_t *st)
+{
+    if (st == NULL || !sle_job_client_panel_is_connected()) {
+        return;
+    }
+
+    uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t packet_len = 0;
+    uint16_t packet_seq = g_panel_packet_seq++;
+    if (g_panel_packet_seq == 0U) {
+        g_panel_packet_seq = 1U;
+    }
+    if (sle_packet_encode(PKT_PANEL_STATUS, 0, packet_seq, st, sizeof(*st),
+                          packet, sizeof(packet), &packet_len)) {
+        (void)sle_job_client_mirror_panel_packet(packet, packet_len);
+    }
 }
 
 static void tx_panel_publish_local_status(bool force)
@@ -190,7 +308,40 @@ static void tx_panel_publish_local_status(bool force)
     st.tick_ms = now;
 
     g_panel_status_last_ms = now;
+    tx_panel_mirror_status(&st);
     (void)sle_job_client_update_panel_status_adv(&st);
+}
+
+static void tx_panel_mirror_rx_status(const status_resp_payload_t *rx)
+{
+    if (rx == NULL || !sle_job_client_panel_is_connected()) {
+        return;
+    }
+
+    panel_status_payload_t st = {0};
+    st.seq = g_panel_status_seq++;
+    if (g_panel_status_seq == 0U) {
+        g_panel_status_seq = 1U;
+    }
+    st.owner = (rx->job_id != 0U || rx->total_size != 0U ||
+                rx->state != JOB_STATE_IDLE) ? PANEL_OWNER_HOST : PANEL_OWNER_NONE;
+    st.mode = (rx->status == JOB_STATUS_OK && rx->state != JOB_STATE_ERROR) ?
+              ((st.owner == PANEL_OWNER_HOST) ? PANEL_MODE_ONLINE : PANEL_MODE_IDLE) :
+              PANEL_MODE_ERROR;
+    st.job_state = rx->state;
+    st.flags = PANEL_STATUS_FLAG_ANY_LINK;
+    if (st.owner == PANEL_OWNER_HOST) {
+        st.flags |= PANEL_STATUS_FLAG_OWNER_LINK;
+    }
+    st.job_id = rx->job_id;
+    st.received_size = rx->received_size;
+    st.total_size = rx->total_size;
+    st.executed_lines = rx->executed_lines;
+    st.cache_free = rx->cache_free;
+    st.last_error = rx->status;
+    st.tick_ms = (uint32_t)uapi_systick_get_ms();
+
+    tx_panel_mirror_status(&st);
 }
 
 static uint16_t peek_seq(void)
@@ -242,7 +393,13 @@ static bool tx_should_log_timing(uint8_t type, uint32_t data_index, uint32_t tot
 
 static uint32_t tx_ack_timeout_ms_for_type(uint8_t type)
 {
-    return (type == PKT_JOB_DATA) ? JOB_TX_DATA_ACK_TIMEOUT_MS : JOB_TX_ACK_TIMEOUT_MS;
+    if (type == PKT_JOB_DATA) {
+        return JOB_TX_DATA_ACK_TIMEOUT_MS;
+    }
+    if (type == PKT_EXEC_START) {
+        return JOB_TX_EXEC_START_ACK_TIMEOUT_MS;
+    }
+    return JOB_TX_ACK_TIMEOUT_MS;
 }
 
 static uint32_t tx_async_data_window_bytes(void)
@@ -254,9 +411,16 @@ static uint32_t tx_async_data_window_bytes(void)
     return packets * JOB_TX_DATA_CHUNK_MAX;
 }
 
+static bool tx_data_async_stream_enabled(void)
+{
+    return JOB_TX_DATA_ASYNC_AFTER_PREROLL &&
+           (g_preroll_signaled ||
+            JOB_TX_DATA_FAST_CUM_ACK_ENABLE);
+}
+
 static void update_async_data_progress_from_status(const status_resp_payload_t *st)
 {
-    if (st == NULL || !JOB_TX_DATA_ASYNC_AFTER_PREROLL || !g_preroll_signaled ||
+    if (st == NULL || !tx_data_async_stream_enabled() ||
         g_job_id == 0U || st->job_id != g_job_id || st->status != JOB_STATUS_OK) {
         return;
     }
@@ -265,6 +429,7 @@ static void update_async_data_progress_from_status(const status_resp_payload_t *
         uint32_t old_ack = g_async_data_ack_offset;
         g_async_data_ack_offset = st->received_size;
         g_async_data_credit = st->cache_free;
+        note_async_data_ack_offset(g_async_data_ack_offset);
         osal_printk("[TX_DATA_STATUS_PROGRESS] t=%u job=%u rx=%u old_ack=%u total=%u "
                     "free=%u state=%u lines=%u\r\n",
                     (unsigned int)uapi_systick_get_ms(),
@@ -409,6 +574,7 @@ static bool wait_async_data_window(uint16_t seq, uint32_t data_index,
                        (unsigned int)ack_offset, (unsigned int)outstanding,
                        (unsigned int)window, (unsigned int)waited);
         }
+        maybe_retransmit_async_data(waited);
         if (waited >= JOB_TX_DATA_WINDOW_STALL_MS && !logged_stall) {
             logged_stall = true;
             osal_printk("[TX_DATA_WIN_STALL_OBSERVE] t=%u seq=%u data_idx=%u off=%u len=%u "
@@ -535,6 +701,7 @@ static bool handle_async_data_ack(const ack_payload_t *ack)
         g_async_data_credit = ack->credit;
         g_async_data_error = true;
         g_async_data_last_ack_ms = now_ms;
+        clear_async_data_retx();
         osal_printk("[TX_DATA_ASYNC_NACK] t=%u seq=%u status=%u off=%u credit=%u wait=%u active=%u\r\n",
                     (unsigned int)now_ms, ack->ack_seq, ack->status,
                     (unsigned int)ack->offset, (unsigned int)ack->credit,
@@ -558,6 +725,7 @@ static bool handle_async_data_ack(const ack_payload_t *ack)
     g_async_data_status = ack->status;
     g_async_data_credit = ack->credit;
     g_async_data_last_ack_ms = now_ms;
+    note_async_data_ack_offset(g_async_data_ack_offset);
 
     if ((ack_gap_ms >= JOB_TX_TIMING_SLOW_MS) ||
         (JOB_TX_TIMING_EVERY_PACKETS > 0U &&
@@ -878,6 +1046,7 @@ static void response_cb(const uint8_t *data, uint16_t length)
         memcpy(&g_last_status_resp, &st, sizeof(g_last_status_resp));
         g_last_status_resp_valid = true;
         update_async_data_progress_from_status(&st);
+        tx_panel_mirror_rx_status(&st);
         if (g_status_sem_ready) {
             osal_sem_up(&g_status_sem);
         }
@@ -950,6 +1119,10 @@ static bool status_confirms_job_end(const status_resp_payload_t *st)
 
 static bool stream_final_data_submitted(uint32_t target_offset)
 {
+#if JOB_TX_DATA_FAST_CUM_ACK_ENABLE
+    unused(target_offset);
+    return false;
+#else
     return JOB_TX_DATA_ASYNC_AFTER_PREROLL &&
            g_preroll_signaled &&
            target_offset != 0U &&
@@ -958,10 +1131,12 @@ static bool stream_final_data_submitted(uint32_t target_offset)
            g_job_offset >= g_job_total &&
            !g_async_data_error &&
            g_async_data_status == JOB_STATUS_OK;
+#endif
 }
 
 static errcode_t send_job_end_robust(void)
 {
+#if !JOB_TX_DATA_FAST_CUM_ACK_ENABLE
     if (JOB_TX_DATA_ASYNC_AFTER_PREROLL && g_preroll_signaled &&
         g_async_data_ack_offset >= g_job_total) {
         osal_printk("[TX_JOB_END_SKIPPED_STREAM] t=%u job=%u rx_ack=%u total=%u "
@@ -973,6 +1148,7 @@ static errcode_t send_job_end_robust(void)
                     (unsigned int)g_async_data_ack_seq);
         return ERRCODE_SUCC;
     }
+#endif
     if (stream_final_data_submitted(g_job_total)) {
         osal_printk("[TX_JOB_END_SKIPPED_STREAM] t=%u job=%u rx_ack=%u total=%u "
                     "ack_seq=%u reason=final_data_submitted\r\n",
@@ -1023,14 +1199,18 @@ static errcode_t send_job_end_robust(void)
 
 static bool wait_async_data_drain(uint32_t target_offset)
 {
-    if (!g_preroll_signaled || target_offset == 0U) {
+    if (target_offset == 0U) {
         return true;
     }
     if (!JOB_TX_DATA_ASYNC_AFTER_PREROLL) {
         return true;
     }
+    if (!tx_data_async_stream_enabled()) {
+        return true;
+    }
 
     uint32_t start = (uint32_t)uapi_systick_get_ms();
+#if !JOB_TX_DATA_FAST_CUM_ACK_ENABLE
     if (stream_final_data_submitted(target_offset)) {
         while (!g_async_data_error && g_async_data_ack_offset < target_offset) {
             uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - start;
@@ -1060,6 +1240,7 @@ static bool wait_async_data_drain(uint32_t target_offset)
         }
         return true;
     }
+#endif
 
     uint32_t last_probe_elapsed_ms = 0;
     while (!g_async_data_error && g_async_data_ack_offset < target_offset) {
@@ -1114,6 +1295,7 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
     const job_data_payload_t *dp = (const job_data_payload_t *)payload;
     uint32_t dbg_off = dp->offset;
     uint16_t dbg_dlen = dp->data_len;
+    uint32_t next_offset = dbg_off + dbg_dlen;
     g_diag_data_count++;
     uint32_t dbg_data_index = g_diag_data_count;
 
@@ -1126,7 +1308,12 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
         return ERRCODE_FAIL;
     }
 
-    if (!sle_packet_encode(PKT_JOB_DATA, 0, seq, payload, actual_payload_len,
+    uint8_t flags = JOB_TX_DATA_FAST_CUM_ACK_ENABLE ? SLE_JOB_PACKET_FLAG_DATA_FAST_ACK : 0U;
+    if (JOB_TX_DATA_FAST_CUM_ACK_ENABLE && g_preroll_bytes > 0U &&
+        !g_preroll_signaled && next_offset >= g_preroll_bytes) {
+        flags |= SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK;
+    }
+    if (!sle_packet_encode(PKT_JOB_DATA, flags, seq, payload, actual_payload_len,
                            packet, sizeof(packet), &packet_len)) {
         osal_printk("[JOB_TX] async encode fail type=0x%02x len=%u\r\n",
                     PKT_JOB_DATA, actual_payload_len);
@@ -1161,6 +1348,9 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
             uint32_t next_offset = dbg_off + dbg_dlen;
             uint32_t ack_offset = g_async_data_ack_offset;
             uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
+            register_async_data_retx(packet, packet_len, seq, dbg_data_index,
+                                     dbg_off, dbg_dlen,
+                                     (uint32_t)uapi_systick_get_ms());
             if (tx_should_log_timing(PKT_JOB_DATA, dbg_data_index, send_ms)) {
                 osal_printk("[TX_DATA_WIN] t=%u seq=%u data_idx=%u off=%u len=%u "
                             "next=%u send_ms=%u retry=%u ack_off=%u ack_seq=%u "
@@ -1217,7 +1407,7 @@ static errcode_t send_job_data_chunk(uint32_t offset, const uint8_t *data, uint1
     p->data_len = chunk_len;
     memcpy(p->data, data, chunk_len);
 
-    if (JOB_TX_DATA_ASYNC_AFTER_PREROLL && g_preroll_signaled) {
+    if (tx_data_async_stream_enabled()) {
         errcode_t ret = send_job_data_chunk_async(payload,
                                                   (uint16_t)(sizeof(job_data_payload_t) + chunk_len));
         if (JOB_DIAG_LOG && ret == ERRCODE_SUCC) {
@@ -1296,12 +1486,21 @@ static void handle_data_byte(uint8_t ch)
             host_sendf("@ERR chunk_send_fail_abort\r\n");
             return;
         }
+        if (!wait_async_data_drain(g_job_offset)) {
+            osal_printk("[JOB_TX] preroll drain fail off=%u ack_off=%u\r\n",
+                        (unsigned int)g_job_offset,
+                        (unsigned int)g_async_data_ack_offset);
+            (void)abort_rx_and_clear_transaction("preroll-drain-fail");
+            host_sendf("@ERR preroll_drain_failed_abort\r\n");
+            return;
+        }
         g_preroll_signaled = true;
         g_async_data_ack_offset = g_job_offset;
         g_async_data_status = JOB_STATUS_OK;
         g_async_data_credit = 0;
         g_async_data_error = false;
         g_async_data_last_ack_ms = (uint32_t)uapi_systick_get_ms();
+        clear_async_data_retx();
         g_panel_local_job_state = JOB_STATE_RECEIVING_JOB;
         g_data_mode = false;
         host_sendf("@ACK type=%u seq=0 status=%u offset=%u preroll=1\r\n",
@@ -1464,6 +1663,7 @@ static void handle_command_line(char *line)
         g_async_data_credit = 0;
         g_async_data_error = false;
         g_async_data_last_ack_ms = 0;
+        clear_async_data_retx();
         g_preroll_bytes = (uint32_t)preroll;
         g_preroll_signaled = false;
         g_panel_local_job_state = JOB_STATE_RECEIVING_JOB;
@@ -1501,6 +1701,29 @@ static void handle_command_line(char *line)
             g_async_data_last_ack_ms = (uint32_t)uapi_systick_get_ms();
             g_panel_local_exec_started = true;
             g_panel_local_job_state = JOB_STATE_EXECUTING;
+#if JOB_TX_DATA_RESUME_GRACE_MS > 0
+            {
+                uint32_t t_grace = (uint32_t)uapi_systick_get_ms();
+                osal_printk("[JOB_TX_DATA_RESUME_GRACE] start t=%u wait=%u off=%u/%u "
+                            "ack_off=%u ack_seq=%u\r\n",
+                            (unsigned int)t_grace,
+                            (unsigned int)JOB_TX_DATA_RESUME_GRACE_MS,
+                            (unsigned int)g_job_offset,
+                            (unsigned int)g_job_total,
+                            (unsigned int)g_async_data_ack_offset,
+                            (unsigned int)g_async_data_ack_seq);
+                osal_msleep(JOB_TX_DATA_RESUME_GRACE_MS);
+                uint32_t t_done = (uint32_t)uapi_systick_get_ms();
+                osal_printk("[JOB_TX_DATA_RESUME_GRACE] end t=%u waited=%u off=%u/%u "
+                            "ack_off=%u ack_seq=%u\r\n",
+                            (unsigned int)t_done,
+                            (unsigned int)(t_done - t_grace),
+                            (unsigned int)g_job_offset,
+                            (unsigned int)g_job_total,
+                            (unsigned int)g_async_data_ack_offset,
+                            (unsigned int)g_async_data_ack_seq);
+            }
+#endif
             g_data_mode = true;
             host_sendf("@OK data_resume\r\n");
             tx_panel_publish_local_status(true);
@@ -1612,17 +1835,74 @@ static int uart_rx_task(void *arg)
     unused(arg);
     uint8_t ch;
     uint32_t data_idle_ticks = 0;
+    uint32_t data_idle_start_ms = 0;
+    uint32_t data_idle_last_log_ms = 0;
+    uint32_t data_idle_last_busy_ms = 0;
     while (1) {
         int32_t ret = uapi_uart_read(LASER_UART_BUS, &ch, 1, JOB_TX_UART_READ_TIMEOUT_MS);
         if (ret <= 0) {
             if (g_data_mode) {
+                uint32_t now = (uint32_t)uapi_systick_get_ms();
+                if (data_idle_start_ms == 0U) {
+                    data_idle_start_ms = now;
+                }
+                uint32_t idle_ms = (uint32_t)(now - data_idle_start_ms);
+                if (g_job_offset < g_job_total) {
+                    uint32_t chunk_base = (g_job_offset >= g_job_chunk_len) ?
+                                          (g_job_offset - g_job_chunk_len) : g_job_offset;
+                    uint32_t next_host_offset = min_u32(chunk_base + JOB_TX_DATA_CHUNK_MAX,
+                                                        g_job_total);
+                    uint32_t ack_offset = g_async_data_ack_offset;
+                    uint32_t outstanding = (g_job_offset > ack_offset) ?
+                                           (g_job_offset - ack_offset) : 0U;
+                    if (idle_ms >= JOB_TX_DATA_UART_IDLE_LOG_MS &&
+                        (data_idle_last_log_ms == 0U ||
+                         (uint32_t)(now - data_idle_last_log_ms) >= JOB_TX_DATA_UART_IDLE_LOG_MS)) {
+                        data_idle_last_log_ms = now;
+                        osal_printk("[TX_DATA_RX_IDLE] t=%u idle_ms=%u off=%u/%u "
+                                    "chunk_base=%u chunk_len=%u next_ack=%u ack_off=%u "
+                                    "outstanding=%u data_mode=%u preroll=%u\r\n",
+                                    (unsigned int)now,
+                                    (unsigned int)idle_ms,
+                                    (unsigned int)g_job_offset,
+                                    (unsigned int)g_job_total,
+                                    (unsigned int)chunk_base,
+                                    (unsigned int)g_job_chunk_len,
+                                    (unsigned int)next_host_offset,
+                                    (unsigned int)ack_offset,
+                                    (unsigned int)outstanding,
+                                    (unsigned int)(g_data_mode ? 1U : 0U),
+                                    (unsigned int)(g_preroll_signaled ? 1U : 0U));
+                    }
+                    if (idle_ms >= JOB_TX_DATA_UART_IDLE_BUSY_MS &&
+                        (data_idle_last_busy_ms == 0U ||
+                         (uint32_t)(now - data_idle_last_busy_ms) >= JOB_TX_DATA_UART_IDLE_BUSY_MS)) {
+                        data_idle_last_busy_ms = now;
+                        host_sendf("@BUSY type=%u offset=%u ack_offset=%u outstanding=%u "
+                                   "window=%u waited=%u partial=%u uart_idle=1\r\n",
+                                   PKT_JOB_DATA,
+                                   (unsigned int)next_host_offset,
+                                   (unsigned int)ack_offset,
+                                   (unsigned int)outstanding,
+                                   (unsigned int)tx_async_data_window_bytes(),
+                                   (unsigned int)idle_ms,
+                                   (unsigned int)g_job_chunk_len);
+                    }
+                }
                 data_idle_ticks++;
                 if (data_idle_ticks >= TX_DATA_MODE_TIMEOUT_TICKS) {
                     errcode_t reset_ret = abort_rx_and_clear_transaction("data-mode-timeout");
                     data_idle_ticks = 0;
+                    data_idle_start_ms = 0;
+                    data_idle_last_log_ms = 0;
+                    data_idle_last_busy_ms = 0;
                     host_sendf("@ERR data_mode_timeout recovery=%s\r\n",
                                (reset_ret == ERRCODE_SUCC) ? "safe" : "unconfirmed");
                 }
+            } else {
+                data_idle_start_ms = 0;
+                data_idle_last_log_ms = 0;
+                data_idle_last_busy_ms = 0;
             }
             sle_job_client_poll_connect();
             tx_panel_publish_local_status(false);
@@ -1630,6 +1910,9 @@ static int uart_rx_task(void *arg)
             continue;
         }
         data_idle_ticks = 0;
+        data_idle_start_ms = 0;
+        data_idle_last_log_ms = 0;
+        data_idle_last_busy_ms = 0;
 
         /* ASCII CAN is an out-of-band transaction reset in every parser mode. */
         if (ch == JOB_TX_UART_RESYNC_BYTE) {
@@ -1697,6 +1980,8 @@ static int sle_init_task(void *arg)
     errcode_t ret = sle_job_client_init();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[JOB_TX_BOOT] sle client init failed: 0x%x\r\n", ret);
+    } else {
+        sle_job_client_set_panel_link_allowed(true);
     }
     return (ret == ERRCODE_SUCC) ? 0 : -1;
 }

@@ -24,7 +24,8 @@ from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
     JOB_DATA_CHUNK_SIZE, JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES,
-    JOB_MAX_SIZE, JOB_PREROLL_BYTES, clamp_stream_preroll_request, plan_safe_preroll,
+    JOB_MAX_SIZE, JOB_PREROLL_BYTES, EXEC_START_ACK_TIMEOUT_MIN_S,
+    clamp_stream_preroll_request, plan_safe_preroll,
 )
 from workers.doubao_image_worker import DoubaoImageWorker
 from workers.serial_worker import WorkerManager
@@ -34,6 +35,9 @@ from ui.pages.connection_page import ConnectionPage
 from ui.pages.gcode_page import GcodePage
 from ui.pages.job_page import JobPage
 from ui.pages.logs_page import LogsPage
+
+EXEC_STATUS_POLL_INTERVAL_MS = 1500
+EXEC_STATUS_POLL_TIMEOUT_S = 6.0
 
 
 class MainWindow(QMainWindow):
@@ -72,7 +76,7 @@ class MainWindow(QMainWindow):
         self._exec_poll_inflight = False
         self._exec_poll_failures = 0
         self._exec_poll_timer = QTimer(self)
-        self._exec_poll_timer.setInterval(800)
+        self._exec_poll_timer.setInterval(EXEC_STATUS_POLL_INTERVAL_MS)
         self._exec_poll_timer.timeout.connect(self._poll_execution_status)
 
         # UI
@@ -254,6 +258,14 @@ class MainWindow(QMainWindow):
             return
         previous_state = self.state.rx_state_code
         tracked_job = self.state.rx_job_id
+        same_job_before_update = tracked_job <= 0 or status.job_id in (0, tracked_job)
+        if self.state.execution_complete and status.state == 3 and same_job_before_update:
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] ignore_stale_status state={status.state} "
+                f"job={status.job_id} tracked_job={tracked_job}",
+            )
+            return
         self.state.prev_rx_state_code = previous_state
         self.state.rx_state_code = status.state
         self.state.rx_job_id = status.job_id
@@ -272,11 +284,10 @@ class MainWindow(QMainWindow):
                 f"job={status.job_id} tracked_job={tracked_job} term={int(self.state.termination_requested)}",
             )
 
-        same_job = tracked_job <= 0 or status.job_id in (0, tracked_job)
         completed_by_idle = (
             self.state.execution_expected
             and status.state == 0
-            and same_job
+            and same_job_before_update
             and not self.state.termination_requested
         )
         if completed_by_idle:
@@ -351,7 +362,7 @@ class MainWindow(QMainWindow):
 
     def _execution_status_poll_worker(self) -> None:
         try:
-            result = self.client.transact_status(2.0)
+            result = self.client.transact_status(EXEC_STATUS_POLL_TIMEOUT_S)
             if (not self.state.execution_expected or self.state.execution_complete or
                     self.state.termination_requested or not self._exec_poll_timer.isActive()):
                 return
@@ -365,7 +376,10 @@ class MainWindow(QMainWindow):
                     self.state.termination_requested or not self._exec_poll_timer.isActive()):
                 return
             self._exec_poll_failures += 1
-            if self._exec_poll_failures in (1, 3, 10):
+            if isinstance(exc, TimeoutError):
+                if self._exec_poll_failures in (1, 3, 10):
+                    self.worker.log.emit("status", f"[EXEC_POLL] 状态查询延迟: {exc}")
+            elif self._exec_poll_failures in (1, 3, 10):
                 self.worker.log.emit("error", f"[EXEC_POLL] 查询状态失败: {exc}")
         finally:
             self._exec_poll_inflight = False
@@ -776,7 +790,8 @@ class MainWindow(QMainWindow):
                 # Small file: send EXEC_START after upload complete
                 self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 normal 路径，发送 EXEC_START")
                 self.worker.task_status.emit("执行中...", -1)
-                self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", timeout)
+                exec_timeout = max(timeout, EXEC_START_ACK_TIMEOUT_MIN_S)
+                self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", exec_timeout)
                 self.worker.log.emit("status", f"[EXEC_FLOW] EXEC_START 已发送，等待 RX 完成")
                 self.worker.task_status.emit("执行已启动，等待 RX 完成", -1)
 
@@ -827,7 +842,8 @@ class MainWindow(QMainWindow):
         self.state.termination_requested = False
 
         def _work():
-            self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", timeout)
+            exec_timeout = max(timeout, EXEC_START_ACK_TIMEOUT_MIN_S)
+            self.client.send_control(f"@EXEC_START {job_id}", "@ACK type=16", exec_timeout)
             self.worker.task_status.emit("执行中，等待 RX 完成", -1)
         self._run_job_worker(_work)
 

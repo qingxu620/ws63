@@ -72,7 +72,8 @@
 #define PANEL_SLE_STATUS_LISTEN_TASK_STACK_SIZE 0x1000
 #define PANEL_SLE_STATUS_LISTEN_TASK_PRIORITY 26
 
-static uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
+static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
 static uint8_t g_server_id = 0;
 static uint16_t g_panel_conn_id = PANEL_SLE_CONN_INVALID;
 static uint16_t g_rx_conn_id = PANEL_SLE_CONN_INVALID;
@@ -103,8 +104,7 @@ static panel_transport_rx_response_cb_t g_offline_response_cb;
 static panel_transport_rx_response_cb_t g_cmd_response_cb;
 static volatile bool g_standalone_session_active;
 
-static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static uint8_t g_test_receiver_mac[SLE_ADDR_LEN] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 
 static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
 {
@@ -174,65 +174,6 @@ static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
            (uuid->uuid[15] == (uint8_t)((expect >> 8) & 0xFF));
 }
 
-static bool adv_name_match(const sle_seek_result_info_t *seek_result, const char *name)
-{
-    if (seek_result == NULL || seek_result->data == NULL || name == NULL) {
-        return false;
-    }
-
-    uint8_t *data = seek_result->data;
-    uint16_t len = seek_result->data_length;
-    size_t name_len = strlen(name);
-    for (uint16_t i = 0; i < len;) {
-        if ((i + 1U) >= len) {
-            break;
-        }
-        uint8_t ad_type = data[i];
-        uint8_t ad_len = data[i + 1U];
-        if ((uint16_t)(i + 2U + ad_len) > len) {
-            break;
-        }
-        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LOCAL_NAME &&
-            ad_len == name_len && memcmp(&data[i + 2U], name, name_len) == 0) {
-            return true;
-        }
-        i = (uint16_t)(i + 2U + ad_len);
-    }
-    return false;
-}
-
-static bool adv_service_match(const sle_seek_result_info_t *seek_result, uint16_t service_uuid)
-{
-    if (seek_result == NULL || seek_result->data == NULL) {
-        return false;
-    }
-
-    uint8_t *data = seek_result->data;
-    uint16_t len = seek_result->data_length;
-    for (uint16_t i = 0; i < len;) {
-        if ((i + 1U) >= len) {
-            break;
-        }
-        uint8_t ad_type = data[i];
-        uint8_t ad_len = data[i + 1U];
-        if ((uint16_t)(i + 2U + ad_len) > len) {
-            break;
-        }
-        if (ad_type == SLE_ADV_DATA_TYPE_COMPLETE_LIST_OF_16BIT_SERVICE_UUIDS &&
-            ad_len >= PANEL_SLE_UUID_LEN_2) {
-            for (uint8_t j = 0; (uint8_t)(j + 1U) < ad_len; j = (uint8_t)(j + PANEL_SLE_UUID_LEN_2)) {
-                uint16_t uuid = (uint16_t)data[i + 2U + j] |
-                                ((uint16_t)data[i + 3U + j] << 8);
-                if (uuid == service_uuid) {
-                    return true;
-                }
-            }
-        }
-        i = (uint16_t)(i + 2U + ad_len);
-    }
-    return false;
-}
-
 static bool adv_panel_status_parse(const sle_seek_result_info_t *seek_result,
                                    panel_status_payload_t *status)
 {
@@ -267,18 +208,22 @@ static bool adv_panel_status_parse(const sle_seek_result_info_t *seek_result,
     return false;
 }
 
-static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_result)
+static bool addr_matches_mac(const sle_addr_t *addr, const uint8_t *mac)
 {
-    if (seek_result == NULL) {
+    if (addr == NULL || mac == NULL) {
         return false;
     }
-    if (memcmp(seek_result->addr.addr, g_receiver_mac, SLE_ADDR_LEN) == 0 ||
-        memcmp(seek_result->addr.addr, g_test_receiver_mac, SLE_ADDR_LEN) == 0) {
-        return true;
-    }
-    return adv_name_match(seek_result, SLE_JOB_RECEIVER_NAME) ||
-           adv_name_match(seek_result, "LaserRX") ||
-           adv_service_match(seek_result, SLE_JOB_SERVICE_UUID);
+    return memcmp(addr->addr, mac, SLE_ADDR_LEN) == 0;
+}
+
+static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_result)
+{
+    return seek_result != NULL && addr_matches_mac(&seek_result->addr, g_receiver_mac);
+}
+
+static bool seek_result_matches_tx(const sle_seek_result_info_t *seek_result)
+{
+    return seek_result != NULL && addr_matches_mac(&seek_result->addr, g_tx_mac);
 }
 
 static bool rx_control_allowed_now(void)
@@ -293,8 +238,7 @@ static bool rx_control_allowed_now(void)
 
 static bool addr_matches_pending_rx(const sle_addr_t *addr)
 {
-    return addr != NULL &&
-           memcmp(addr->addr, g_pending_rx_addr.addr, SLE_ADDR_LEN) == 0;
+    return addr_matches_mac(addr, g_pending_rx_addr.addr);
 }
 
 static void disconnect_rx_expected(void)
@@ -327,7 +271,7 @@ static void start_seek_if_needed(void)
 
     sle_seek_param_t param = {0};
     param.own_addr_type = 0;
-    param.filter_duplicates = 0;
+    param.filter_duplicates = 1;
     param.seek_filter_policy = 0;
     param.seek_phys = 1;
     param.seek_type[0] = SLE_SEEK_ACTIVE;
@@ -357,7 +301,7 @@ static void start_status_listen_if_needed(void)
 
     sle_seek_param_t param = {0};
     param.own_addr_type = 0;
-    param.filter_duplicates = 0;
+    param.filter_duplicates = 1;
     param.seek_filter_policy = 0;
     param.seek_phys = 1;
     param.seek_type[0] = SLE_SEEK_ACTIVE;
@@ -614,7 +558,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             info.mtu_size = 512;
             info.version = 1;
             (void)ssapc_exchange_info_req(PANEL_SLE_CLIENT_ID, conn_id, &info);
-        } else {
+        } else if (addr_matches_mac(addr, g_tx_mac)) {
             g_panel_conn_id = conn_id;
             if (g_client_connecting && !g_standalone_session_active) {
                 g_rx_connect_cancel_after_connect = true;
@@ -625,6 +569,12 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             panel_model_set_transport_links(true, panel_transport_sle_rx_is_connected());
             osal_printk("[PANEL_SLE_SRV] tx mirror connected conn=%u\r\n",
                         (unsigned int)conn_id);
+        } else {
+            osal_printk("[PANEL_SLE_SRV] reject non-whitelist peer conn=%u\r\n",
+                        (unsigned int)conn_id);
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         if (conn_id == g_panel_conn_id) {
@@ -710,7 +660,10 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
         return;
     }
 
-    if (g_seek_for_status_listen) {
+    bool matches_rx = seek_result_matches_receiver(seek_result);
+    bool matches_tx = seek_result_matches_tx(seek_result);
+
+    if (g_seek_for_status_listen && (matches_rx || matches_tx)) {
         panel_status_payload_t status;
         if (adv_panel_status_parse(seek_result, &status)) {
             apply_panel_status(&status);
@@ -732,13 +685,23 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
         }
     }
 
-    bool matches_rx = seek_result_matches_receiver(seek_result);
     if (matches_rx && g_seek_for_status_listen) {
         panel_status_payload_t status;
         if (!adv_panel_status_parse(seek_result, &status)) {
             static uint32_t s_status_parse_miss_count = 0;
             if ((s_status_parse_miss_count++ & 0x0FU) == 0U) {
                 osal_printk("[PANEL_SLE_LISTEN] rx adv no status len=%u\r\n",
+                            (unsigned int)seek_result->data_length);
+            }
+        }
+    }
+
+    if (matches_tx && g_seek_for_status_listen) {
+        panel_status_payload_t status;
+        if (!adv_panel_status_parse(seek_result, &status)) {
+            static uint32_t s_tx_status_parse_miss_count = 0;
+            if ((s_tx_status_parse_miss_count++ & 0x0FU) == 0U) {
+                osal_printk("[PANEL_SLE_LISTEN] tx adv no status len=%u\r\n",
                             (unsigned int)seek_result->data_length);
             }
         }

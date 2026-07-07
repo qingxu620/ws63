@@ -151,7 +151,7 @@ switch_to_rx_unified() {
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
-    set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 65536
+    set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 102400
     set_config_n CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS
     set_config_n CONFIG_LASER_RX_UART_STATUS_PERIODIC
     set_config_int CONFIG_LASER_RX_UART_BAUD 115200
@@ -191,7 +191,7 @@ verify_rx_unified_config() {
     assert_config_y CONFIG_LASER_RX_TRANSPORT_UART
     assert_config_y CONFIG_LASER_RX_TRANSPORT_WIFI
     assert_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB
-    assert_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 65536
+    assert_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 102400
     assert_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 99
     assert_config_int CONFIG_LASER_RX_WORK_AREA_Y_MM 99
     assert_config_n CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS
@@ -208,7 +208,7 @@ verify_rx_unified_config() {
     echo "  Standalone SLE role selectors OK: RECEIVER=not set, TRANSMITTER=not set"
     echo "  Routes compiled: SLE Job + Legacy WiFi + Legacy UART"
     echo "  Runtime policy: SLE Job primary; WiFi coexist disabled by default"
-    echo "  SLE job cache fixed at 65536 bytes"
+    echo "  SLE job cache fixed at 102400 bytes"
     echo "  Work area fixed at 99x99 mm"
 }
 
@@ -315,7 +315,7 @@ CONFIG_LASER_RX_UART_BAUD=115200
 CONFIG_LASER_RX_UART_STATUS_PERIODIC=not_set
 CONFIG_LASER_RX_TRANSPORT_WIFI=y
 CONFIG_LASER_RX_TRANSPORT_SLE_JOB=y
-CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE=65536
+CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE=102400
 CONFIG_LASER_RX_WORK_AREA_X_MM=99
 CONFIG_LASER_RX_WORK_AREA_Y_MM=99
 CONFIG_LASER_RX_SLE_WAIT_TIMEOUT_MS=not_set

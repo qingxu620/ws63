@@ -42,6 +42,9 @@ static uint16_t g_last_dac_x = 0;
 static uint16_t g_last_dac_y = 0;
 static bool g_last_dac_valid = false;
 static uint64_t g_last_wdt_kick_us = 0;
+#if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
+static uint32_t g_last_move_slow_log_ms = 0;
+#endif
 
 #define SLE_JOB_MOTION_LATE_WARN_US 100U
 
@@ -186,7 +189,9 @@ static void record_late_sample(uint64_t late_us)
 
 static void perform_move(double target_x, double target_y, double feed_rate_mm_min, bool laser_marking)
 {
+#if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
     uint32_t move_start_ms = (uint32_t)uapi_systick_get_ms();
+#endif
     g_motion_active = true;
     g_abort_requested = false;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
@@ -279,8 +284,15 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     g_motion_active = false;
 
     g_move_count++;
+#if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
     uint32_t wall_ms = (uint32_t)uapi_systick_get_ms() - move_start_ms;
     if (wall_ms >= SLE_JOB_MOTION_MOVE_SLOW_MS) {
+        uint32_t now_ms = (uint32_t)uapi_systick_get_ms();
+        if (g_last_move_slow_log_ms != 0U &&
+            (uint32_t)(now_ms - g_last_move_slow_log_ms) < SLE_JOB_MOTION_MOVE_SLOW_LOG_PERIOD_MS) {
+            return;
+        }
+        g_last_move_slow_log_ms = now_ms;
         osal_printk("[JOB_MOTION_MOVE_SLOW] move=%lu laser=%u dist_um=%u steps=%d "
                     "plan_ms=%u wall_ms=%u late=%lu missed=%lu max_late_us=%lu q=%u\r\n",
                     g_move_count,
@@ -294,6 +306,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
                     g_max_sample_late_us,
                     (unsigned int)sle_job_motion_executor_queue_depth());
     }
+#endif
 }
 
 void sle_job_motion_executor_init(void)
@@ -319,6 +332,9 @@ void sle_job_motion_executor_init(void)
     g_move_count = 0;
     g_dac_write_count = 0;
     g_dac_skip_count = 0;
+#if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
+    g_last_move_slow_log_ms = 0;
+#endif
     g_last_dac_x = 0;
     g_last_dac_y = 0;
     g_last_dac_valid = false;

@@ -5,6 +5,7 @@ import re
 
 from transports.sle_tx_transport import (
     DATA_ACK_TIMEOUT_MIN_S,
+    EXEC_START_ACK_TIMEOUT_MIN_S,
     GCODE_LINE_MAX_BYTES,
     JOB_COMMIT_TIMEOUT_MIN_S,
     JOB_DATA_CHUNK_SIZE,
@@ -30,7 +31,7 @@ from transports.sle_tx_transport import (
 
 class StatusParsingTests(unittest.TestCase):
     def test_host_upload_limit_matches_demo_cache(self) -> None:
-        self.assertEqual(JOB_MAX_SIZE, 65536)
+        self.assertEqual(JOB_MAX_SIZE, 100 * 1024)
 
     def test_prepare_gcode_removes_standalone_metric_declaration(self) -> None:
         prepared, removed = prepare_gcode_for_rx(b"G21 ; millimeters\nG90\nM5\n")
@@ -247,7 +248,7 @@ class StatusParsingTests(unittest.TestCase):
 
         exec_wait = next(timeout for pattern, timeout in waits if "@ACK type=16" in pattern)
         resume_wait = next(timeout for pattern, timeout in waits if "@OK data_resume" in pattern)
-        self.assertEqual(exec_wait, PREROLL_CONTROL_TIMEOUT_MIN_S)
+        self.assertEqual(exec_wait, EXEC_START_ACK_TIMEOUT_MIN_S)
         self.assertEqual(resume_wait, PREROLL_CONTROL_TIMEOUT_MIN_S)
 
     def test_upload_uses_ten_second_floor_for_data_ack_waits(self) -> None:

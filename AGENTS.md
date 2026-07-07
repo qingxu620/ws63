@@ -31,6 +31,27 @@ Screen board, src/ws63_screen_panel_lvgl_refactor
 
 RX is the source of truth for motion execution, job state, cache state, and laser state. TX is a bridge from Host UART commands to structured SLE packets. The screen must not become a second independent motion controller unless the user explicitly requests a new architecture.
 
+## Competition Board Identity Rules
+
+This project is used in a competition environment. The active TX, RX, and Screen boards are the only valid peers. Do not add permissive discovery that can bind to unrelated development boards.
+
+Current fixed board identities:
+
+```text
+RX board     SLE MAC: 20:06:09:27:00:01
+Screen board SLE MAC: 20:06:09:27:00:02
+TX board     SLE MAC: 20:06:09:27:00:03
+```
+
+Rules:
+
+- TX must only connect to the fixed RX and fixed Screen board addresses.
+- Screen Host Online Mode must only accept status mirror data from the fixed TX board address.
+- Screen Panel Offline Mode must only connect to the fixed RX board address.
+- Do not use loose device-name matching, service-UUID-only matching, magic-payload-only matching, or "first matching advertiser" behavior for product links.
+- Unknown `adv_report` devices are noise. They may be logged for diagnostics, but must not update UI state, become job/control owners, or be used for SLE connections.
+- When debugging Screen status discovery, keep the whitelist first, then parse status payloads from whitelisted peers only.
+
 ## Active Development Directories
 
 Active directories:
@@ -181,10 +202,10 @@ Current route model:
 
 SLE Job route requirements:
 
-- Cache size remains `65536`.
+- Cache size remains `102400`.
 - Host preroll baseline remains `4096`.
 - Treat the `4096` Host preroll baseline as the user-controlled upload-and-execute streaming policy. Do not bypass or disable upload-and-execute preroll just because a file fits in RX cache.
-- Treat the `65536` RX cache size as the local SRAM/cache limit for receive storage, especially the upload-only path. Do not use it as a Host-side threshold to switch upload-and-execute jobs onto a different route.
+- Treat the `102400` RX cache size as the local SRAM/cache limit for receive storage, especially the upload-only path. Do not use it as a Host-side threshold to switch upload-and-execute jobs onto a different route.
 - Preserve stable packet framing, CRC, ACK/NACK, sequence, duplicate handling, cache semantics, abort semantics, and reconnect behavior.
 - Control packets must remain distinct from G-code data.
 - Current stop controls are software safe-stop controls, not hardware emergency stop.

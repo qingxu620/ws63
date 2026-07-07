@@ -84,7 +84,8 @@ typedef struct {
     uint16_t data_len;
 } sle_job_rx_cb_diag_t;
 
-static uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
 static volatile bool g_conn_table_ready = false;
@@ -153,6 +154,14 @@ static uint8_t conn_table_count(void)
         }
     }
     return count;
+}
+
+static bool addr_matches_mac(const sle_addr_t *addr, const uint8_t *mac)
+{
+    if (addr == NULL || mac == NULL) {
+        return false;
+    }
+    return memcmp(addr->addr, mac, SLE_ADDR_LEN) == 0;
 }
 
 static uint8_t rx_work_queue_used_locked(void)
@@ -545,6 +554,11 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
                     (unsigned int)SLE_JOB_PACKET_MAX_SIZE);
         return;
     }
+    if (!conn_table_contains(conn_id)) {
+        osal_printk("[RX_CB_DROP] reason=non_whitelist_conn conn=%u len=%u\r\n",
+                    (unsigned int)conn_id, (unsigned int)write_cb_para->length);
+        return;
+    }
 
     if (g_owner_conn_id == SLE_CONN_INVALID) {
         g_owner_conn_id = conn_id;
@@ -726,11 +740,17 @@ static void sle_set_phy_cbk(uint16_t conn_id, errcode_t status, const sle_set_ph
 static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
-    unused(addr);
     unused(pair_state);
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
+        if (!addr_matches_mac(addr, g_tx_mac)) {
+            osal_printk("[job_rx] reject non-whitelist peer conn_id=%u\r\n", (unsigned int)conn_id);
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
+            return;
+        }
         conn_table_add(conn_id);
         tune_job_link_after_connect(conn_id);
 #if SLE_JOB_CONNECTED_ANNOUNCE_ENABLE
