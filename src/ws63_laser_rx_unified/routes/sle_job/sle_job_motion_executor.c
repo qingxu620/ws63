@@ -4,7 +4,7 @@
  */
 #include "sle_job_motion_executor.h"
 #include "sle_job_config.h"
-#include "dac8562.h"
+#include "dac8563.h"
 #include "laser_ctrl.h"
 #include "soc_osal.h"
 #include "systick.h"
@@ -80,7 +80,7 @@ static void write_current_position(bool force)
         return;
     }
 
-    dac8562_write_xy(x, y);
+    dac8563_write_xy(x, y);
     g_last_dac_x = x;
     g_last_dac_y = y;
     g_last_dac_valid = true;
@@ -99,7 +99,7 @@ static void arm_output_if_needed(void)
 
 #if SLE_JOB_DAC_RECOVER_ON_ARM
     uint32_t recover_start_ms = (uint32_t)uapi_systick_get_ms();
-    dac8562_recover();
+    dac8563_recover();
     uint32_t recover_ms = (uint32_t)uapi_systick_get_ms() - recover_start_ms;
 #else
     uint32_t recover_ms = 0;

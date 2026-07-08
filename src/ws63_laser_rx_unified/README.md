@@ -475,7 +475,7 @@ The independent WiFi sample is `src/deprecated/ws63_laser_wifi/`.
 
 Current source structure:
 
-- `src/main.c`: independent app entry. Initializes `dac8562`, `laser_ctrl`,
+- `src/main.c`: independent app entry. Initializes `dac8563`, `laser_ctrl`,
   `gcode_processor`, `motion_executor`, `wifi_grbl_server`, creates the WiFi
   task, starts the motion executor task, and prints `[laser wifi] ready`.
 - `src/wifi_grbl_server.c/.h`: SoftAP setup, TCP server, Grbl byte-stream
@@ -485,7 +485,7 @@ Current source structure:
 - `src/gcode_processor.c/.h`: converts parsed G-code into local motion
   commands.
 - `src/motion_executor.c/.h`: motion queue and DAC/laser execution worker.
-- `src/dac8562.c/.h` and `src/laser_ctrl.c/.h`: independent hardware layer.
+- `src/dac8563.c/.h` and `src/laser_ctrl.c/.h`: independent hardware layer.
 - `common/config.h`: WiFi, motion, geometry, task, DAC, and laser defaults.
 - `common/protocol.h`: local `motion_cmd_t` and command IDs.
 
@@ -515,7 +515,7 @@ Files that should not be copied directly:
 - Old WiFi project files in place; `src/deprecated/ws63_laser_wifi/` remains the stable
   rollback baseline and must not be modified during route porting.
 - Hardware layer should be evaluated carefully. Prefer reusing integrated
-  `hardware/dac8562.c/.h` and `hardware/laser_ctrl.c/.h` if behavior remains
+  `hardware/dac8563.c/.h` and `hardware/laser_ctrl.c/.h` if behavior remains
   identical; copy route-local hardware only if symbol or behavior isolation is
   required.
 

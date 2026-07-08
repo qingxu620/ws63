@@ -4,7 +4,7 @@
  */
 #include "motion_executor.h"
 #include "config.h"
-#include "dac8562.h"
+#include "dac8563.h"
 #include "laser_ctrl.h"
 #include "soc_osal.h"
 #include "systick.h"
@@ -63,7 +63,7 @@ static inline uint16_t mm_to_dac(double mm, double scale)
 
 static void write_current_position(void)
 {
-    dac8562_write_xy(mm_to_dac(g_current_x, BEILV_X), mm_to_dac(g_current_y, BEILV_Y));
+    dac8563_write_xy(mm_to_dac(g_current_x, BEILV_X), mm_to_dac(g_current_y, BEILV_Y));
 }
 
 static void arm_output_if_needed(void)
@@ -73,7 +73,7 @@ static void arm_output_if_needed(void)
     }
 
     laser_force_off();
-    dac8562_recover();
+    dac8563_recover();
     write_current_position();
     g_output_armed = true;
 }

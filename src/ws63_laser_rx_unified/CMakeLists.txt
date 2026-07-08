@@ -6,7 +6,7 @@ set(RX_UNIFIED_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.c
     ${CMAKE_CURRENT_SOURCE_DIR}/mode_select/route_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/mode_select/route_status.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/hardware/dac8562.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/hardware/dac8563.c
     ${CMAKE_CURRENT_SOURCE_DIR}/hardware/laser_ctrl.c)
 
 set(RX_UNIFIED_PUBLIC_HEADER

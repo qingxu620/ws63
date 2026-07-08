@@ -510,6 +510,27 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(commands, ["@BEGIN 1 3 c84a"])
         self.assertEqual(resync_count, 2)
 
+    def test_resync_retries_until_ack(self) -> None:
+        writes: list[bytes] = []
+        attempts = 0
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise TimeoutError("resync missing")
+                return WaitResult("@OK resync rx=aborted", 1)
+
+        client = FakeClient(lambda channel, message: None)
+        result = client._resync_tx_locked(2.0)
+
+        self.assertEqual(result.line, "@OK resync rx=aborted")
+        self.assertEqual(writes, [bytes((TX_UART_RESYNC_BYTE,))] * 3)
+
     def test_parses_firmware_status_format(self) -> None:
         status = parse_rx_status(
             "@STATUS state=3 status=0 job=7 rx=900 total=1200 free=300 lines=42"

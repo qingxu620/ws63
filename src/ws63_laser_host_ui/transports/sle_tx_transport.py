@@ -31,6 +31,7 @@ DATA_ACK_TIMEOUT_MIN_S = 10.0
 DATA_ACK_KEEPALIVE_MAX_S = 180.0
 JOB_COMMIT_TIMEOUT_MIN_S = 12.0
 TX_RESYNC_TIMEOUT_MIN_S = 12.0
+TX_RESYNC_RETRY_INTERVAL_S = 0.5
 PREROLL_CONTROL_TIMEOUT_MIN_S = 12.0
 EXEC_START_ACK_TIMEOUT_MIN_S = 18.0
 TX_UART_RESYNC_BYTE = 0x18
@@ -559,10 +560,30 @@ class SleJobSerialClient:
         """
         self._drain_lines()
         self._on_log("status", "同步 TX/RX 任务状态")
-        self.write_bytes(bytes((TX_UART_RESYNC_BYTE,)), "<resync 0x18>")
-        result = self.wait_for("@OK resync rx=aborted", timeout, ignore_unknown_command=True)
-        self._on_log("status", f"TX/RX 同步完成 {result.elapsed_ms}ms")
-        return result
+        started = time.monotonic()
+        deadline = started + timeout
+        attempts = 0
+        last_exc: Exception | None = None
+        while time.monotonic() < deadline:
+            attempts += 1
+            self.write_bytes(bytes((TX_UART_RESYNC_BYTE,)), "<resync 0x18>")
+            wait_s = min(TX_RESYNC_RETRY_INTERVAL_S, max(0.0, deadline - time.monotonic()))
+            try:
+                result = self.wait_for(
+                    "@OK resync rx=aborted",
+                    wait_s,
+                    ignore_unknown_command=True,
+                )
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                self._on_log("status", f"TX/RX 同步完成 {elapsed_ms}ms attempts={attempts}")
+                return WaitResult(line=result.line, elapsed_ms=elapsed_ms)
+            except TimeoutError as exc:
+                last_exc = exc
+                continue
+        elapsed = int((time.monotonic() - started) * 1000)
+        raise TimeoutError(
+            f"等待 @OK resync rx=aborted 超时 {elapsed}ms，重试 {attempts} 次，最后错误: {last_exc}"
+        )
 
     def upload_job(self, job_id: int, gcode: bytes, timeout: float, *,
                    progress_cb: Optional[Callable[[str], None]] = None,

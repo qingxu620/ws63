@@ -1,9 +1,9 @@
 /**
- * @file dac8562.h
- * @brief DAC8562 dual-channel SPI DAC driver.
+ * @file dac8563.h
+ * @brief DAC8563 dual-channel SPI DAC driver.
  */
-#ifndef DAC8562_H
-#define DAC8562_H
+#ifndef DAC8563_H
+#define DAC8563_H
 
 #include "errcode.h"
 #include <stdint.h>
@@ -26,13 +26,13 @@ extern "C" {
 #define DAC_GAIN_B1_A2 0x0002
 #define DAC_GAIN_B1_A1 0x0003
 
-errcode_t dac8562_init(void);
-void dac8562_recover(void);
-void dac8562_write_channel(uint8_t cmd, uint16_t value);
-void dac8562_write_xy(uint16_t x_val, uint16_t y_val);
+errcode_t dac8563_init(void);
+void dac8563_recover(void);
+void dac8563_write_channel(uint8_t cmd, uint16_t value);
+void dac8563_write_xy(uint16_t x_val, uint16_t y_val);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* DAC8562_H */
+#endif /* DAC8563_H */

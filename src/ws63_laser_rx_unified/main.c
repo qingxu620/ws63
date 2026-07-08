@@ -4,7 +4,7 @@
  */
 #include "app_init.h"
 #include "boot_policy.h"
-#include "dac8562.h"
+#include "dac8563.h"
 #include "laser_ctrl.h"
 #include "route_manager.h"
 #include "soc_osal.h"
@@ -16,7 +16,7 @@ static void laser_rx_unified_entry(void)
     osal_printk("[FW_ID] board=RX firmware=%s app=ws63_laser_rx_unified role=unified-rx phase=R5D routes=sle_job,wifi,uart\r\n",
                 RX_UNIFIED_FIRMWARE_PACKAGE);
 
-    errcode_t ret = dac8562_init();
+    errcode_t ret = dac8563_init();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[RX_INTEGRATED] dac init failed: 0x%x\r\n", ret);
         return;

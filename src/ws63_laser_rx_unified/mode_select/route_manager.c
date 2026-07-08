@@ -235,10 +235,13 @@ bool route_manager_can_request_switch(rx_route_t target)
     if (g_switching) {
         return false;
     }
-    if (target != RX_ROUTE_LEGACY_WIFI) {
+    if (target != RX_ROUTE_LEGACY_WIFI && target != RX_ROUTE_SLE_JOB) {
         return false;
     }
-    if (g_active_route != RX_ROUTE_SLE_JOB) {
+    if (target == RX_ROUTE_LEGACY_WIFI && g_active_route != RX_ROUTE_SLE_JOB) {
+        return false;
+    }
+    if (target == RX_ROUTE_SLE_JOB && g_active_route != RX_ROUTE_LEGACY_WIFI) {
         return false;
     }
     if (laser_is_enabled()) {
@@ -290,6 +293,29 @@ bool route_manager_request_safe_switch(rx_route_t target)
         return true;
 #else
         osal_printk("[ROUTE_SWITCH] fail LEGACY_WIFI transport disabled\r\n");
+#endif
+    }
+
+    if (target == RX_ROUTE_SLE_JOB) {
+#if defined(CONFIG_LASER_RX_TRANSPORT_WIFI)
+        legacy_wifi_route_force_stop();
+#endif
+#if defined(CONFIG_LASER_RX_TRANSPORT_SLE_JOB)
+        errcode_t ret = sle_job_route_start();
+        if (ret != ERRCODE_SUCC) {
+            osal_printk("[ROUTE_SWITCH] start SLE_JOB failed: 0x%x\r\n", ret);
+            laser_force_off();
+            g_active_route = RX_ROUTE_SAFE;
+            g_switch_count++;
+            g_switching = false;
+            return false;
+        }
+        g_active_route = RX_ROUTE_SLE_JOB;
+        g_switch_count++;
+        g_switching = false;
+        return true;
+#else
+        osal_printk("[ROUTE_SWITCH] fail SLE_JOB transport disabled\r\n");
 #endif
     }
 

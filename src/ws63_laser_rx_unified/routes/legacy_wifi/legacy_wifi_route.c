@@ -12,6 +12,7 @@
 #include "lwip/sockets.h"
 #include "legacy_wifi_motion_executor.h"
 #include "preserve.h"
+#include "route_manager.h"
 #include "soc_osal.h"
 #include "systick.h"
 #include "td_base.h"
@@ -29,6 +30,8 @@
 #define WIFI_MAX_KEY_LEN 65
 #define WIFI_MAX_SSID_LEN 33
 #define GRBL_RESET_CHAR 0x18
+#define WIFI_ROUTE_SWITCH_TASK_STACK_SIZE 0x1000U
+#define WIFI_ROUTE_SWITCH_DELAY_MS 100U
 
 static char g_rx_line[RX_LINE_MAX];
 static int g_rx_pos = 0;
@@ -45,11 +48,43 @@ static unsigned long g_error_count = 0;
 static unsigned long g_status_count = 0;
 static bool g_wifi_event_registered = false;
 static volatile bool g_route_started = false;
+static volatile bool g_stop_requested = false;
+static volatile bool g_sle_switch_pending = false;
 #if LEGACY_WIFI_STATUS_PERIODIC
 static unsigned long g_last_status_ms = 0;
 #endif
 
 static void wait_motion_idle(uint32_t timeout_ms);
+
+static int wifi_switch_sle_task(void *arg)
+{
+    unused(arg);
+
+    osal_msleep(WIFI_ROUTE_SWITCH_DELAY_MS);
+    bool ok = route_manager_request_safe_switch(RX_ROUTE_SLE_JOB);
+    if (!ok) {
+        osal_printk("[WIFI_ROUTE_SWITCH] switch_to_sle failed\r\n");
+    }
+    g_sle_switch_pending = false;
+    return 0;
+}
+
+static bool start_wifi_switch_sle_task(void)
+{
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(wifi_switch_sle_task, NULL, "wifi_to_sle",
+                                          WIFI_ROUTE_SWITCH_TASK_STACK_SIZE);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        return false;
+    }
+    if (osal_kthread_set_priority(task, LEGACY_WIFI_TASK_PRIO_WIFI) != OSAL_SUCCESS) {
+        osal_printk("[WIFI_ROUTE_SWITCH] set switch priority failed\r\n");
+    }
+    osal_kfree(task);
+    osal_kthread_unlock();
+    return true;
+}
 
 static void wifi_event_scan_state_changed(int32_t state, int32_t size)
 {
@@ -417,8 +452,23 @@ static bool handle_dollar_command(const char *line)
                  legacy_wifi_motion_executor_missed_sample_count(), legacy_wifi_motion_executor_motion_segment_count(),
                  legacy_wifi_motion_executor_short_segment_count(), g_tcp_rx_chunks, g_tcp_rx_bytes,
                  g_tcp_rx_realtime_q, g_tcp_tx_messages, g_tcp_tx_bytes, g_line_id,
-                 g_ok_count, g_error_count, g_status_count);
+                  g_ok_count, g_error_count, g_status_count);
         wifi_send_str(buf);
+    } else if (strcmp(line, "$SLE") == 0) {
+        if (g_sle_switch_pending || !route_manager_can_request_switch(RX_ROUTE_SLE_JOB)) {
+            laser_force_off();
+            wifi_send_str("error:10\r\n");
+            return true;
+        }
+        laser_force_off();
+        legacy_wifi_motion_executor_flush();
+        g_sle_switch_pending = true;
+        if (!start_wifi_switch_sle_task()) {
+            g_sle_switch_pending = false;
+            wifi_send_str("error:11\r\n");
+            return true;
+        }
+        wifi_send_str("[MSG:route_switch_sle accepted]\r\nok\r\n");
     } else if (strcmp(line, "$H") == 0) {
         wait_motion_idle(LEGACY_WIFI_MOTION_END_DRAIN_TIMEOUT_MS);
         legacy_wifi_gcode_processor_set_origin();
@@ -437,6 +487,7 @@ static bool handle_dollar_command(const char *line)
         wifi_send_str("$# - View coordinate parameters\r\n");
         wifi_send_str("$N - View startup blocks\r\n");
         wifi_send_str("$D - View motion debug state\r\n");
+        wifi_send_str("$SLE - Switch back to SLE job route\r\n");
         wifi_send_str("$X - Kill alarm lock\r\n");
         wifi_send_str("$H - Set origin\r\n");
         send_ok();
@@ -691,13 +742,16 @@ int legacy_wifi_route_task_entry(void *arg)
         return -1;
     }
 
-    while (1) {
+    while (!g_stop_requested) {
         struct sockaddr_in client_addr = {0};
         socklen_t addr_len = sizeof(client_addr);
         uint8_t buf[LEGACY_WIFI_TCP_RX_BUF_SIZE];
 
         int client = accept(g_listen_sock, (struct sockaddr *)&client_addr, &addr_len);
         if (client < 0) {
+            if (g_stop_requested) {
+                break;
+            }
             osal_printk("[laser wifi] accept failed errno=%d\r\n", errno);
             osal_msleep(100);
             continue;
@@ -716,7 +770,7 @@ int legacy_wifi_route_task_entry(void *arg)
         g_status_count = 0;
         send_grbl_startup("tcp-connect");
 
-        while (g_client_sock >= 0) {
+        while (g_client_sock >= 0 && !g_stop_requested) {
             int ret = recv(client, buf, sizeof(buf), 0);
             if (ret <= 0) {
                 break;
@@ -730,6 +784,9 @@ int legacy_wifi_route_task_entry(void *arg)
 
         close_client();
     }
+
+    g_route_started = false;
+    g_stop_requested = false;
 
     return 0;
 }
@@ -746,6 +803,7 @@ errcode_t legacy_wifi_route_start(void)
     }
 
     laser_force_off();
+    g_stop_requested = false;
     legacy_wifi_gcode_processor_init();
     legacy_wifi_motion_executor_init();
 
@@ -794,6 +852,7 @@ void legacy_wifi_route_force_stop(void)
     if (g_client_sock >= 0) {
         close_client();
     }
+    g_stop_requested = true;
     if (g_listen_sock >= 0) {
         lwip_close(g_listen_sock);
         g_listen_sock = -1;
