@@ -24,6 +24,32 @@ CMakeCache.txt
 *.map
 *.s19
 *.a
+
+# 白名单：构建系统需要的官方 SDK 静态库
+# 来源：HiSpark fbb_ws63 tag 1.10.106 (commit 7cda10e7)
+# 用途：构建系统回退到预编译 .a 时使用，见 build_component.cmake
+!middleware/utils/at/at_bt_cmd/ws63-liteos-app/libbt_at.a
+!middleware/utils/at/at_radar_cmd/ws63-liteos-app/libradar_at.a
+!protocol/bt/controller/bgtp/ws63-liteos-app/libbgtp.a
+!protocol/bt/controller/bgtp/ws63-liteos-app/libbgtp_rom_data.a
+!protocol/bt/controller/chba/ws63-liteos-app/libchba_at.a
+!protocol/bt/controller/chba/ws63-liteos-app/libsle_netdev.a
+!protocol/bt/host/bg_common/ws63-liteos-app/libbg_common.a
+!protocol/bt/host/bt/sdk/ws63-liteos-app/libbth_sdk.a
+!protocol/bt/host/bt/ws63-liteos-app/libbt_app.a
+!protocol/bt/host/bt/ws63-liteos-app/libbt_host.a
+!protocol/bt/host/gle/ws63-liteos-app/libbth_gle.a
+!protocol/radar/alg_ai/ws63-liteos-app/libradar_ai.a
+!protocol/radar/plat/ws63-liteos-app/libradar_sensing.a
+!protocol/wifi/ws63-liteos-app/libwifi_alg_anti_interference.a
+!protocol/wifi/ws63-liteos-app/libwifi_alg_cca_opt.a
+!protocol/wifi/ws63-liteos-app/libwifi_alg_edca_opt.a
+!protocol/wifi/ws63-liteos-app/libwifi_alg_temp_protect.a
+!protocol/wifi/ws63-liteos-app/libwifi_alg_txbf.a
+!protocol/wifi/ws63-liteos-app/libwifi_driver_dmac.a
+!protocol/wifi/ws63-liteos-app/libwifi_driver_hmac.a
+!protocol/wifi/ws63-liteos-app/libwifi_driver_tcm.a
+!protocol/wifi/ws63-liteos-app/libwifi_rom_data.a
 *.lib
 *.so
 *.dylib
@@ -116,10 +142,15 @@ Thumbs.db
 *.log
 *.logs
 
-# 调试核心转储
-core
-core.*
-vgcore.*
+# LVGL core/ 源码目录（被根 .gitignore 的 **/core 误伤）
+!deprecated/ws63_screen_lvgl/src/lvgl/src/core/
+!deprecated/ws63_screen_lvgl/src/lvgl/src/core/**
+
+# 调试核心转储（锚定到 src/ 根，避免误伤子目录名为 core 的源码目录）
+/core
+/core.*
+/vgcore.*
+*.core
 
 # 性能分析
 gmon.out

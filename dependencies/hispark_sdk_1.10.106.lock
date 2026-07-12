@@ -1,0 +1,18 @@
+# HiSpark WS63 SDK dependency lock file
+# ==============================================
+# Repository: https://gitee.com/HiSpark/fbb_ws63.git
+# SDK Version: 1.10.106
+# Tag: 1.10.106
+# Commit: 7cda10e7476d8df35f0ac1a4013eb395874247e0
+# Date: 2025-11-10
+# Library Count: 22
+# Purpose: Precompiled static libraries required by the build_component.cmake
+#          fallback mechanism when source files are not provided.
+# License: HiSilicon (Shanghai) Technologies Co., Ltd. (proprietary SDK)
+# ==============================================
+#
+# To restore these libraries from the official SDK:
+#   scripts/restore_official_sdk_libs.sh --restore
+#
+# To verify without restoring:
+#   scripts/restore_official_sdk_libs.sh --verify-only

@@ -1,0 +1,18 @@
+# LVGL dependency lock file
+# ==============================================
+# Project: LVGL (LittlevGL)
+# Version: v9.3.0
+# Repository: https://github.com/lvgl/lvgl.git
+# Commit: c033a98afddd65aaafeebea625382a94020fe4a7
+# License: MIT
+# Imported paths:
+#   src/core/*.c (13 files)
+#   src/core/*.h (21 files)
+#   LICENCE.txt (1 file)
+# Target:
+#   src/deprecated/ws63_screen_lvgl/src/lvgl/src/core/
+#   src/deprecated/ws63_screen_lvgl/src/lvgl/LICENCE.txt
+# Reason: The src/.gitignore bare "core" pattern (now fixed) and root .gitignore
+#         "**/core" pattern excluded the LVGL core source directory from git tracking,
+#         causing build failure with "src/core/lv_obj.h: No such file or directory"
+# ==============================================
