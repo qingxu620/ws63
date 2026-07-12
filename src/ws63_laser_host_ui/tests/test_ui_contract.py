@@ -345,6 +345,10 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(page.preroll_edit.text(), "2048")
         self.assertEqual(page.focus_power.text(), "7")
 
+    def test_focus_power_config_rejects_zero_by_clamping_to_minimum(self) -> None:
+        self.assertEqual(HostConfig(focus_power=0).focus_power, 1)
+        self.assertEqual(HostConfig(focus_power=101).focus_power, 100)
+
     def test_job_page_only_exposes_firmware_backed_controls(self) -> None:
         page = JobPage()
 

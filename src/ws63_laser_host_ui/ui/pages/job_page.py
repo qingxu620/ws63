@@ -125,7 +125,7 @@ class JobPage(QWidget):
     exec_resume_requested = Signal()
     abort_requested = Signal()
     outline_scan_requested = Signal()
-    focus_on_requested = Signal(int)        # power 0-100
+    focus_on_requested = Signal(int)        # power 1-100
     focus_off_requested = Signal()
     status_requested = Signal()
     switch_wifi_requested = Signal()
@@ -403,12 +403,12 @@ class JobPage(QWidget):
         focus_layout = QHBoxLayout()
         focus_layout.setSpacing(8)
         
-        lbl_fpow = QLabel("弱光功率 (0-100)")
+        lbl_fpow = QLabel("弱光功率 (1-100)")
         lbl_fpow.setFixedWidth(100)
         focus_layout.addWidget(lbl_fpow)
         
         self.focus_power = QLineEdit("10")
-        self.focus_power.setValidator(QIntValidator(0, 100, self))
+        self.focus_power.setValidator(QIntValidator(1, 100, self))
         self.focus_power.setMaximumWidth(60)
         self.focus_power.setMinimumHeight(30)
         self.focus_power.setAlignment(Qt.AlignCenter)
@@ -514,7 +514,7 @@ class JobPage(QWidget):
             self.focus_off_requested.emit()
         else:
             try:
-                power = max(0, min(100, int(self.focus_power.text().strip())))
+                power = max(1, min(100, int(self.focus_power.text().strip())))
             except ValueError:
                 power = 10
             self.focus_on_requested.emit(power)

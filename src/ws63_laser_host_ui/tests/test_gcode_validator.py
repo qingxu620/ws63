@@ -38,6 +38,20 @@ class GcodeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "0-99.0mm"):
             prepare_gcode_for_upload("G90\nG1 X99.1 Y1\nM5\n")
 
+    def test_accepts_negative_relative_move_within_work_area(self) -> None:
+        payload, _ = prepare_gcode_for_upload("G90\nG1 X10 Y10\nG91\nG1 X-1 Y-2\nM5\n")
+
+        self.assertIn(b"G1 X-1 Y-2", payload)
+
+    def test_rejects_cumulative_relative_move_outside_work_area(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "X 目标位置超出工作范围: 198.000"):
+            prepare_gcode_for_upload("G91\nG1 X99\nG1 X99\nM5\n")
+
+    def test_g92_resets_validator_origin_like_rx(self) -> None:
+        payload, _ = prepare_gcode_for_upload("G90\nG1 X99\nG92\nG91\nG1 X1\nM5\n")
+
+        self.assertIn(b"G1 X1", payload)
+
 
 if __name__ == "__main__":
     unittest.main()

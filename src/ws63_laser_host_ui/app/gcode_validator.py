@@ -161,10 +161,13 @@ def validate_gcode(text: str) -> list[str]:
     - X/Y/F/S values parseable
     - F > 0
     - S in 0-1000
-    - X/Y in 0-99mm
+    - Absolute/cumulative X/Y target in 0-99mm with G90/G91 state tracking
     """
     errors: list[str] = []
     lines = text.strip().split("\n")
+    absolute_mode = True
+    plan_x = 0.0
+    plan_y = 0.0
 
     if not lines or not any(line.strip() for line in lines):
         errors.append("G-code 文件为空")
@@ -206,28 +209,43 @@ def validate_gcode(text: str) -> list[str]:
                 elif cmd.startswith("G") and cmd not in SUPPORTED_GCODE_COMMANDS:
                     errors.append(f"第 {i} 行包含未知或未验证的 G 命令: {cmd}")
 
-        # Check X/Y coordinates
-        for coord in ["X", "Y"]:
-            if coord in line:
+        parsed_words: list[tuple[str, float]] = []
+        for word in words:
+            match = _WORD_RE.fullmatch(word)
+            if match is not None:
                 try:
-                    # Find the value after the coordinate letter
-                    idx = line.index(coord)
-                    rest = line[idx + 1:]
-                    # Extract the number
-                    num_str = ""
-                    for c in rest:
-                        if c.isdigit() or c in ".+-":
-                            num_str += c
-                        else:
-                            break
-                    if num_str:
-                        val = float(num_str)
-                        if math.isnan(val) or math.isinf(val):
-                            errors.append(f"第 {i} 行 {coord} 值无效: {num_str}")
-                        elif val < 0 or val > RX_WORK_AREA_MM:
-                            errors.append(f"第 {i} 行 {coord} 超出工作范围: {val:.3f} (0-{RX_WORK_AREA_MM}mm)")
-                except (ValueError, IndexError):
-                    errors.append(f"第 {i} 行 {coord} 值无法解析")
+                    parsed_words.append((match.group(1), float(match.group(2))))
+                except ValueError:
+                    pass
+
+        suppress_motion = False
+        for letter, value in parsed_words:
+            if letter != "G":
+                continue
+            g_value = int(value)
+            if g_value == 90:
+                absolute_mode = True
+            elif g_value == 91:
+                absolute_mode = False
+            elif g_value in (28, 92):
+                plan_x = 0.0
+                plan_y = 0.0
+                suppress_motion = True
+
+        if not suppress_motion:
+            axis_values = {letter: value for letter, value in parsed_words if letter in ("X", "Y")}
+            target_x = axis_values.get("X", plan_x) if absolute_mode else plan_x + axis_values.get("X", 0.0)
+            target_y = axis_values.get("Y", plan_y) if absolute_mode else plan_y + axis_values.get("Y", 0.0)
+            for coord, target in (("X", target_x), ("Y", target_y)):
+                if coord in axis_values and (math.isnan(target) or math.isinf(target)):
+                    errors.append(f"第 {i} 行 {coord} 目标值无效")
+                elif coord in axis_values and (target < 0 or target > RX_WORK_AREA_MM):
+                    errors.append(
+                        f"第 {i} 行 {coord} 目标位置超出工作范围: {target:.3f} "
+                        f"(0-{RX_WORK_AREA_MM}mm)"
+                    )
+            plan_x = target_x
+            plan_y = target_y
 
         # Check F (feed rate)
         if "F" in line:

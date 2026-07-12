@@ -159,7 +159,7 @@ class ConnectionPage(QWidget):
         self.job_id_edit.setValidator(QIntValidator(1, 2_147_483_647, self))
         job_layout.addLayout(self._field_row("默认上传任务 ID", self.job_id_edit))
         self.focus_power_edit = QLineEdit("10")
-        self.focus_power_edit.setValidator(QIntValidator(0, 100, self))
+        self.focus_power_edit.setValidator(QIntValidator(1, 100, self))
         job_layout.addLayout(self._field_row("红光聚焦预设功率", self.focus_power_edit))
 
         self.cards_grid = QGridLayout()

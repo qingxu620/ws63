@@ -939,6 +939,10 @@ class MainWindow(QMainWindow):
         self._run_job_worker(_work)
 
     def _on_focus_on(self, power: int) -> None:
+        if power < 1 or power > 100:
+            self.worker.log.emit("error", f"FOCUS_ON 功率无效: {power}，允许范围 1-100")
+            return
+
         def _work():
             self.client.send_control(f"@FOCUS_ON S{power}", "@OK focus_on", 5.0)
             self.focus_state_changed.emit(True)

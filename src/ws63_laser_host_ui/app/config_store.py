@@ -18,6 +18,9 @@ class HostConfig:
     job_id: int = 1
     focus_power: int = 10
 
+    def __post_init__(self) -> None:
+        self.focus_power = max(1, min(100, int(self.focus_power)))
+
 
 class ConfigStore:
     def __init__(self, path: Path | None = None) -> None:
