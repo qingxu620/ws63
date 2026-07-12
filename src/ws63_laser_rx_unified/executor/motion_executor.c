@@ -61,21 +61,33 @@ static inline uint16_t mm_to_dac(double mm, double scale)
     return (uint16_t)(value + 0.5);
 }
 
-static void write_current_position(void)
+static bool write_current_position(void)
 {
-    dac8563_write_xy(mm_to_dac(g_current_x, BEILV_X), mm_to_dac(g_current_y, BEILV_Y));
+    errcode_t ret = dac8563_write_xy(mm_to_dac(g_current_x, BEILV_X), mm_to_dac(g_current_y, BEILV_Y));
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[MOTION] DAC write failed ret=0x%x\r\n", ret);
+        laser_force_off();
+        g_abort_requested = true;
+        g_output_armed = false;
+        return false;
+    }
+    return true;
 }
 
-static void arm_output_if_needed(void)
+static bool arm_output_if_needed(void)
 {
     if (g_output_armed) {
-        return;
+        return true;
     }
 
     laser_force_off();
-    dac8563_recover();
-    write_current_position();
+    if (dac8563_recover() != ERRCODE_SUCC || !write_current_position()) {
+        laser_force_off();
+        g_abort_requested = true;
+        return false;
+    }
     g_output_armed = true;
+    return true;
 }
 
 static void update_activity(void)
@@ -151,7 +163,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (distance <= 0.000001) {
         g_current_x = target_x;
         g_current_y = target_y;
-        write_current_position();
+        (void)write_current_position();
         update_activity();
         kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
@@ -207,7 +219,9 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         double fraction = (double)i / (double)steps;
         g_current_x = start_x + dx * fraction;
         g_current_y = start_y + dy * fraction;
-        write_current_position();
+        if (!write_current_position()) {
+            break;
+        }
 
         kick_watchdog_periodic(now_us, false);
         if ((i % 200) == 0) {
@@ -218,7 +232,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (!g_abort_requested) {
         g_current_x = target_x;
         g_current_y = target_y;
-        write_current_position();
+        (void)write_current_position();
     }
 
     update_activity();
@@ -252,7 +266,7 @@ void motion_executor_init(void)
         osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
         g_queue_ready = true;
     }
-    write_current_position();
+    (void)write_current_position();
 }
 
 static bool motion_queue_pop(motion_cmd_t *cmd)
@@ -376,14 +390,18 @@ void motion_executor_execute(const motion_cmd_t *cmd)
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case CMD_G0_MOVE:
-            arm_output_if_needed();
+            if (!arm_output_if_needed()) {
+                break;
+            }
             laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, G0_FEED_RATE, false);
             break;
         case CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
             bool laser_on = cmd_uses_laser(cmd);
-            arm_output_if_needed();
+            if (!arm_output_if_needed()) {
+                break;
+            }
             if (laser_on && feed_rate > MARKING_FEED_RATE_MAX) {
                 feed_rate = MARKING_FEED_RATE_MAX;
             }
@@ -404,6 +422,9 @@ void motion_executor_execute(const motion_cmd_t *cmd)
             break;
         }
         case CMD_LASER_ON:
+            if (!arm_output_if_needed()) {
+                break;
+            }
             laser_set_power(cmd->laser_pwr);
             laser_enable(cmd->laser_pwr > 0);
             update_activity();
@@ -436,7 +457,7 @@ void motion_executor_set_origin(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_abort_requested = false;
-    write_current_position();
+    (void)write_current_position();
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
