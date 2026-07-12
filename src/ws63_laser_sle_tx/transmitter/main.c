@@ -26,6 +26,7 @@
 #define TX_DATA_MODE_TIMEOUT_TICKS 5000U
 #define TX_PANEL_STATUS_PERIOD_MS 1000U
 #define TX_DATA_HOST_BUSY_PERIOD_MS 1000U
+#define TX_UART_RESYNC_DEDUP_MS 10000U
 #define TX_FIRMWARE_PACKAGE "ws63-liteos-app_tx_all.fwpkg"
 
 _Static_assert(sizeof(job_data_payload_t) + JOB_TX_DATA_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
@@ -87,6 +88,7 @@ static uint32_t g_panel_status_last_ms = 0;
 static uint8_t g_panel_local_job_state = JOB_STATE_IDLE;
 static bool g_panel_local_exec_started = false;
 static uint32_t g_panel_local_last_error = JOB_STATUS_OK;
+static uint32_t g_last_uart_resync_ok_ms = 0;
 
 static void tx_panel_publish_local_status(bool force);
 static void clear_async_data_retx(void);
@@ -973,7 +975,18 @@ static errcode_t abort_rx_and_clear_transaction(const char *reason)
 
 static void handle_uart_resync(void)
 {
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    bool local_idle = g_job_id == 0U && g_job_total == 0U && g_job_offset == 0U &&
+                      !g_data_mode && !g_host_job_topology_active &&
+                      g_job_chunk_len == 0U && g_line_len == 0U;
+    if (local_idle && g_last_uart_resync_ok_ms != 0U &&
+        (uint32_t)(now - g_last_uart_resync_ok_ms) < TX_UART_RESYNC_DEDUP_MS) {
+        host_sendf("@OK resync rx=aborted\r\n");
+        return;
+    }
+
     if (abort_rx_and_clear_transaction("uart-can") == ERRCODE_SUCC) {
+        g_last_uart_resync_ok_ms = (uint32_t)uapi_systick_get_ms();
         host_sendf("@OK resync rx=aborted\r\n");
     } else {
         host_sendf("@ERR resync_failed rx=unconfirmed\r\n");
@@ -1786,7 +1799,7 @@ static void handle_command_line(char *line)
 
     if (strncmp(line, "@FOCUS_ON S", 11) == 0) {
         unsigned long s = strtoul(line + 11, NULL, 10);
-        if (s > 100) {
+        if (s == 0 || s > 100) {
             host_sendf("@ERR focus_bad_power\r\n");
             return;
         }
