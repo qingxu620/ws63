@@ -388,7 +388,7 @@ static void apply_status_resp_as(const status_resp_payload_t *st, uint8_t owner,
         return;
     }
 
-    uint8_t flags = PANEL_STATUS_FLAG_OWNER_LINK | PANEL_STATUS_FLAG_ANY_LINK;
+    uint8_t flags = PANEL_STATUS_FLAG_ANY_LINK;
     uint8_t effective_mode = (st->status == JOB_STATUS_OK && st->state != JOB_STATE_ERROR) ?
         mode : PANEL_MODE_ERROR;
     panel_model_apply_rx_panel_status(owner, effective_mode, st->state, flags,
@@ -403,8 +403,7 @@ static void apply_panel_status(const panel_status_payload_t *st)
     if (st == NULL) {
         return;
     }
-    uint8_t flags = st->flags | PANEL_STATUS_FLAG_ANY_LINK;
-    panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, flags, st->seq,
+    panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, st->flags, st->seq,
                                       st->job_id, st->received_size, st->total_size,
                                       st->executed_lines, st->cache_free, st->last_error,
                                       st->tick_ms);
@@ -444,7 +443,12 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
-    g_panel_conn_id = conn_id;
+    if (conn_id != g_panel_conn_id) {
+        osal_printk("[PANEL_SLE_SRV] ignore status from unverified conn=%u\r\n",
+                    (unsigned int)conn_id);
+        return;
+    }
+
     panel_model_set_transport_links(panel_transport_sle_tx_is_connected(),
                                     panel_transport_sle_rx_is_connected());
     handle_panel_write(write_cb_para->value, write_cb_para->length);
@@ -662,8 +666,9 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
 
     bool matches_rx = seek_result_matches_receiver(seek_result);
     bool matches_tx = seek_result_matches_tx(seek_result);
+    bool matches_status_source = (g_model.view_mode == PANEL_VIEW_ONLINE) ? matches_tx : matches_rx;
 
-    if (g_seek_for_status_listen && (matches_rx || matches_tx)) {
+    if (g_seek_for_status_listen && matches_status_source) {
         panel_status_payload_t status;
         if (adv_panel_status_parse(seek_result, &status)) {
             apply_panel_status(&status);
@@ -685,7 +690,7 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
         }
     }
 
-    if (matches_rx && g_seek_for_status_listen) {
+    if (matches_rx && g_seek_for_status_listen && g_model.view_mode == PANEL_VIEW_OFFLINE) {
         panel_status_payload_t status;
         if (!adv_panel_status_parse(seek_result, &status)) {
             static uint32_t s_status_parse_miss_count = 0;
@@ -696,7 +701,7 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
         }
     }
 
-    if (matches_tx && g_seek_for_status_listen) {
+    if (matches_tx && g_seek_for_status_listen && g_model.view_mode == PANEL_VIEW_ONLINE) {
         panel_status_payload_t status;
         if (!adv_panel_status_parse(seek_result, &status)) {
             static uint32_t s_tx_status_parse_miss_count = 0;
