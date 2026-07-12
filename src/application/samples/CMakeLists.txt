@@ -31,6 +31,58 @@ endif()
 
 add_subdirectory_if_exist(custom)
 
+# --------------------------------------------------------------------------
+# Firmware variant counting: ensure exactly one main variant is selected.
+# Only enforced for the main application build (ws63_liteos_app).
+# Flashboot / loaderboot targets use their own .config and skip variants.
+# --------------------------------------------------------------------------
+if("${BUILD_TARGET_NAME}" STREQUAL "ws63_liteos_app")
+    set(_variant_count 0)
+    set(_variant_selected "")
+
+    if(DEFINED CONFIG_ENABLE_LASER_SINGLE_SAMPLE)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "single")
+    endif()
+    if(DEFINED CONFIG_ENABLE_LASER_WIFI_SAMPLE)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "wifi")
+    endif()
+    if(DEFINED CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "tx")
+    endif()
+    if(DEFINED CONFIG_LASER_RX_UNIFIED)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "rx_unified")
+    endif()
+    if(DEFINED CONFIG_ENABLE_SCREEN_SAMPLE)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "screen_selftest")
+    endif()
+    if(DEFINED CONFIG_ENABLE_LVGL_SAMPLE)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "lvgl_sample")
+    endif()
+    if(DEFINED CONFIG_ENABLE_LVGL_PANEL)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "screen_panel")
+    endif()
+    if(DEFINED CONFIG_ENABLE_SD_CARD_TEST)
+        math(EXPR _variant_count "${_variant_count} + 1")
+        set(_variant_selected "sd_card_test")
+    endif()
+
+    if(NOT _variant_count EQUAL 1)
+        message(FATAL_ERROR
+            "Firmware variant count is ${_variant_count}, expected exactly 1. "
+            "Selected: ${_variant_selected}. "
+            "Check your .config for conflicting CONFIG_ENABLE_* settings.")
+    endif()
+
+    message(STATUS "Firmware variant selected: ${_variant_selected}")
+endif()
+
 if(DEFINED CONFIG_ENABLE_LASER_SINGLE_SAMPLE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../deprecated/ws63_laser_single ws63_laser_single)
 elseif(DEFINED CONFIG_ENABLE_LASER_WIFI_SAMPLE)

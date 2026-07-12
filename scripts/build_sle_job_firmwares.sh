@@ -4,6 +4,24 @@ set -euo pipefail
 # =============================================================================
 # WS63 SLE TX + Unified RX Firmware Build & Archive Script
 # =============================================================================
+if [ "${USE_LEGACY_BUILD:-}" != "true" ]; then
+    SELF="$(basename "$0")"
+    echo "NOTE: ${SELF} is deprecated. Use scripts/build_variant.sh instead." >&2
+    ARGS=("$@")
+    if [ ${#ARGS[@]} -eq 0 ] || [ "${ARGS[0]}" = "--both" ]; then
+        scripts/build_variant.sh tx
+        scripts/build_variant.sh rx_unified
+    elif [ "${ARGS[0]}" = "--tx-only" ]; then
+        scripts/build_variant.sh tx
+    elif [ "${ARGS[0]}" = "--rx-only" ]; then
+        echo "ERROR: --rx-only is retired. RX now means unified RX; use scripts/build_variant.sh rx_unified" >&2
+        exit 1
+    else
+        echo "Usage: $0 [--both|--tx-only]" >&2
+        exit 1
+    fi
+    exit $?
+fi
 
 ROOT="/root/fbb_ws63"
 CONFIG="${ROOT}/src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config"

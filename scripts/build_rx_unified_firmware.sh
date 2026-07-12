@@ -4,6 +4,11 @@ set -euo pipefail
 # =============================================================================
 # WS63 Unified RX Firmware Build & Archive Script
 # =============================================================================
+if [ "${USE_LEGACY_BUILD:-}" != "true" ]; then
+    echo "NOTE: $(basename "$0") is deprecated. Use scripts/build_variant.sh rx_unified instead." >&2
+    scripts/build_variant.sh rx_unified
+    exit $?
+fi
 
 ROOT="/root/fbb_ws63"
 CONFIG="${ROOT}/src/build/config/target_config/ws63/menuconfig/acore/ws63_liteos_app.config"

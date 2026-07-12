@@ -4,6 +4,21 @@ set -euo pipefail
 # =============================================================================
 # WS63 Screen Firmware Build & Archive Script
 # =============================================================================
+if [ "${USE_LEGACY_BUILD:-}" != "true" ]; then
+    ARGS=("$@")
+    VARIANT="${1:-panel}"
+    case "$VARIANT" in
+        --lvgl|--panel|--selftest) ;;
+        *) echo "Usage: $0 [--lvgl|--panel|--selftest]"
+           echo "NOTE: All variants delegate to 'scripts/build_variant.sh screen_panel'" >&2
+           exit 1 ;;
+    esac
+    echo "NOTE: $(basename "$0") is deprecated. Use scripts/build_variant.sh screen_panel instead." >&2
+    scripts/build_variant.sh screen_panel
+    exit $?
+fi
+
+# =============================================================================
 # Builds the screen node firmware. Current hardware selection is MSP3223
 # (ILI9341V LCD + FT6336U touch). The raw self-test module still contains
 # historical ST7796 bring-up code until the MSP3223/ILI9341V port lands.
