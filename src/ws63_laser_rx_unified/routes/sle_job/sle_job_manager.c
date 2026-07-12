@@ -468,7 +468,8 @@ static bool handle_replayed_packet(const sle_job_packet_view_t *pkt)
                     (unsigned int)g_executed_lines);
         return true;
     }
-    if (pkt->seq < g_last_seq) {
+    uint16_t forward_distance = (uint16_t)(pkt->seq - g_last_seq);
+    if (g_last_seq != 0U && forward_distance > 0x8000U) {
         static uint32_t s_drop_count = 0;
         if ((s_drop_count++ & 0x1F) == 0) {
             osal_printk("[JOB_RX] drop old seq=%u last=%u expect=%u\r\n",
@@ -1323,7 +1324,7 @@ static void handle_focus_ctrl(const sle_job_packet_view_t *pkt)
             send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_STATE);
             return;
         }
-        if (fp.power > 100) {
+        if (fp.power == 0U || fp.power > 100U) {
             osal_printk("[FOCUS] reject bad_power=%u\r\n", (unsigned int)fp.power);
             send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB);
             return;

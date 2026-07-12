@@ -96,6 +96,11 @@ sle_job_status_t sle_job_cache_write(uint32_t job_id, uint32_t offset, const uin
                     (unsigned int)offset, (unsigned int)g_received, (unsigned int)len);
         return SLE_JOB_STATUS_BAD_OFFSET;
     }
+    if (offset > g_total_size || (uint32_t)len > (g_total_size - offset)) {
+        osal_printk("[JOB_CACHE_WRITE_REJECT] reason=past_total off=%u len=%u total=%u\r\n",
+                    (unsigned int)offset, (unsigned int)len, (unsigned int)g_total_size);
+        return SLE_JOB_STATUS_BAD_OFFSET;
+    }
     if ((uint32_t)len > sle_job_cache_free()) {
         osal_printk("[JOB_CACHE_WRITE_REJECT] reason=no_space len=%u free=%u\r\n",
                     (unsigned int)len, (unsigned int)sle_job_cache_free());

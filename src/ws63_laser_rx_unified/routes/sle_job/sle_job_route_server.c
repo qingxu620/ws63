@@ -86,6 +86,7 @@ typedef struct {
 
 static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
 static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
+static const uint8_t g_screen_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
 static volatile bool g_conn_table_ready = false;
@@ -99,6 +100,7 @@ static volatile bool g_server_stopping = false;
 static volatile bool g_adv_data_ready = false;
 static volatile bool g_adv_enabled = false;
 static volatile bool g_adv_restart_pending = false;
+static volatile bool g_server_configured = false;
 static uint8_t g_scan_rsp_data[SLE_JOB_ADV_DATA_LEN_MAX];
 static uint16_t g_scan_rsp_data_len = 0;
 static osal_mutex g_rx_work_mutex;
@@ -760,13 +762,17 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        if (!addr_matches_mac(addr, g_tx_mac)) {
+        bool is_tx = addr_matches_mac(addr, g_tx_mac);
+        bool is_screen = addr_matches_mac(addr, g_screen_mac);
+        if (!is_tx && !is_screen) {
             osal_printk("[job_rx] reject non-whitelist peer conn_id=%u\r\n", (unsigned int)conn_id);
             if (addr != NULL) {
                 (void)sle_disconnect_remote_device(addr);
             }
             return;
         }
+        osal_printk("[job_rx] accept fixed %s peer conn_id=%u\r\n",
+                    is_tx ? "TX" : "Screen", (unsigned int)conn_id);
         conn_table_add(conn_id);
         tune_job_link_after_connect(conn_id);
 #if SLE_JOB_CONNECTED_ANNOUNCE_ENABLE
@@ -1018,6 +1024,7 @@ static void sle_enable_cbk(errcode_t status)
         osal_printk("[job_rx] start announce fail: 0x%x\r\n", ret);
         return;
     }
+    g_server_configured = true;
 }
 
 static void sle_announce_register_cbks(void)
@@ -1041,6 +1048,15 @@ errcode_t sle_job_route_server_init(void)
     sle_conn_register_cbks();
     sle_ssaps_register_cbks();
 
+    if (g_server_configured) {
+        g_adv_data_ready = true;
+        errcode_t ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[job_rx] resume announce fail: 0x%x\r\n", ret);
+        }
+        return ret;
+    }
+
     errcode_t ret = enable_sle();
     if (ret != ERRCODE_SLE_SUCCESS) {
         osal_printk("[job_rx] enable_sle fail: 0x%x\r\n", ret);
@@ -1051,7 +1067,6 @@ errcode_t sle_job_route_server_init(void)
 errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
-    g_adv_data_ready = false;
     rx_work_queue_stop();
     if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
