@@ -165,19 +165,20 @@ TX responsibilities:
 - Forward focus, stop, resume, abort, route switch, begin/data/end/status commands.
 - Never directly control the laser output.
 
-Current stable transport baseline from `src/ws63_laser_sle_tx/common/config.h`:
+Current implementation snapshot from `src/ws63_laser_sle_tx/common/config.h`:
 
 - UART command baud: `115200`
-- SLE data chunk: `214B`
+- SLE data chunk: `300B`
 - SLE MTU: `512`
-- Connection interval units: `0x0F` / 18.75 ms in current config
+- RX connection interval selector: `0x14` (`JOB_SLE_CONN_INTERVAL_VENDOR_SPEED`) in current config
+- Panel connection interval selector: `0x20`
 - Retry max: `3`
-- Control ACK timeout: `1000 ms`
-- DATA transfer uses a small TX-side cumulative-offset window (`JOB_TX_DATA_WINDOW_PACKETS`, currently 4 packets) with hybrid SLE writes: `write_cmd` only before execution or at low window water, and `write_req` for backpressure when the execution window is filling. Host `@ACK type=2 offset=...` means TX accepted the chunk into the SLE DATA window; preroll and `JOB_END` must still drain until RX cumulative `received_size` reaches the boundary.
-- DATA window progress timeout: `1000 ms`; only when the window stalls does TX probe RX status and use `STATUS_RESP.received_size` as cumulative confirmation.
+- Normal control ACK timeout: `2000 ms`; `EXEC_START` ACK timeout: `15000 ms`
+- DATA transfer uses a small TX-side cumulative-offset window (`JOB_TX_DATA_WINDOW_PACKETS`, currently 3 packets) with hybrid SLE writes: `write_cmd` for DATA by default and `write_req` when forced for backpressure/confirmation. Host `@ACK type=2 offset=...` means TX accepted the chunk into the SLE DATA window; preroll and `JOB_END` must still drain until RX cumulative `received_size` reaches the boundary.
+- DATA window progress timeout: `3000 ms`; when the window stalls, TX probes RX status and uses `STATUS_RESP.received_size` as cumulative confirmation.
 - `JOB_END` is a commit/finalization confirmation, not the only way RX learns EOF. RX may auto-finalize when cumulative DATA reaches total size and CRC is valid; TX must treat delayed `JOB_END` ACK with status-probe/idempotent retry instead of immediately aborting a long cut job.
 
-Treat 460800/921600 baud, large `JOB_DATA`, and larger send windows as experiments unless the user explicitly asks for them again.
+The current `300B` / window-3 / `0x14` / 4M-PHY-MCS10 direction is more aggressive than the older stable baseline. Do not describe it as hardware-stable until TX/RX board logs verify it. Treat 460800/921600 baud and any further payload, window, PHY, or interval increase as experiments unless the user explicitly asks for them again.
 
 ## Unified RX Firmware Rules
 
@@ -264,14 +265,15 @@ Current project convention:
 
 | Task | Priority |
 | --- | --- |
-| SLE stack | 3 |
+| RX SLE stack / RX work queue | 2 |
+| TX SLE init | 3 |
 | TX UART RX | 3 |
 | Job executor | 4 |
 | Motion | 4 |
 
 Consequences:
 
-- SLE priority 3 can preempt executor priority 4.
+- RX SLE priority 2 and TX SLE priority 3 can preempt executor priority 4.
 - `osal_yield()` in a lower-priority task does not starve higher-priority SLE work.
 - Use existing LiteOS/OSAL event, semaphore, queue, or notification primitives for synchronization.
 - Do not introduce FreeRTOS-only APIs unless the SDK explicitly provides compatibility.
@@ -486,6 +488,31 @@ Before a demo run:
 7. Confirm `EXEC_DONE`.
 8. Confirm physical laser off after completion, abort, disconnect, and failure.
 9. If screen is present, verify status display does not destabilize Host/TX/RX transfer.
+
+## Verified Audit Snapshot (2026-07-12)
+
+This snapshot records the 2026-07-12 audit and the source fixes applied afterward. Do not call a firmware fix board-verified merely because Host tests or host-GCC syntax checks pass. Re-audit the cited paths after further changes and require the relevant product build plus board tests before closing hardware/SLE lifecycle work.
+
+Build and verification blocker:
+
+- TX, unified RX, and Screen panel builds all stop during common SDK CMake configuration because `src/middleware/utils/at/at_bt_cmd/CMakeLists.txt` requires missing `src/at_bt_cmd_register.c` and `at/at_bt_productline.c`, while the fallback `ws63-liteos-app/libbt_at.a` also does not exist in this checkout. This blocks formal compilation of active project sources; restore the matching SDK component instead of fabricating a stub or editing vendor code around it. Old staged firmware is not proof that the current tree builds.
+
+Source fixes applied; build and/or board verification still required:
+
+- Unified RX now admits only the fixed TX and fixed Screen MACs, while the first whitelisted writer remains the single control owner. Verify TX online and Screen offline ownership/reconnect behavior on three boards.
+- Screen status discovery now selects the fixed TX in Online View and the fixed RX in Offline View before parsing/applying status.
+- RX replay detection now uses 16-bit circular distance, so the reserved-zero wrap `65535 -> 1` remains valid while genuinely old packets are dropped.
+- RX cache rejects a DATA range beyond declared `total_size` before copying or updating CRC.
+- DAC writes/recovery now return failures; all compiled motion executors force laser off, disarm output, and abort the current move on a failed galvo write. RX initializes the laser-off path before DAC setup.
+- Laser PWM init/open/update/group/start failures now keep the physical pin low and clear logical enabled/effective-power state.
+- SLE route restart now keeps one configured server/service instance, stops accepting work and advertising during route stop, and resumes advertising without repeating `enable_sle()` or server registration. Verify SLE -> WiFi -> SLE on board.
+- Screen cache telemetry now uses the product `102400`-byte cache size.
+- Host validation mirrors RX G90/G91/G28/G92 position state and rejects out-of-area cumulative targets; regression tests cover negative in-range relative moves and cumulative overflow.
+- `FOCUS_ON S0` is rejected by Host configuration/UI defenses, TX, Screen, and RX; the laser driver also refuses logical enable at zero power.
+
+Robustness mitigation requiring timing validation:
+
+- TX now answers queued duplicate UART CAN bytes from a recent successful idle resync without issuing another synchronous RX abort. Validate with delayed/lost `JOB_ABORT` ACK injection; failed aborts intentionally remain retryable.
 
 ## Response Style
 
