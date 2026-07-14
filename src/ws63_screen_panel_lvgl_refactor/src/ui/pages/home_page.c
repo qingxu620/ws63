@@ -140,7 +140,7 @@ static void create_status_bar(lv_obj_t *parent)
     g_lbl_rx = create_label(caps, PANEL_FONT_CN, COLOR_LASER_GREEN);
     lv_obj_set_width(g_lbl_rx, 54);
     lv_obj_set_style_text_align(g_lbl_rx, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(g_lbl_rx, "RX正常");
+    lv_label_set_text(g_lbl_rx, "TX正常");
 
     g_lbl_sle = create_label(caps, PANEL_FONT_CN, COLOR_LASER_BLUE);
     lv_obj_set_width(g_lbl_sle, 36);
@@ -582,9 +582,15 @@ static void apply_state(void)
             g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
     }
 
+    bool status_source_connected = (g_model.view_mode == PANEL_VIEW_ONLINE) ?
+        g_model.tx_connected : g_model.rx_connected;
     lv_obj_set_style_text_color(g_lbl_rx,
-        g_model.rx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
-    lv_label_set_text(g_lbl_rx, g_model.rx_connected ? "RX正常" : "RX断开");
+        status_source_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
+    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
+        lv_label_set_text(g_lbl_rx, status_source_connected ? "TX正常" : "TX断开");
+    } else {
+        lv_label_set_text(g_lbl_rx, status_source_connected ? "RX正常" : "RX断开");
+    }
     lv_obj_set_style_text_color(g_lbl_sle,
         g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE :
         (g_model.sle_connected ? COLOR_LASER_BLUE : COLOR_TEXT_MUTED), 0);

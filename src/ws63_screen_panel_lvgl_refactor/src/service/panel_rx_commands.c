@@ -279,10 +279,8 @@ static panel_rx_command_result_t dispatch_bit(uint32_t bit)
         result.type = PANEL_RX_COMMAND_FOCUS_ON;
         {
             uint8_t power = g_pending_focus_power;
-            if (power == 0U || power > 100U) {
-                result.ret = ERRCODE_INVALID_PARAM;
-                osal_printk("[PANEL_CMD] reject FOCUS_ON s=%u\r\n", (unsigned int)power);
-                break;
+            if (power > 100U) {
+                power = 100U;
             }
             result.ret = send_focus(true, power);
             if (result.ret == ERRCODE_SUCC) {
@@ -381,9 +379,8 @@ errcode_t panel_rx_commands_request_focus_on(uint8_t power)
         osal_printk("[PANEL_CMD] reject display-only focus_on\r\n");
         return ERRCODE_SLE_FAIL;
     }
-    if (power == 0U || power > 100U) {
-        osal_printk("[PANEL_CMD] reject focus power=%u\r\n", (unsigned int)power);
-        return ERRCODE_INVALID_PARAM;
+    if (power > 100U) {
+        power = 100U;
     }
     uint32_t lock = osal_irq_lock();
     if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {

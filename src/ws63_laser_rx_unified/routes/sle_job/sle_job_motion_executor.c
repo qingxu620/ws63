@@ -71,35 +71,26 @@ static inline uint16_t mm_to_dac(double mm, double scale)
     return (uint16_t)(value + 0.5);
 }
 
-static bool write_current_position(bool force)
+static void write_current_position(bool force)
 {
     uint16_t x = mm_to_dac(g_current_x, SLE_JOB_BEILV_X);
     uint16_t y = mm_to_dac(g_current_y, SLE_JOB_BEILV_Y);
     if (!force && g_last_dac_valid && x == g_last_dac_x && y == g_last_dac_y) {
         g_dac_skip_count++;
-        return true;
+        return;
     }
 
-    errcode_t ret = dac8563_write_xy(x, y);
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[JOB_MOTION] DAC write failed ret=0x%x, abort motion\r\n", ret);
-        laser_force_off();
-        g_abort_requested = true;
-        g_output_armed = false;
-        g_last_dac_valid = false;
-        return false;
-    }
+    dac8563_write_xy(x, y);
     g_last_dac_x = x;
     g_last_dac_y = y;
     g_last_dac_valid = true;
     g_dac_write_count++;
-    return true;
 }
 
-static bool arm_output_if_needed(void)
+static void arm_output_if_needed(void)
 {
     if (g_output_armed) {
-        return true;
+        return;
     }
 
     uint32_t start_ms = (uint32_t)uapi_systick_get_ms();
@@ -108,22 +99,14 @@ static bool arm_output_if_needed(void)
 
 #if SLE_JOB_DAC_RECOVER_ON_ARM
     uint32_t recover_start_ms = (uint32_t)uapi_systick_get_ms();
-    errcode_t recover_ret = dac8563_recover();
+    dac8563_recover();
     uint32_t recover_ms = (uint32_t)uapi_systick_get_ms() - recover_start_ms;
-    if (recover_ret != ERRCODE_SUCC) {
-        osal_printk("[JOB_MOTION] DAC recover failed ret=0x%x\r\n", recover_ret);
-        laser_force_off();
-        g_abort_requested = true;
-        return false;
-    }
 #else
     uint32_t recover_ms = 0;
 #endif
 
     uint32_t pos_start_ms = (uint32_t)uapi_systick_get_ms();
-    if (!write_current_position(true)) {
-        return false;
-    }
+    write_current_position(true);
     uint32_t pos_ms = (uint32_t)uapi_systick_get_ms() - pos_start_ms;
     g_output_armed = true;
     g_arm_count++;
@@ -141,7 +124,6 @@ static bool arm_output_if_needed(void)
                     (int)(g_current_x * 1000.0),
                     (int)(g_current_y * 1000.0));
     }
-    return true;
 }
 
 static void update_activity(void)
@@ -221,7 +203,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (distance <= 0.000001) {
         g_current_x = target_x;
         g_current_y = target_y;
-        (void)write_current_position(false);
+        write_current_position(false);
         update_activity();
         kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
@@ -277,9 +259,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         double fraction = (double)i / (double)steps;
         g_current_x = start_x + dx * fraction;
         g_current_y = start_y + dy * fraction;
-        if (!write_current_position(false)) {
-            break;
-        }
+        write_current_position(false);
 
         kick_watchdog_periodic(now_us, false);
         if ((i % 200) == 0) {
@@ -290,7 +270,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (!g_abort_requested) {
         g_current_x = target_x;
         g_current_y = target_y;
-        (void)write_current_position(false);
+        write_current_position(false);
     }
 
     update_activity();
@@ -364,7 +344,7 @@ void sle_job_motion_executor_init(void)
         osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
         g_queue_ready = true;
     }
-    (void)write_current_position(true);
+    write_current_position(true);
 }
 
 static bool motion_queue_pop(sle_job_motion_cmd_t *cmd)
@@ -488,18 +468,14 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case SLE_JOB_CMD_G0_MOVE:
-            if (!arm_output_if_needed()) {
-                break;
-            }
+            arm_output_if_needed();
             laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, SLE_JOB_G0_FEED_RATE, false);
             break;
         case SLE_JOB_CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
             bool laser_on = cmd_uses_laser(cmd);
-            if (!arm_output_if_needed()) {
-                break;
-            }
+            arm_output_if_needed();
             if (laser_on && feed_rate > SLE_JOB_MARKING_FEED_RATE_MAX) {
                 feed_rate = SLE_JOB_MARKING_FEED_RATE_MAX;
             }
@@ -520,9 +496,6 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
             break;
         }
         case SLE_JOB_CMD_LASER_ON:
-            if (!arm_output_if_needed()) {
-                break;
-            }
             laser_set_power(cmd->laser_pwr);
             laser_enable(cmd->laser_pwr > 0);
             update_activity();
@@ -555,7 +528,7 @@ void sle_job_motion_executor_set_origin(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_abort_requested = false;
-    (void)write_current_position(true);
+    write_current_position(true);
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }

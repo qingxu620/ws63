@@ -19,12 +19,6 @@ enum {
     PANEL_FAKE_CACHE_SIZE = 102400U,
 };
 
-enum {
-    PANEL_MODEL_STATUS_FLAG_FOCUS_ACTIVE = 0x01U,
-    PANEL_MODEL_STATUS_FLAG_LASER_ACTIVE = 0x02U,
-    PANEL_MODEL_STATUS_FLAG_ANY_LINK = 0x08U,
-};
-
 static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
 {
     if (value < min) return min;
@@ -44,14 +38,6 @@ static bool state_is_requesting(system_state_t state)
     return state == SYS_STATE_REQUESTING_STOP ||
            state == SYS_STATE_REQUESTING_ABORT ||
            state == SYS_STATE_REQUESTING_FOCUS_OFF;
-}
-
-static void apply_status_flags(uint8_t flags)
-{
-    g_model.rx_connected = (flags & PANEL_MODEL_STATUS_FLAG_ANY_LINK) != 0U;
-    g_model.sle_connected = g_model.tx_connected || g_model.rx_connected;
-    g_model.focus_active = (flags & PANEL_MODEL_STATUS_FLAG_FOCUS_ACTIVE) != 0U;
-    g_model.laser_output_active = (flags & PANEL_MODEL_STATUS_FLAG_LASER_ACTIVE) != 0U;
 }
 
 enum {
@@ -168,7 +154,7 @@ static void reset_common(void)
     g_model.rx_connected = false;
     g_model.tx_connected = false;
     g_model.host_connected = false;
-    g_model.sle_connected = false;
+    g_model.sle_connected = true;
     g_model.sd_mounted = false;
     g_model.focus_active = false;
     g_model.laser_output_active = false;
@@ -698,7 +684,11 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
 
     if (keep_local_offline_selection) {
         g_model.live_status_active = true;
-        apply_status_flags(flags);
+        g_model.rx_connected = (flags & 0x08U) != 0U;
+        g_model.sle_connected = g_model.rx_connected;
+        g_model.tx_connected = (flags & 0x04U) != 0U;
+        g_model.focus_active = (flags & 0x01U) != 0U;
+        g_model.laser_output_active = (flags & 0x02U) != 0U;
         g_model.cache_free = clamp_u32(cache_free, 0, PANEL_FAKE_CACHE_SIZE);
         g_model.seq++;
         g_model.event_id++;
@@ -765,9 +755,13 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
     g_model.executed_lines = executed_lines;
     g_model.cache_free = cache_free;
     g_model.total_lines = (executed_lines > 0U) ? executed_lines : PANEL_FAKE_TOTAL_LINES;
+    g_model.rx_connected = (flags & 0x08U) != 0U;
+    g_model.sle_connected = g_model.rx_connected;
+    g_model.tx_connected = (flags & 0x04U) != 0U;
     g_model.host_connected = (g_model.owner == PANEL_OWNER_HOST);
     g_model.sd_mounted = (g_model.owner == PANEL_OWNER_SCREEN);
-    apply_status_flags(flags);
+    g_model.focus_active = (flags & 0x01U) != 0U;
+    g_model.laser_output_active = (flags & 0x02U) != 0U;
 
     if (state_uses_job_timer(g_model.state)) {
         if (tick_ms != 0U) {

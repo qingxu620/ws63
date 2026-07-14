@@ -26,7 +26,7 @@
 
 static bool g_dac_spi_dma_ready;
 
-static errcode_t dac8563_write_channel_raw(uint8_t cmd, uint16_t value, bool settle)
+static void dac8563_write_channel_raw(uint8_t cmd, uint16_t value, bool settle)
 {
     uint8_t buf[3] = {
         cmd,
@@ -48,50 +48,29 @@ static errcode_t dac8563_write_channel_raw(uint8_t cmd, uint16_t value, bool set
         g_dac_spi_dma_ready = false;
     }
 #else
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[DAC8563] spi write failed cmd=0x%x ret=0x%x\r\n", cmd, ret);
-    }
+    unused(ret);
 #endif
     if (settle) {
         (void)uapi_tcxo_delay_us(DAC_CMD_SETTLE_US);
     }
-    return ret;
 }
 
-errcode_t dac8563_write_channel(uint8_t cmd, uint16_t value)
+void dac8563_write_channel(uint8_t cmd, uint16_t value)
 {
-    return dac8563_write_channel_raw(cmd, value, true);
+    dac8563_write_channel_raw(cmd, value, true);
 }
 
-static errcode_t dac8563_configure_device(void)
+static void dac8563_configure_device(void)
 {
-    errcode_t ret = dac8563_write_channel(DAC_CMD_RESET, 0x0001);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
+    dac8563_write_channel(DAC_CMD_RESET, 0x0001);
     (void)uapi_tcxo_delay_ms(DAC_RESET_SETTLE_MS);
-    ret = dac8563_write_channel(DAC_CMD_PWR_UP, 0x0003);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
-    ret = dac8563_write_channel(DAC_CMD_INT_REF_EN, 0x0001);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
+    dac8563_write_channel(DAC_CMD_PWR_UP, 0x0003);
+    dac8563_write_channel(DAC_CMD_INT_REF_EN, 0x0001);
     (void)uapi_tcxo_delay_ms(DAC_REF_SETTLE_MS);
-    ret = dac8563_write_channel(DAC_CMD_GAIN, DAC_GAIN_B2_A2);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
-    ret = dac8563_write_channel(DAC_CMD_LDAC_DIS, 0x0003);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
-    ret = dac8563_write_xy(0, 0);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
-    return dac8563_write_xy(0, 0);
+    dac8563_write_channel(DAC_CMD_GAIN, DAC_GAIN_B2_A2);
+    dac8563_write_channel(DAC_CMD_LDAC_DIS, 0x0003);
+    dac8563_write_xy(0, 0);
+    dac8563_write_xy(0, 0);
 }
 
 errcode_t dac8563_init(void)
@@ -148,23 +127,18 @@ errcode_t dac8563_init(void)
 #endif
 
     (void)uapi_tcxo_delay_ms(1);
-    ret = dac8563_configure_device();
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[DAC8563] configure failed ret=0x%x\r\n", ret);
-    }
-    return ret;
+    dac8563_configure_device();
+
+    return ERRCODE_SUCC;
 }
 
-errcode_t dac8563_recover(void)
+void dac8563_recover(void)
 {
-    return dac8563_configure_device();
+    dac8563_configure_device();
 }
 
-errcode_t dac8563_write_xy(uint16_t x_val, uint16_t y_val)
+void dac8563_write_xy(uint16_t x_val, uint16_t y_val)
 {
-    errcode_t ret = dac8563_write_channel_raw(DAC_CMD_SETA_UPDATEA, x_val, false);
-    if (ret != ERRCODE_SUCC) {
-        return ret;
-    }
-    return dac8563_write_channel_raw(DAC_CMD_SETB_UPDATEB, y_val, false);
+    dac8563_write_channel_raw(DAC_CMD_SETA_UPDATEA, x_val, false);
+    dac8563_write_channel_raw(DAC_CMD_SETB_UPDATEB, y_val, false);
 }

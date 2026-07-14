@@ -61,34 +61,21 @@ static inline uint16_t mm_to_dac(double mm, double scale)
     return (uint16_t)(value + 0.5);
 }
 
-static bool write_current_position(void)
+static void write_current_position(void)
 {
-    errcode_t ret = dac8563_write_xy(mm_to_dac(g_current_x, LEGACY_UART_BEILV_X),
-                                    mm_to_dac(g_current_y, LEGACY_UART_BEILV_Y));
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[LEGACY_UART_MOTION] DAC write failed ret=0x%x\r\n", ret);
-        laser_force_off();
-        g_abort_requested = true;
-        g_output_armed = false;
-        return false;
-    }
-    return true;
+    dac8563_write_xy(mm_to_dac(g_current_x, LEGACY_UART_BEILV_X), mm_to_dac(g_current_y, LEGACY_UART_BEILV_Y));
 }
 
-static bool arm_output_if_needed(void)
+static void arm_output_if_needed(void)
 {
     if (g_output_armed) {
-        return true;
+        return;
     }
 
     laser_force_off();
-    if (dac8563_recover() != ERRCODE_SUCC || !write_current_position()) {
-        laser_force_off();
-        g_abort_requested = true;
-        return false;
-    }
+    dac8563_recover();
+    write_current_position();
     g_output_armed = true;
-    return true;
 }
 
 static void update_activity(void)
@@ -166,7 +153,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (distance <= 0.000001) {
         g_current_x = target_x;
         g_current_y = target_y;
-        (void)write_current_position();
+        write_current_position();
         update_activity();
         kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
@@ -222,9 +209,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         double fraction = (double)i / (double)steps;
         g_current_x = start_x + dx * fraction;
         g_current_y = start_y + dy * fraction;
-        if (!write_current_position()) {
-            break;
-        }
+        write_current_position();
 
         kick_watchdog_periodic(now_us, false);
         if ((i % 200) == 0) {
@@ -235,7 +220,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (!g_abort_requested) {
         g_current_x = target_x;
         g_current_y = target_y;
-        (void)write_current_position();
+        write_current_position();
     }
 
     update_activity();
@@ -269,7 +254,7 @@ void legacy_uart_motion_executor_init(void)
         osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
         g_queue_ready = true;
     }
-    (void)write_current_position();
+    write_current_position();
 }
 
 static bool motion_queue_pop(legacy_uart_motion_cmd_t *cmd)
@@ -393,18 +378,14 @@ void legacy_uart_motion_executor_execute(const legacy_uart_motion_cmd_t *cmd)
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case LEGACY_UART_CMD_G0_MOVE:
-            if (!arm_output_if_needed()) {
-                break;
-            }
+            arm_output_if_needed();
             laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, LEGACY_UART_G0_FEED_RATE, false);
             break;
         case LEGACY_UART_CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
             bool laser_on = cmd_uses_laser(cmd);
-            if (!arm_output_if_needed()) {
-                break;
-            }
+            arm_output_if_needed();
             if (laser_on && feed_rate > LEGACY_UART_MARKING_FEED_RATE_MAX) {
                 feed_rate = LEGACY_UART_MARKING_FEED_RATE_MAX;
             }
@@ -425,9 +406,6 @@ void legacy_uart_motion_executor_execute(const legacy_uart_motion_cmd_t *cmd)
             break;
         }
         case LEGACY_UART_CMD_LASER_ON:
-            if (!arm_output_if_needed()) {
-                break;
-            }
             laser_set_power(cmd->laser_pwr);
             laser_enable(cmd->laser_pwr > 0);
             update_activity();
@@ -460,7 +438,7 @@ void legacy_uart_motion_executor_set_origin(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     g_abort_requested = false;
-    (void)write_current_position();
+    write_current_position();
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }

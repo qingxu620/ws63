@@ -8,6 +8,7 @@
 #   - Atomic config backup/restore with trap cleanup
 #   - Pre/post-build variant verification
 #   - Independent archived output per variant
+#   - Global latest-firmware publication after a successful build
 #   - build-info.json generation
 #
 # Usage:
@@ -271,6 +272,20 @@ do_build() {
 }
 
 # ---- Archive ----------------------------------------------------------------
+publish_global_firmware() {
+    local source_file="$1"
+    local global_dir="$2"
+    local output_name="$3"
+    local temporary_file
+
+    temporary_file=$(mktemp "${global_dir}/.${output_name}.tmp.XXXXXX")
+    if ! cp "$source_file" "$temporary_file"; then
+        rm -f "$temporary_file"
+        return 1
+    fi
+    mv -f "$temporary_file" "${global_dir}/${output_name}"
+}
+
 archive() {
     local variant="$1"
     local log_file="$2"
@@ -278,8 +293,9 @@ archive() {
     local variant_dir="${STAGE_DIR}/${variant}"
     local run_dir="${variant_dir}/${TIMESTAMP}-${GIT_HASH}"
     local latest_link="${variant_dir}/latest"
+    local global_latest_dir="${STAGE_DIR}/latest"
 
-    mkdir -p "$run_dir"
+    mkdir -p "$run_dir" "$global_latest_dir"
 
     local src_fwpkg="${FWPKG_DIR}/${FWPKG_FILE}"
     local src_elf="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/ws63-liteos-app.elf"
@@ -288,11 +304,21 @@ archive() {
     local src_map="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/ws63-liteos-app.map"
     local src_mconfig="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/mconfig.h"
 
-    local dest_name
+    local dest_name global_dest_name global_alias_name=""
     case "$variant" in
-        tx) dest_name="ws63-liteos-app_tx" ;;
-        rx_unified) dest_name="ws63-liteos-app_rx_unified" ;;
-        screen_panel) dest_name="ws63-liteos-app_screen_panel" ;;
+        tx)
+            dest_name="ws63-liteos-app_tx"
+            global_dest_name="ws63-liteos-app_tx_all.fwpkg"
+            ;;
+        rx_unified)
+            dest_name="ws63-liteos-app_rx_unified"
+            global_dest_name="ws63-liteos-app_rx_unified_all.fwpkg"
+            ;;
+        screen_panel)
+            dest_name="ws63-liteos-app_screen_panel"
+            global_dest_name="ws63-liteos-app_screen_all.fwpkg"
+            global_alias_name="ws63-liteos-app_screen_panel_all.fwpkg"
+            ;;
     esac
 
     # Copy artifacts
@@ -351,8 +377,17 @@ EOF
     rm -f "$latest_link"
     ln -sf "$run_dir" "$latest_link"
 
+    # Publish the packaged firmware to the project-wide latest directory only
+    # after the per-variant archive is complete. Each replacement is atomic so
+    # a reader never sees a partially written firmware package.
+    publish_global_firmware "${run_dir}/${dest_name}_all.fwpkg" "$global_latest_dir" "$global_dest_name"
+    if [ -n "$global_alias_name" ]; then
+        publish_global_firmware "${run_dir}/${dest_name}_all.fwpkg" "$global_latest_dir" "$global_alias_name"
+    fi
+
     echo "  Archives: ${run_dir}/"
     echo "  Latest:   ${latest_link}/"
+    echo "  Global latest: ${global_latest_dir}/${global_dest_name}"
 }
 
 # ---- Help -------------------------------------------------------------------
@@ -374,6 +409,7 @@ The script automatically:
   - Applies variant-specific configuration atomically
   - Verifies exactly one variant is selected before/after build
   - Archives artifacts to fwstage/<variant>/<timestamp>-<commit>/
+  - Publishes the packaged firmware to fwstage/latest/
   - Restores original .config on exit
 EOF
     exit 0
