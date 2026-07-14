@@ -20,14 +20,13 @@ errcode_t sle_job_client_init(void);
 errcode_t sle_job_client_send_packet(const void *data, uint16_t len);
 errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool force_write_req);
 errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len);
-errcode_t sle_job_client_update_panel_status_adv(const panel_status_payload_t *status);
-bool sle_job_client_pause_panel_status_adv(const char *reason);
 bool sle_job_client_is_connected(void);
 bool sle_job_client_panel_is_connected(void);
 bool sle_job_client_panel_link_allowed(void);
 void sle_job_client_set_panel_link_allowed(bool allowed);
 void sle_job_client_set_background_seek_allowed(bool allowed);
 void sle_job_client_poll_connect(void);
+void sle_job_client_poll_link_diagnostics(void);
 const char *sle_job_client_get_status(void);
 void sle_job_client_set_response_cb(sle_job_response_cb_t cb);
 

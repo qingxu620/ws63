@@ -27,6 +27,8 @@
 #define SLE_JOB_EXEC_STREAM_QUEUE_HIGH_WATERMARK 12U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_SLEEP_MS 5U
 #define SLE_JOB_EXEC_STREAM_THROTTLE_LOG_MS 500U
+#define SLE_JOB_AUTO_EXEC_TASK_STACK_SIZE 0x1000U
+#define SLE_JOB_AUTO_EXEC_TASK_PRIO SLE_JOB_TASK_PRIO_JOB_EXECUTOR
 #define SLE_JOB_ROUTE_SWITCH_DELAY_MS 200U
 #define SLE_JOB_ROUTE_SWITCH_TASK_STACK_SIZE 0x1000U
 #define SLE_JOB_PANEL_STATUS_PERIOD_MS 500U
@@ -35,6 +37,7 @@
 #define SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE 0
 #define SLE_JOB_SEND_SLOW_MS 50U
 #define SLE_JOB_EXEC_START_ACK_GRACE_MS 200U
+#define SLE_JOB_FAST_ACK_LOG_EVERY 32U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -51,8 +54,22 @@ static uint32_t g_nack_count = 0;
 static uint32_t g_diag_rx_data_count = 0;
 static uint32_t g_last_data_rx_ms = 0;
 static uint32_t g_exec_stream_cache_target_watermark = 0;
+static osal_semaphore g_job_exec_sem;
+static bool g_job_exec_sem_ready = false;
+static volatile bool g_job_exec_task_started = false;
+static volatile bool g_job_exec_launch_pending = false;
+static osal_semaphore g_auto_exec_sem;
+static bool g_auto_exec_sem_ready = false;
+static volatile bool g_auto_exec_task_started = false;
+static volatile bool g_auto_exec_armed = false;
+static volatile bool g_auto_exec_queued = false;
+static volatile uint32_t g_auto_exec_threshold = 0;
+static volatile uint32_t g_auto_exec_generation = 1;
+static volatile uint32_t g_auto_exec_pending_generation = 0;
+static volatile uint32_t g_auto_exec_pending_job_id = 0;
 static uint32_t g_data_cum_ack_offset = 0;
 static uint32_t g_data_cum_ack_ms = 0;
+static uint32_t g_data_cum_ack_count = 0;
 static bool g_completed_job_valid = false;
 static uint32_t g_completed_job_id = 0;
 static uint32_t g_completed_job_total = 0;
@@ -69,6 +86,20 @@ static volatile bool g_panel_status_task_started = false;
 #if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
 static uint16_t g_panel_status_seq = 1;
 #endif
+
+static void reset_auto_exec_policy(void)
+{
+    g_auto_exec_generation++;
+    if (g_auto_exec_generation == 0U) {
+        g_auto_exec_generation = 1U;
+    }
+    g_auto_exec_armed = false;
+    g_auto_exec_queued = false;
+    g_auto_exec_threshold = 0;
+    g_auto_exec_pending_generation = 0;
+    g_auto_exec_pending_job_id = 0;
+    g_job_exec_launch_pending = false;
+}
 
 static const char *state_name(sle_job_state_t state)
 {
@@ -391,20 +422,27 @@ static bool maybe_send_data_progress_ack(uint16_t seq, bool fast_active, bool fo
             *ack_ms_out = ack_ms;
         }
         if (fast_active) {
+            g_data_cum_ack_count++;
             uint32_t delta = (rx_offset >= old_ack_offset) ? (rx_offset - old_ack_offset) : 0U;
-            osal_printk("[RX_DATA_FAST_ACK] t=%u seq=%u st=%u off=%u old_off=%u "
-                        "delta=%u age_ms=%u ack_ms=%u force=%u free=%u state=%s\r\n",
-                        (unsigned int)uapi_systick_get_ms(),
-                        (unsigned int)seq,
-                        (unsigned int)status,
-                        (unsigned int)rx_offset,
-                        (unsigned int)old_ack_offset,
-                        (unsigned int)delta,
-                        (unsigned int)age_ms,
-                        (unsigned int)ack_ms,
-                        (unsigned int)(force_ack ? 1U : 0U),
-                        (unsigned int)sle_job_cache_free(),
-                        state_name(g_state));
+            bool log_due = force_ack || ack_ms >= SLE_JOB_SEND_SLOW_MS ||
+                           (SLE_JOB_FAST_ACK_LOG_EVERY > 0U &&
+                            (g_data_cum_ack_count % SLE_JOB_FAST_ACK_LOG_EVERY) == 0U);
+            if (log_due) {
+                osal_printk("[RX_DATA_FAST_ACK] count=%u t=%u seq=%u st=%u off=%u old_off=%u "
+                            "delta=%u age_ms=%u ack_ms=%u force=%u free=%u state=%s\r\n",
+                            (unsigned int)g_data_cum_ack_count,
+                            (unsigned int)uapi_systick_get_ms(),
+                            (unsigned int)seq,
+                            (unsigned int)status,
+                            (unsigned int)rx_offset,
+                            (unsigned int)old_ack_offset,
+                            (unsigned int)delta,
+                            (unsigned int)age_ms,
+                            (unsigned int)ack_ms,
+                            (unsigned int)(force_ack ? 1U : 0U),
+                            (unsigned int)sle_job_cache_free(),
+                            state_name(g_state));
+            }
         }
         return true;
     }
@@ -546,6 +584,7 @@ void sle_job_manager_safe_stop(const char *reason)
     sle_job_gcode_processor_build_emergency_stop(&cmd);
     sle_job_motion_executor_execute(&cmd);
     laser_force_off();
+    reset_auto_exec_policy();
     g_state = SLE_JOB_STATE_ABORTED;
     g_exec_active = false;
 }
@@ -844,6 +883,7 @@ static int job_exec_task(void *arg)
                     sle_job_motion_executor_dac_skip_count(),
                     (unsigned int)SLE_JOB_MOTION_SLEEP_THRESHOLD_US);
         sle_job_cache_clear();
+        reset_auto_exec_policy();
     }
     g_exec_active = false;
     return 0;
@@ -877,26 +917,216 @@ static sle_job_status_t validate_job_resume(void)
     return SLE_JOB_STATUS_OK;
 }
 
-static sle_job_status_t launch_job_execution(void)
+static int job_exec_worker_task(void *arg)
 {
-    sle_job_motion_executor_clear_abort();
+    unused(arg);
+    while (1) {
+        if (osal_sem_down(&g_job_exec_sem) != OSAL_SUCCESS) {
+            osal_msleep(1);
+            continue;
+        }
+        if (!g_job_exec_launch_pending) {
+            continue;
+        }
+
+        g_job_exec_launch_pending = false;
+        (void)job_exec_task(NULL);
+    }
+    return 0;
+}
+
+static void start_job_exec_task_once(void)
+{
+    if (g_job_exec_task_started) {
+        return;
+    }
+    if (!g_job_exec_sem_ready &&
+        osal_sem_init(&g_job_exec_sem, 0) != OSAL_SUCCESS) {
+        osal_printk("[JOB_EXEC_WORKER] semaphore init failed\r\n");
+        return;
+    }
+    g_job_exec_sem_ready = true;
+
     osal_kthread_lock();
-    osal_task *task = osal_kthread_create(job_exec_task, NULL, "job_exec", SLE_JOB_EXEC_TASK_STACK_SIZE);
+    osal_task *task = osal_kthread_create(job_exec_worker_task, NULL, "job_exec",
+                                          SLE_JOB_EXEC_TASK_STACK_SIZE);
     if (task == NULL) {
         osal_kthread_unlock();
-        return SLE_JOB_STATUS_INTERNAL_ERROR;
+        osal_printk("[JOB_EXEC_WORKER] create task failed\r\n");
+        return;
     }
     if (osal_kthread_set_priority(task, SLE_JOB_TASK_PRIO_JOB_EXECUTOR) != OSAL_SUCCESS) {
-        osal_printk("[JOB_RX] set exec priority failed\r\n");
+        osal_printk("[JOB_EXEC_WORKER] set priority failed\r\n");
     }
+    g_job_exec_task_started = true;
     osal_kfree(task);
     osal_kthread_unlock();
+    osal_printk("[JOB_EXEC_WORKER] ready prio=%u\r\n",
+                (unsigned int)SLE_JOB_TASK_PRIO_JOB_EXECUTOR);
+}
+
+static sle_job_status_t launch_job_execution(void)
+{
+    if (!g_job_exec_sem_ready || !g_job_exec_task_started ||
+        g_job_exec_launch_pending) {
+        return SLE_JOB_STATUS_INTERNAL_ERROR;
+    }
+
+    sle_job_motion_executor_clear_abort();
+    g_job_exec_launch_pending = true;
+    osal_sem_up(&g_job_exec_sem);
     return SLE_JOB_STATUS_OK;
+}
+
+static int auto_exec_task(void *arg)
+{
+    unused(arg);
+    while (1) {
+        if (osal_sem_down(&g_auto_exec_sem) != OSAL_SUCCESS) {
+            osal_msleep(1);
+            continue;
+        }
+
+        uint32_t generation = g_auto_exec_pending_generation;
+        uint32_t job_id = g_auto_exec_pending_job_id;
+        uint32_t threshold = g_auto_exec_threshold;
+        if (!g_auto_exec_queued || generation != g_auto_exec_generation ||
+            job_id == 0U || job_id != sle_job_cache_job_id() ||
+            g_abort_requested || g_pause_requested || !g_exec_active ||
+            g_state != SLE_JOB_STATE_EXECUTING) {
+            continue;
+        }
+
+        g_auto_exec_queued = false;
+        sle_job_status_t st = launch_job_execution();
+        if (st != SLE_JOB_STATUS_OK) {
+            osal_printk("[AUTO_EXEC] launch failed job=%u generation=%u st=%u\r\n",
+                        (unsigned int)job_id, (unsigned int)generation,
+                        (unsigned int)st);
+            sle_job_manager_safe_stop("auto-exec-launch-fail");
+            continue;
+        }
+        osal_printk("[AUTO_EXEC] launched job=%u generation=%u threshold=%u "
+                    "rx=%u consumed=%u avail=%u\r\n",
+                    (unsigned int)job_id, (unsigned int)generation,
+                    (unsigned int)threshold,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)sle_job_cache_consumed(),
+                    (unsigned int)sle_job_cache_available());
+    }
+    return 0;
+}
+
+static void start_auto_exec_task_once(void)
+{
+    if (g_auto_exec_task_started) {
+        return;
+    }
+    if (!g_auto_exec_sem_ready &&
+        osal_sem_init(&g_auto_exec_sem, 0) != OSAL_SUCCESS) {
+        osal_printk("[AUTO_EXEC] semaphore init failed\r\n");
+        return;
+    }
+    g_auto_exec_sem_ready = true;
+
+    osal_kthread_lock();
+    osal_task *task = osal_kthread_create(auto_exec_task, NULL, "auto_exec",
+                                          SLE_JOB_AUTO_EXEC_TASK_STACK_SIZE);
+    if (task == NULL) {
+        osal_kthread_unlock();
+        osal_printk("[AUTO_EXEC] create task failed\r\n");
+        return;
+    }
+    if (osal_kthread_set_priority(task, SLE_JOB_AUTO_EXEC_TASK_PRIO) != OSAL_SUCCESS) {
+        osal_printk("[AUTO_EXEC] set priority failed\r\n");
+    }
+    g_auto_exec_task_started = true;
+    osal_kfree(task);
+    osal_kthread_unlock();
+}
+
+static bool auto_exec_ready_to_schedule(void)
+{
+    return g_auto_exec_armed && !g_auto_exec_queued &&
+           (g_state == SLE_JOB_STATE_RECEIVING_JOB ||
+            g_state == SLE_JOB_STATE_JOB_READY) &&
+           !g_exec_active &&
+           sle_job_cache_received() >= g_auto_exec_threshold;
+}
+
+static void maybe_schedule_auto_execution(void)
+{
+    if (!auto_exec_ready_to_schedule()) {
+        return;
+    }
+
+    g_auto_exec_armed = false;
+    g_auto_exec_queued = true;
+    g_auto_exec_pending_generation = g_auto_exec_generation;
+    g_auto_exec_pending_job_id = sle_job_cache_job_id();
+    g_exec_active = true;
+    g_abort_requested = false;
+    g_pause_requested = false;
+    g_exec_stream_cache_target_watermark = sle_job_cache_available();
+    g_state = SLE_JOB_STATE_EXECUTING;
+
+    osal_printk("[AUTO_EXEC] threshold reached job=%u generation=%u threshold=%u "
+                "rx=%u consumed=%u avail=%u q=%u\r\n",
+                (unsigned int)g_auto_exec_pending_job_id,
+                (unsigned int)g_auto_exec_pending_generation,
+                (unsigned int)g_auto_exec_threshold,
+                (unsigned int)sle_job_cache_received(),
+                (unsigned int)sle_job_cache_consumed(),
+                (unsigned int)sle_job_cache_available(),
+                (unsigned int)sle_job_motion_executor_queue_depth());
+    if (!g_auto_exec_sem_ready) {
+        sle_job_manager_safe_stop("auto-exec-signal-fail");
+        return;
+    }
+    osal_sem_up(&g_auto_exec_sem);
 }
 
 static void handle_job_begin(const sle_job_packet_view_t *pkt)
 {
-    if (pkt->len != sizeof(sle_job_begin_payload_t)) {
+    bool auto_exec = false;
+    uint32_t job_id = 0;
+    uint32_t total_size = 0;
+    uint16_t job_crc16 = 0;
+    uint32_t exec_preroll_bytes = 0;
+
+    if (pkt->len == sizeof(sle_job_begin_payload_t)) {
+        sle_job_begin_payload_t begin;
+        memcpy(&begin, pkt->payload, sizeof(begin));
+        job_id = begin.job_id;
+        total_size = begin.total_size;
+        job_crc16 = begin.job_crc16;
+    } else if (pkt->len == sizeof(sle_job_begin_stream_payload_t)) {
+        sle_job_begin_stream_payload_t begin;
+        memcpy(&begin, pkt->payload, sizeof(begin));
+        if (begin.options != SLE_JOB_BEGIN_OPTION_AUTO_EXEC_PREROLL ||
+            begin.exec_preroll_bytes == 0U ||
+            begin.exec_preroll_bytes >= begin.total_size ||
+            begin.exec_preroll_bytes > SLE_JOB_EXEC_PREROLL_MAX_BYTES ||
+            !g_auto_exec_task_started || !g_job_exec_task_started) {
+            osal_printk("[JOB_BEGIN] reject auto options=0x%x preroll=%u total=%u "
+                        "max=%u auto_worker=%u exec_worker=%u\r\n",
+                        (unsigned int)begin.options,
+                        (unsigned int)begin.exec_preroll_bytes,
+                        (unsigned int)begin.total_size,
+                        (unsigned int)SLE_JOB_EXEC_PREROLL_MAX_BYTES,
+                        g_auto_exec_task_started ? 1U : 0U,
+                        g_job_exec_task_started ? 1U : 0U);
+            send_ack(pkt->type, pkt->seq,
+                     (g_auto_exec_task_started && g_job_exec_task_started) ?
+                     SLE_JOB_STATUS_BAD_JOB : SLE_JOB_STATUS_INTERNAL_ERROR);
+            return;
+        }
+        auto_exec = true;
+        job_id = begin.job_id;
+        total_size = begin.total_size;
+        job_crc16 = begin.job_crc16;
+        exec_preroll_bytes = begin.exec_preroll_bytes;
+    } else {
         send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_BAD_JOB);
         return;
     }
@@ -907,10 +1137,11 @@ static void handle_job_begin(const sle_job_packet_view_t *pkt)
         return;
     }
 
-    sle_job_begin_payload_t begin;
-    memcpy(&begin, pkt->payload, sizeof(begin));
-    sle_job_status_t st = sle_job_cache_begin(begin.job_id, begin.total_size, begin.job_crc16);
+    sle_job_status_t st = sle_job_cache_begin(job_id, total_size, job_crc16);
     if (st == SLE_JOB_STATUS_OK) {
+        reset_auto_exec_policy();
+        g_auto_exec_armed = auto_exec;
+        g_auto_exec_threshold = exec_preroll_bytes;
         clear_completed_job_summary();
         sle_job_motion_executor_clear_abort();
         sle_job_motion_executor_reset_stats();
@@ -923,7 +1154,13 @@ static void handle_job_begin(const sle_job_packet_view_t *pkt)
         g_exec_stream_cache_target_watermark = 0;
         g_data_cum_ack_offset = 0;
         g_data_cum_ack_ms = (uint32_t)uapi_systick_get_ms();
+        g_data_cum_ack_count = 0;
         seq_commit(pkt->seq);
+        osal_printk("[JOB_BEGIN] accepted job=%u total=%u auto_exec=%u preroll=%u "
+                    "generation=%u\r\n",
+                    (unsigned int)job_id, (unsigned int)total_size,
+                    auto_exec ? 1U : 0U, (unsigned int)exec_preroll_bytes,
+                    (unsigned int)g_auto_exec_generation);
     }
     send_ack(pkt->type, pkt->seq, st);
 }
@@ -1003,6 +1240,14 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
         uint32_t t_ack = (uint32_t)uapi_systick_get_ms();
         send_ack_with_reason(pkt->type, pkt->seq, SLE_JOB_STATUS_OK, "dup_data");
         uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
+        if (auto_exec_ready_to_schedule() &&
+            g_data_cum_ack_offset >= sle_job_cache_received()) {
+            osal_printk("[AUTO_EXEC_ACK_BARRIER] duplicate seq=%u off=%u ack_ms=%u launch=1\r\n",
+                        (unsigned int)pkt->seq,
+                        (unsigned int)g_data_cum_ack_offset,
+                        (unsigned int)ack_ms);
+            maybe_schedule_auto_execution();
+        }
         uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_start;
         osal_printk("[JOB_DATA_DUP] seq=%u data_idx=%u job=%u off=%u len=%u "
                     "rx=%u consumed=%u ack_ms=%u total_ms=%u state=%s\r\n",
@@ -1071,10 +1316,30 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
     }
     uint32_t ack_ms = 0;
     bool fast_ack = data_fast_cum_ack_active(pkt);
-    bool force_ack = (pkt->flags & SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK) != 0U;
+    bool auto_exec_due = st == SLE_JOB_STATUS_OK && auto_exec_ready_to_schedule();
+    bool force_ack = (pkt->flags & SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK) != 0U ||
+                     auto_exec_due;
     uint32_t pre_ack_ms = (uint32_t)uapi_systick_get_ms() - t_start;
     bool ack_sent = maybe_send_data_progress_ack(pkt->seq, fast_ack, force_ack,
                                                  st, "cache_write", &ack_ms);
+    if (st == SLE_JOB_STATUS_OK) {
+        bool auto_exec_ack_ready = !auto_exec_due ||
+                                   (ack_sent &&
+                                    g_data_cum_ack_offset >= sle_job_cache_received());
+        if (auto_exec_due) {
+            osal_printk("[AUTO_EXEC_ACK_BARRIER] seq=%u off=%u ack_off=%u ack_ms=%u "
+                        "ack_ready=%u launch=%u\r\n",
+                        (unsigned int)pkt->seq,
+                        (unsigned int)sle_job_cache_received(),
+                        (unsigned int)g_data_cum_ack_offset,
+                        (unsigned int)ack_ms,
+                        auto_exec_ack_ready ? 1U : 0U,
+                        auto_exec_ack_ready ? 1U : 0U);
+        }
+        if (auto_exec_ack_ready) {
+            maybe_schedule_auto_execution();
+        }
+    }
     uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - t_start;
     if (rx_should_log_data_timing(data_index, total_ms) || st != SLE_JOB_STATUS_OK) {
         osal_printk("[RX_TIMING] seq=%u data_idx=%u off=%u len=%u gap_ms=%u write_ms=%u "
@@ -1546,6 +1811,7 @@ void sle_job_manager_on_disconnect(void)
     g_route_switch_pending = false;
     g_last_data_rx_ms = 0;
     g_exec_stream_cache_target_watermark = 0;
+    reset_auto_exec_policy();
 }
 
 bool sle_job_manager_is_idle(void)
@@ -1576,8 +1842,11 @@ void sle_job_manager_init(void)
     g_route_switch_pending = false;
     g_last_data_rx_ms = 0;
     g_exec_stream_cache_target_watermark = 0;
+    reset_auto_exec_policy();
 #if SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE
     g_panel_status_seq = 1;
 #endif
     start_panel_status_task_once();
+    start_job_exec_task_once();
+    start_auto_exec_task_once();
 }

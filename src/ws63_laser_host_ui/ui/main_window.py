@@ -362,7 +362,14 @@ class MainWindow(QMainWindow):
 
     def _execution_status_poll_worker(self) -> None:
         try:
-            result = self.client.transact_status(EXEC_STATUS_POLL_TIMEOUT_S)
+            try_status = getattr(self.client, "try_transact_status", None)
+            result = (
+                try_status(EXEC_STATUS_POLL_TIMEOUT_S)
+                if callable(try_status)
+                else self.client.transact_status(EXEC_STATUS_POLL_TIMEOUT_S)
+            )
+            if result is None:
+                return
             if (not self.state.execution_expected or self.state.execution_complete or
                     self.state.termination_requested or not self._exec_poll_timer.isActive()):
                 return
@@ -434,7 +441,7 @@ class MainWindow(QMainWindow):
 
     def _on_task_status(self, text: str, pct: float) -> None:
         execution_start = text.startswith(
-            ("执行中", "执行已启动", "预缓冲执行中", "预缓冲完成，启动执行")
+            ("执行中", "执行已启动", "预缓冲执行中", "预缓冲完成，启动执行", "RX 已自动启动")
         )
         if execution_start and self.state.execution_complete:
             self._enqueue_log(
@@ -783,9 +790,11 @@ class MainWindow(QMainWindow):
 
             # Execution phase
             if use_preroll:
-                # Large file: preroll path already started execution during upload
-                self.worker.log.emit("status", f"[EXEC_FLOW] 大文件 preroll 路径，执行已在上传中启动")
-                self.worker.task_status.emit("预缓冲执行中，等待 RX 完成", -1)
+                # RX owns the threshold transition; DATA upload does not pause.
+                self.worker.log.emit(
+                    "status", "[EXEC_FLOW] RX 预缓冲自动启动路径，上传期间保持连续 DATA"
+                )
+                self.worker.task_status.emit("RX 已自动启动，等待执行完成", -1)
             else:
                 # Small file: send EXEC_START after upload complete
                 self.worker.log.emit("status", f"[EXEC_FLOW] 小文件 normal 路径，发送 EXEC_START")

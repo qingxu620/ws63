@@ -170,7 +170,7 @@ Current implementation snapshot from `src/ws63_laser_sle_tx/common/config.h`:
 - UART command baud: `115200`
 - SLE data chunk: `300B`
 - SLE MTU: `512`
-- RX connection interval selector: `0x14` (`JOB_SLE_CONN_INTERVAL_VENDOR_SPEED`) in current config
+- RX connection interval selector: `0x10` (`JOB_SLE_CONN_INTERVAL_20MS`) in current config
 - Panel connection interval selector: `0x20`
 - Retry max: `3`
 - Normal control ACK timeout: `2000 ms`; `EXEC_START` ACK timeout: `15000 ms`
@@ -178,7 +178,7 @@ Current implementation snapshot from `src/ws63_laser_sle_tx/common/config.h`:
 - DATA window progress timeout: `3000 ms`; when the window stalls, TX probes RX status and uses `STATUS_RESP.received_size` as cumulative confirmation.
 - `JOB_END` is a commit/finalization confirmation, not the only way RX learns EOF. RX may auto-finalize when cumulative DATA reaches total size and CRC is valid; TX must treat delayed `JOB_END` ACK with status-probe/idempotent retry instead of immediately aborting a long cut job.
 
-The current `300B` / window-3 / `0x14` / 4M-PHY-MCS10 direction is more aggressive than the older stable baseline. Do not describe it as hardware-stable until TX/RX board logs verify it. Treat 460800/921600 baud and any further payload, window, PHY, or interval increase as experiments unless the user explicitly asks for them again.
+The current `300B` / window-3 / `0x10` / 4M-PHY-MCS10 direction is more aggressive than the older stable baseline. Do not describe it as hardware-stable until TX/RX board logs verify it. Treat 460800/921600 baud and any further payload, window, PHY, or interval increase as experiments unless the user explicitly asks for them again.
 
 ## Unified RX Firmware Rules
 

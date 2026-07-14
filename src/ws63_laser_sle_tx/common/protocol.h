@@ -88,6 +88,21 @@ typedef struct __attribute__((packed)) {
     uint16_t reserved;
 } job_begin_payload_t;
 
+#define JOB_BEGIN_OPTION_AUTO_EXEC_PREROLL 0x0001U
+
+/*
+ * Extended JOB_BEGIN payload. Receivers distinguish it from the legacy
+ * payload by packet payload length, so legacy Screen offline jobs keep their
+ * explicit EXEC_START behavior.
+ */
+typedef struct __attribute__((packed)) {
+    uint32_t job_id;
+    uint32_t total_size;
+    uint16_t job_crc16;
+    uint16_t options;
+    uint32_t exec_preroll_bytes;
+} job_begin_stream_payload_t;
+
 typedef struct __attribute__((packed)) {
     uint32_t job_id;
     uint32_t offset;
@@ -157,6 +172,7 @@ typedef struct __attribute__((packed)) {
 #define PANEL_STATUS_FLAG_LASER_ACTIVE 0x02U
 #define PANEL_STATUS_FLAG_OWNER_LINK   0x04U
 #define PANEL_STATUS_FLAG_ANY_LINK     0x08U
+#define PANEL_STATUS_FLAG_TERMINAL_CONFIRMED 0x10U
 
 #define PANEL_STATUS_ADV_TYPE 0xFFU
 #define PANEL_STATUS_ADV_MAGIC0 'W'

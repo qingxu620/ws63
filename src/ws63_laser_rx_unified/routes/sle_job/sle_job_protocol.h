@@ -84,6 +84,16 @@ typedef struct __attribute__((packed)) {
     uint16_t reserved;
 } sle_job_begin_payload_t;
 
+#define SLE_JOB_BEGIN_OPTION_AUTO_EXEC_PREROLL 0x0001U
+
+typedef struct __attribute__((packed)) {
+    uint32_t job_id;
+    uint32_t total_size;
+    uint16_t job_crc16;
+    uint16_t options;
+    uint32_t exec_preroll_bytes;
+} sle_job_begin_stream_payload_t;
+
 typedef struct __attribute__((packed)) {
     uint32_t job_id;
     uint32_t offset;

@@ -423,6 +423,24 @@ class SleJobSerialClient:
                 )
             return result
 
+    def try_transact_status(self, timeout: float) -> Optional[WaitResult]:
+        """Run a status transaction only when no upload/control owns the command path."""
+        if not self._command_lock.acquire(blocking=False):
+            return None
+        try:
+            self._drain_lines()
+            self.send_line("@STATUS")
+            result = self.wait_for("@STATUS", timeout, ignore_unknown_command=True)
+            if result.elapsed_ms >= HOST_STATUS_WAIT_SLOW_MS:
+                self._on_log(
+                    "status",
+                    f"[HOST_STATUS_TIMING] lock_wait_ms=0 wait_ms={result.elapsed_ms} "
+                    f"total_ms={result.elapsed_ms}",
+                )
+            return result
+        finally:
+            self._command_lock.release()
+
     def send_control(self, command: str, expect: str, timeout: float) -> WaitResult:
         with self._command_lock:
             self._drain_lines()
@@ -623,12 +641,20 @@ class SleJobSerialClient:
                     status_cb("正在建立任务", 0)
                 cmd = f"@BEGIN {job_id} {total} {crc:04x}"
                 if start_on_preroll and preroll_bytes > 0:
-                    cmd += f" preroll={preroll_bytes}"
+                    cmd += f" preroll={preroll_bytes} auto_start=1"
                 transaction_started = True
                 self.send_line(cmd)
-                self.wait_for(f"@DATA_READY job={job_id}", timeout)
+                ready = self.wait_for(f"@DATA_READY job={job_id}", timeout)
+                rx_auto_start = (
+                    start_on_preroll
+                    and preroll_bytes > 0
+                    and "auto_start=rx" in ready.line
+                )
                 t_ready = time.perf_counter()
                 self._on_log("status", f"DATA_READY {(t_ready-t_begin)*1000:.0f}ms")
+                if start_on_preroll and preroll_bytes > 0:
+                    flow = "rx_auto_start" if rx_auto_start else "legacy_host_handshake"
+                    self._on_log("status", f"[HOST_PREROLL_FLOW] mode={flow}")
                 if status_cb:
                     status_cb("上传中 0/{} bytes".format(total), 0)
 
@@ -641,7 +667,11 @@ class SleJobSerialClient:
                 timing_ack_ms_max = 0
                 timing_chunk_ms_max = 0
                 t_data = time.perf_counter()
-                preroll_done = False
+                # New TX/RX firmware keeps DATA continuous and starts execution
+                # inside RX. Missing capability text means an older TX, so keep
+                # the legacy threshold handshake as a rollback path.
+                preroll_done = rx_auto_start
+                rx_auto_exec_ui_started = False
                 data_timeout = max(timeout, DATA_ACK_TIMEOUT_MIN_S)
                 pending_chunks: list[dict[str, float | int]] = []
                 preroll_control_timeout = max(timeout, PREROLL_CONTROL_TIMEOUT_MIN_S)
@@ -773,8 +803,25 @@ class SleJobSerialClient:
                             f"total_ms={chunk_ms}",
                         )
                     pct = acked_offset * 100 // total
+                    if (
+                        rx_auto_start
+                        and not rx_auto_exec_ui_started
+                        and acked_offset >= preroll_bytes
+                    ):
+                        rx_auto_exec_ui_started = True
+                        self._on_log(
+                            "status",
+                            f"[HOST_AUTO_EXEC_UI] threshold={preroll_bytes} "
+                            f"acked={acked_offset}",
+                        )
                     if status_cb:
-                        status_cb(f"上传中 {acked_offset}/{total} bytes", pct)
+                        if rx_auto_exec_ui_started:
+                            status_cb(
+                                f"执行中，后台继续上传 {acked_offset}/{total} bytes",
+                                pct,
+                            )
+                        else:
+                            status_cb(f"上传中 {acked_offset}/{total} bytes", pct)
                     if progress_cb and (chunk_index % 100 == 0 or is_last):
                         progress_cb(f"上传中 {acked_offset}/{total} ({pct}%)")
                     self._dispatch_priority_control_locked()

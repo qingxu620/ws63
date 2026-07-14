@@ -425,6 +425,21 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(page.lbl_substate.text(), "任务正在执行")
         self.assertNotIn("执行行数", page.cards)
 
+    def test_preroll_execution_visual_survives_receiving_status_refresh(self) -> None:
+        page = JobPage()
+        page.set_execution_state(True)
+
+        page.update_state(
+            rx_state="数据传输中", rx_state_code=1, job_id=7,
+            received=6000, total=12000, cache_free=96400,
+            focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
+        )
+
+        self.assertTrue(page.arc._spinning)
+        self.assertEqual(page.lbl_state.text(), "正在执行")
+        self.assertEqual(page.arc._caption, "等待 RX 完成")
+        self.assertEqual(page.cards["已接收字节"].text(), "6000 字节")
+
     def test_status_parser_does_not_track_execution_line_progress(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -645,6 +660,31 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(timeouts, [6.0])
         self.assertIn(("status", "[EXEC_POLL] 状态查询延迟: 等待 @STATUS 超时"), logs)
         self.assertNotIn(("error", "[EXEC_POLL] 查询状态失败: 等待 @STATUS 超时"), logs)
+
+    def test_exec_status_poll_skips_when_command_path_is_busy(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        calls: list[float] = []
+
+        class FakeClient:
+            def try_transact_status(self, timeout: float):
+                calls.append(timeout)
+                return None
+
+            def transact_status(self, timeout: float):
+                raise AssertionError("blocking status path must not be used")
+
+            def close(self) -> None:
+                pass
+
+        window.client = FakeClient()
+        window.state.execution_expected = True
+        window._exec_poll_timer.start()
+
+        window._execution_status_poll_worker()
+
+        self.assertEqual(calls, [6.0])
+        self.assertEqual(window._exec_poll_failures, 0)
 
     def test_upload_only_explicitly_disables_preroll_execution(self) -> None:
         window = MainWindow()

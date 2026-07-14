@@ -104,7 +104,67 @@ static panel_transport_rx_response_cb_t g_offline_response_cb;
 static panel_transport_rx_response_cb_t g_cmd_response_cb;
 static volatile bool g_standalone_session_active;
 
+typedef enum {
+    PANEL_STATUS_SOURCE_TX = 0,
+    PANEL_STATUS_SOURCE_RX,
+    PANEL_STATUS_SOURCE_COUNT,
+} panel_status_source_t;
+
+typedef struct {
+    bool valid;
+    uint32_t last_seq;
+} panel_status_seq_tracker_t;
+
+static panel_status_seq_tracker_t g_status_seq[PANEL_STATUS_SOURCE_COUNT];
+
 static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+
+static const char *panel_status_source_name(panel_status_source_t source)
+{
+    return (source == PANEL_STATUS_SOURCE_TX) ? "tx" : "rx";
+}
+
+static void panel_status_seq_reset(panel_status_source_t source, const char *reason)
+{
+    if (source >= PANEL_STATUS_SOURCE_COUNT) {
+        return;
+    }
+    g_status_seq[source].valid = false;
+    g_status_seq[source].last_seq = 0U;
+    osal_printk("[PANEL_STATUS_SEQ] reset source=%s reason=%s\r\n",
+                panel_status_source_name(source),
+                (reason != NULL) ? reason : "none");
+}
+
+static bool panel_status_seq_accept(panel_status_source_t source, uint32_t seq)
+{
+    if (source >= PANEL_STATUS_SOURCE_COUNT || seq == 0U) {
+        return false;
+    }
+
+    panel_status_seq_tracker_t *tracker = &g_status_seq[source];
+    if (!tracker->valid) {
+        tracker->valid = true;
+        tracker->last_seq = seq;
+        return true;
+    }
+
+    uint32_t distance = seq - tracker->last_seq;
+    if (distance != 0U && distance < 0x80000000U) {
+        tracker->last_seq = seq;
+        return true;
+    }
+
+    static uint32_t s_drop_count[PANEL_STATUS_SOURCE_COUNT];
+    uint32_t count = s_drop_count[source]++;
+    if ((count & 0x0FU) == 0U) {
+        osal_printk("[PANEL_STATUS_SEQ] drop source=%s seq=%u last=%u distance=0x%08x\r\n",
+                    panel_status_source_name(source),
+                    (unsigned int)seq, (unsigned int)tracker->last_seq,
+                    (unsigned int)distance);
+    }
+    return false;
+}
 
 static uint8_t packet_type_from_encoded(const void *data, uint16_t len)
 {
@@ -221,11 +281,6 @@ static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_resu
     return seek_result != NULL && addr_matches_mac(&seek_result->addr, g_receiver_mac);
 }
 
-static bool seek_result_matches_tx(const sle_seek_result_info_t *seek_result)
-{
-    return seek_result != NULL && addr_matches_mac(&seek_result->addr, g_tx_mac);
-}
-
 static bool rx_control_allowed_now(void)
 {
     /*
@@ -288,7 +343,9 @@ static void start_seek_if_needed(void)
 
 static void start_status_listen_if_needed(void)
 {
-    if (!g_sle_enabled || rx_control_allowed_now() || g_seek_active || g_client_connecting ||
+    if (!g_sle_enabled || g_model.view_mode != PANEL_VIEW_OFFLINE ||
+        rx_control_allowed_now() || g_seek_active || g_client_connecting ||
+        g_panel_conn_id != PANEL_SLE_CONN_INVALID ||
         g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
         return;
     }
@@ -374,14 +431,6 @@ static void start_status_listen_task_once(void)
     g_status_listen_task_started = true;
 }
 
-static uint8_t panel_mode_from_job_state(uint8_t job_state, uint8_t status)
-{
-    if (status != JOB_STATUS_OK || job_state == JOB_STATE_ERROR) {
-        return PANEL_MODE_ERROR;
-    }
-    return PANEL_MODE_ONLINE;
-}
-
 static void apply_status_resp_as(const status_resp_payload_t *st, uint8_t owner, uint8_t mode)
 {
     if (st == NULL) {
@@ -398,12 +447,25 @@ static void apply_status_resp_as(const status_resp_payload_t *st, uint8_t owner,
                                       st->status, 0U);
 }
 
-static void apply_panel_status(const panel_status_payload_t *st)
+static void apply_panel_status(const panel_status_payload_t *st,
+                               panel_status_source_t source)
 {
     if (st == NULL) {
         return;
     }
-    uint8_t flags = st->flags | PANEL_STATUS_FLAG_ANY_LINK;
+
+    panel_status_source_t expected = (g_model.view_mode == PANEL_VIEW_ONLINE) ?
+        PANEL_STATUS_SOURCE_TX : PANEL_STATUS_SOURCE_RX;
+    if (source != expected) {
+        return;
+    }
+    if (!panel_status_seq_accept(source, st->seq)) {
+        return;
+    }
+
+    uint8_t flags = st->flags;
+    flags |= (source == PANEL_STATUS_SOURCE_TX) ?
+             PANEL_STATUS_FLAG_OWNER_LINK : PANEL_STATUS_FLAG_ANY_LINK;
     panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, flags, st->seq,
                                       st->job_id, st->received_size, st->total_size,
                                       st->executed_lines, st->cache_free, st->last_error,
@@ -420,14 +482,15 @@ static void handle_panel_write(const uint8_t *data, uint16_t len)
     if (pkt.type == PKT_PANEL_STATUS && pkt.len == sizeof(panel_status_payload_t)) {
         panel_status_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
-        apply_panel_status(&st);
+        apply_panel_status(&st, PANEL_STATUS_SOURCE_TX);
         return;
     }
 
     if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t)) {
-        status_resp_payload_t st;
-        (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
-        apply_status_resp_as(&st, PANEL_OWNER_HOST, panel_mode_from_job_state(st.state, st.status));
+        static uint32_t s_unsequenced_tx_status_count = 0;
+        if ((s_unsequenced_tx_status_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_STATUS_SOURCE] ignore unsequenced tx status_resp\r\n");
+        }
     }
 }
 
@@ -444,7 +507,10 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
-    g_panel_conn_id = conn_id;
+    if (g_panel_conn_id != conn_id) {
+        g_panel_conn_id = conn_id;
+        panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "direct-write-conn");
+    }
     panel_model_set_transport_links(panel_transport_sle_tx_is_connected(),
                                     panel_transport_sle_rx_is_connected());
     handle_panel_write(write_cb_para->value, write_cb_para->length);
@@ -543,6 +609,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         if (g_client_connecting && addr_matches_pending_rx(addr)) {
             g_rx_conn_id = conn_id;
+            panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "connected");
             g_client_connecting = false;
             if (addr != NULL) {
                 (void)memcpy_s(&g_rx_addr, sizeof(g_rx_addr), addr, sizeof(*addr));
@@ -560,6 +627,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             (void)ssapc_exchange_info_req(PANEL_SLE_CLIENT_ID, conn_id, &info);
         } else if (addr_matches_mac(addr, g_tx_mac)) {
             g_panel_conn_id = conn_id;
+            panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "connected");
             if (g_client_connecting && !g_standalone_session_active) {
                 g_rx_connect_cancel_after_connect = true;
             }
@@ -579,12 +647,14 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         if (conn_id == g_panel_conn_id) {
             g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+            panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "disconnected");
             panel_model_set_transport_links(false, panel_transport_sle_rx_is_connected());
         }
         if (conn_id == g_rx_conn_id) {
             bool expected = g_rx_disconnect_expected;
             g_rx_disconnect_expected = false;
             g_rx_conn_id = PANEL_SLE_CONN_INVALID;
+            panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "disconnected");
             g_rx_handles_ready = false;
             g_rx_data_handle = 0;
             g_rx_resp_handle = 0;
@@ -661,13 +731,11 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
     }
 
     bool matches_rx = seek_result_matches_receiver(seek_result);
-    bool matches_tx = seek_result_matches_tx(seek_result);
-    bool matches_status_source = (g_model.view_mode == PANEL_VIEW_ONLINE) ? matches_tx : matches_rx;
 
-    if (g_seek_for_status_listen && matches_status_source) {
+    if (g_seek_for_status_listen && g_model.view_mode == PANEL_VIEW_OFFLINE && matches_rx) {
         panel_status_payload_t status;
         if (adv_panel_status_parse(seek_result, &status)) {
-            apply_panel_status(&status);
+            apply_panel_status(&status, PANEL_STATUS_SOURCE_RX);
             static uint32_t s_status_listen_count = 0;
             if ((s_status_listen_count++ & 0x1FU) == 0U) {
                 osal_printk("[PANEL_SLE_LISTEN] status seq=%u owner=%u state=%u rx=%u total=%u\r\n",
@@ -692,17 +760,6 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
             static uint32_t s_status_parse_miss_count = 0;
             if ((s_status_parse_miss_count++ & 0x0FU) == 0U) {
                 osal_printk("[PANEL_SLE_LISTEN] rx adv no status len=%u\r\n",
-                            (unsigned int)seek_result->data_length);
-            }
-        }
-    }
-
-    if (matches_tx && g_seek_for_status_listen && g_model.view_mode == PANEL_VIEW_ONLINE) {
-        panel_status_payload_t status;
-        if (!adv_panel_status_parse(seek_result, &status)) {
-            static uint32_t s_tx_status_parse_miss_count = 0;
-            if ((s_tx_status_parse_miss_count++ & 0x0FU) == 0U) {
-                osal_printk("[PANEL_SLE_LISTEN] tx adv no status len=%u\r\n",
                             (unsigned int)seek_result->data_length);
             }
         }
@@ -912,7 +969,7 @@ static void handle_rx_response_packet(const uint8_t *data, uint16_t len)
     } else if (pkt.type == PKT_PANEL_STATUS && pkt.len == sizeof(panel_status_payload_t)) {
         panel_status_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
-        apply_panel_status(&st);
+        apply_panel_status(&st, PANEL_STATUS_SOURCE_RX);
     }
 
     if (g_offline_response_cb != NULL) {
@@ -974,6 +1031,8 @@ errcode_t panel_transport_sle_start(void)
     g_status_listen_started_ms = 0;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
     g_standalone_session_active = false;
+    panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "transport-start");
+    panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "transport-start");
     if (!g_write_cfm_sem_ready && osal_sem_init(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
         g_write_cfm_sem_ready = true;
     }

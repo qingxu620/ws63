@@ -51,6 +51,14 @@ class StatusParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "仅上传任务上限"):
             client.upload_job(1, b"X" * (JOB_MAX_SIZE + 1), 1.0)
 
+    def test_nonblocking_status_skips_busy_command_path(self) -> None:
+        client = SleJobSerialClient(lambda channel, message: None)
+        client._command_lock.acquire()
+        try:
+            self.assertIsNone(client.try_transact_status(1.0))
+        finally:
+            client._command_lock.release()
+
     def test_upload_execute_can_bypass_host_size_audit(self) -> None:
         class FakeClient(SleJobSerialClient):
             def write_bytes(self, data: bytes, label: str = "") -> None:
@@ -204,6 +212,76 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual([len(item) for item in writes[1:]], [JOB_DATA_CHUNK_SIZE, 17, 33])
         self.assertEqual(ack_offsets, [JOB_DATA_CHUNK_SIZE, preroll, len(payload)])
         self.assertIn("@DATA_RESUME", commands)
+
+    def test_rx_auto_start_upload_does_not_pause_at_preroll(self) -> None:
+        writes: list[bytes] = []
+        commands: list[str] = []
+        ack_offsets: list[int] = []
+        statuses: list[tuple[str, float]] = []
+        payload = b"A" * (JOB_DATA_CHUNK_SIZE * 3 + 50)
+        preroll = JOB_DATA_CHUNK_SIZE + 17
+
+        class FakeClient(SleJobSerialClient):
+            def write_bytes(self, data: bytes, label: str = "") -> None:
+                writes.append(data)
+
+            def send_line(self, line: str) -> None:
+                commands.append(line)
+
+            def wait_for(self, pattern: str, timeout: float, **kwargs) -> WaitResult:
+                if "@OK resync" in pattern:
+                    return WaitResult("@OK resync rx=aborted", 1)
+                if "@DATA_READY" in pattern:
+                    return WaitResult(
+                        f"@DATA_READY job=1 size={len(payload)} auto_start=rx", 1
+                    )
+                if "@JOB_READY" in pattern:
+                    return WaitResult(
+                        f"@JOB_READY job=1 size={len(payload)}", 1
+                    )
+                match = re.search(r"offset=(\d+)\b", pattern)
+                if match:
+                    off = int(match.group(1))
+                    ack_offsets.append(off)
+                    return WaitResult(
+                        f"@ACK type=2 seq=0 status=0 offset={off}", 1
+                    )
+                raise AssertionError(pattern)
+
+        client = FakeClient(lambda channel, message: None)
+        client.upload_job(
+            1,
+            payload,
+            2.0,
+            preroll_bytes=preroll,
+            start_on_preroll=True,
+            enforce_job_size_limit=False,
+            status_cb=lambda text, pct: statuses.append((text, pct)),
+        )
+
+        self.assertEqual(
+            [len(item) for item in writes[1:]],
+            [JOB_DATA_CHUNK_SIZE, JOB_DATA_CHUNK_SIZE, JOB_DATA_CHUNK_SIZE, 50],
+        )
+        self.assertEqual(
+            ack_offsets,
+            [JOB_DATA_CHUNK_SIZE, JOB_DATA_CHUNK_SIZE * 2,
+             JOB_DATA_CHUNK_SIZE * 3, len(payload)],
+        )
+        self.assertTrue(any("auto_start=1" in command for command in commands))
+        self.assertFalse(any(command.startswith("@EXEC_START") for command in commands))
+        self.assertNotIn("@DATA_RESUME", commands)
+        first_exec = next(
+            index for index, (text, _) in enumerate(statuses)
+            if text.startswith("执行中，后台继续上传")
+        )
+        self.assertIn(
+            f"{JOB_DATA_CHUNK_SIZE * 2}/{len(payload)} bytes",
+            statuses[first_exec][0],
+        )
+        self.assertFalse(
+            any(text.startswith("上传中") for text, _ in statuses[first_exec + 1:])
+        )
 
     def test_preroll_control_waits_use_timeout_floor(self) -> None:
         waits: list[tuple[str, float]] = []

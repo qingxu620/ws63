@@ -304,7 +304,7 @@ archive() {
     local src_map="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/ws63-liteos-app.map"
     local src_mconfig="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/mconfig.h"
 
-    local dest_name global_dest_name global_alias_name=""
+    local dest_name global_dest_name obsolete_global_name=""
     case "$variant" in
         tx)
             dest_name="ws63-liteos-app_tx"
@@ -317,7 +317,7 @@ archive() {
         screen_panel)
             dest_name="ws63-liteos-app_screen_panel"
             global_dest_name="ws63-liteos-app_screen_all.fwpkg"
-            global_alias_name="ws63-liteos-app_screen_panel_all.fwpkg"
+            obsolete_global_name="ws63-liteos-app_screen_panel_all.fwpkg"
             ;;
     esac
 
@@ -381,8 +381,11 @@ EOF
     # after the per-variant archive is complete. Each replacement is atomic so
     # a reader never sees a partially written firmware package.
     publish_global_firmware "${run_dir}/${dest_name}_all.fwpkg" "$global_latest_dir" "$global_dest_name"
-    if [ -n "$global_alias_name" ]; then
-        publish_global_firmware "${run_dir}/${dest_name}_all.fwpkg" "$global_latest_dir" "$global_alias_name"
+    if [ -n "$obsolete_global_name" ]; then
+        # Screen has one product firmware name in the project-wide latest
+        # directory. Remove the former variant-name alias only after the
+        # canonical package has been published successfully.
+        rm -f "${global_latest_dir}/${obsolete_global_name}"
     fi
 
     echo "  Archives: ${run_dir}/"

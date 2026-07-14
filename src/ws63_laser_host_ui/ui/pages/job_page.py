@@ -568,6 +568,13 @@ class JobPage(QWidget):
         self.cards["RX 日志监控"].setText(rx_cn)
         self.cards["RX 日志监控"].setStyleSheet("color: #10B981;" if rx_link == "CONNECTED" else "color: #EF4444;")
 
+        # RX can still report RECEIVING/JOB_READY for a short time after the
+        # Host's preroll presentation has switched to execution. Keep updating
+        # the authoritative telemetry cards, but do not let that transitional
+        # status overwrite the execution spinner and primary state text.
+        if self._execution_active and rx_state_code in (1, 2):
+            return
+
         self.lbl_state.setText(rx_state)
         self.arc.set_value(calc_progress)
         self.arc.set_caption(progress_caption)

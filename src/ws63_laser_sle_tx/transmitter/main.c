@@ -24,7 +24,9 @@
 #define TX_PAYLOAD_BUF_SIZE SLE_JOB_PACKET_MAX_PAYLOAD
 #define TX_DATA_RX_LOG_STEP 32U
 #define TX_DATA_MODE_TIMEOUT_TICKS 5000U
-#define TX_PANEL_STATUS_PERIOD_MS 500U
+#define TX_PANEL_STATUS_MAX_RATE_MS 500U
+#define TX_PANEL_STATUS_LIGHT_LOAD_MS 1000U
+#define TX_PANEL_STATUS_HEAVY_LOAD_MS 2000U
 #define TX_DATA_HOST_BUSY_PERIOD_MS 1000U
 #define TX_FIRMWARE_PACKAGE "ws63-liteos-app_tx_all.fwpkg"
 
@@ -43,6 +45,8 @@ static osal_semaphore g_status_sem;
 static bool g_status_sem_ready = false;
 static status_resp_payload_t g_last_status_resp;
 static volatile bool g_last_status_resp_valid = false;
+static status_resp_payload_t g_panel_rx_status;
+static volatile bool g_panel_rx_status_valid = false;
 static volatile uint16_t g_wait_ack_seq = 0;
 static volatile uint8_t g_wait_status = JOB_STATUS_INTERNAL_ERROR;
 static volatile bool g_wait_got_ack = false;
@@ -58,6 +62,7 @@ static uint16_t g_job_crc = 0;
 static bool g_data_mode = false;
 static uint32_t g_preroll_bytes = 0;
 static bool g_preroll_signaled = false;
+static bool g_rx_auto_start_enabled = false;
 static uint8_t g_job_chunk[JOB_TX_DATA_CHUNK_MAX];
 static uint16_t g_job_chunk_len = 0;
 static uint32_t g_data_log_next = TX_DATA_RX_LOG_STEP;
@@ -84,9 +89,12 @@ static bool g_async_retx_valid = false;
 static uint32_t g_panel_status_seq = 1;
 static uint16_t g_panel_packet_seq = 1;
 static uint32_t g_panel_status_last_ms = 0;
+static volatile bool g_panel_status_pending = false;
+static volatile bool g_panel_status_wait_rx_window = false;
 static uint8_t g_panel_local_job_state = JOB_STATE_IDLE;
 static bool g_panel_local_exec_started = false;
 static uint32_t g_panel_local_last_error = JOB_STATUS_OK;
+static bool g_panel_local_terminal_confirmed = false;
 
 static void tx_panel_publish_local_status(bool force);
 static void clear_async_data_retx(void);
@@ -126,6 +134,7 @@ static void clear_local_job_state(void)
     g_data_mode = false;
     g_preroll_bytes = 0;
     g_preroll_signaled = false;
+    g_rx_auto_start_enabled = false;
     g_job_chunk_len = 0;
     g_data_log_next = TX_DATA_RX_LOG_STEP;
     g_diag_data_count = 0;
@@ -141,6 +150,10 @@ static void clear_local_job_state(void)
     g_panel_local_job_state = JOB_STATE_IDLE;
     g_panel_local_exec_started = false;
     g_panel_local_last_error = JOB_STATUS_OK;
+    g_panel_local_terminal_confirmed = false;
+    g_panel_status_wait_rx_window = false;
+    memset(&g_panel_rx_status, 0, sizeof(g_panel_rx_status));
+    g_panel_rx_status_valid = false;
 }
 
 static uint16_t next_seq(void)
@@ -279,69 +292,135 @@ static void tx_panel_mirror_status(const panel_status_payload_t *st)
 static void tx_panel_publish_local_status(bool force)
 {
     uint32_t now = (uint32_t)uapi_systick_get_ms();
-    if (!force && g_panel_status_last_ms != 0U &&
-        (uint32_t)(now - g_panel_status_last_ms) < TX_PANEL_STATUS_PERIOD_MS) {
+    uint32_t elapsed = (g_panel_status_last_ms == 0U) ? 0xFFFFFFFFU :
+                       (uint32_t)(now - g_panel_status_last_ms);
+
+    if (force) {
+        g_panel_status_pending = true;
+    }
+
+    uint32_t outstanding = (g_job_offset > g_async_data_ack_offset) ?
+                           (g_job_offset - g_async_data_ack_offset) : 0U;
+    bool rx_window_recovered = !g_data_mode ||
+                               outstanding <= JOB_TX_DATA_CHUNK_MAX;
+    if (g_panel_status_wait_rx_window && !rx_window_recovered) {
+        return;
+    }
+
+    uint32_t period_ms = TX_PANEL_STATUS_MAX_RATE_MS;
+    if (g_data_mode && outstanding > JOB_TX_DATA_CHUNK_MAX) {
+        period_ms = TX_PANEL_STATUS_HEAVY_LOAD_MS;
+    } else if (g_data_mode && (outstanding > 0U || g_job_chunk_len > 0U)) {
+        period_ms = TX_PANEL_STATUS_LIGHT_LOAD_MS;
+    }
+
+    /*
+     * Event changes are coalesced and delivered at the 2 Hz ceiling. Periodic
+     * progress is load-aware: a busy DATA window gets fewer panel writes, while
+     * an RX-caught-up/idle TX can refresh at the full rate. No timing gap on the
+     * RX link is assumed here.
+     */
+    bool event_due = g_panel_status_pending &&
+                     (g_panel_status_last_ms == 0U ||
+                      elapsed >= TX_PANEL_STATUS_MAX_RATE_MS);
+    bool periodic_due = g_panel_status_last_ms == 0U || elapsed >= period_ms;
+    if (!event_due && !periodic_due) {
         return;
     }
 
     bool has_job = (g_job_id != 0U && g_job_total != 0U) || g_host_job_topology_active ||
                    g_data_mode || tx_panel_current_job_state() != JOB_STATE_IDLE;
+    bool use_rx_status = g_panel_rx_status_valid;
+    if (use_rx_status && has_job && g_job_id != 0U) {
+        use_rx_status = g_panel_rx_status.job_id == g_job_id &&
+                        (g_panel_rx_status.total_size == 0U || g_job_total == 0U ||
+                         g_panel_rx_status.total_size == g_job_total);
+    }
+
     panel_status_payload_t st = {0};
     st.seq = g_panel_status_seq++;
     if (g_panel_status_seq == 0U) {
         g_panel_status_seq = 1U;
     }
-    st.owner = has_job ? PANEL_OWNER_HOST : PANEL_OWNER_NONE;
-    st.mode = (g_panel_local_last_error == JOB_STATUS_OK) ?
-              (has_job ? PANEL_MODE_ONLINE : PANEL_MODE_IDLE) : PANEL_MODE_ERROR;
-    st.job_state = has_job ? tx_panel_current_job_state() : JOB_STATE_IDLE;
-    st.flags = has_job ? PANEL_STATUS_FLAG_OWNER_LINK : 0U;
-    if (sle_job_client_is_connected()) {
-        st.flags |= PANEL_STATUS_FLAG_ANY_LINK;
+    if (use_rx_status) {
+        const status_resp_payload_t *rx = &g_panel_rx_status;
+        bool rx_has_job = rx->job_id != 0U || rx->total_size != 0U ||
+                          rx->state != JOB_STATE_IDLE;
+        st.owner = rx_has_job ? PANEL_OWNER_HOST : PANEL_OWNER_NONE;
+        st.mode = (rx->status == JOB_STATUS_OK && rx->state != JOB_STATE_ERROR) ?
+                  (rx_has_job ? PANEL_MODE_ONLINE : PANEL_MODE_IDLE) : PANEL_MODE_ERROR;
+        st.job_state = rx->state;
+        st.flags = rx_has_job ? PANEL_STATUS_FLAG_OWNER_LINK : 0U;
+        if (sle_job_client_is_connected()) {
+            st.flags |= PANEL_STATUS_FLAG_ANY_LINK;
+        }
+        if (topology_state_is_terminal(rx->state)) {
+            st.flags |= PANEL_STATUS_FLAG_TERMINAL_CONFIRMED;
+        }
+        st.job_id = rx->job_id;
+        st.received_size = rx->received_size;
+        st.total_size = rx->total_size;
+        st.executed_lines = rx->executed_lines;
+        st.cache_free = rx->cache_free;
+        st.last_error = rx->status;
+        /*
+         * Screen upload progress is intentionally TX-local: it represents bytes
+         * accepted from Host UART, so a stale/low-frequency RX status snapshot
+         * cannot freeze the UI at the preroll boundary. RX remains authoritative
+         * for execution state, errors, cache telemetry, and terminal confirmation.
+         */
+        if (!topology_state_is_terminal(rx->state) &&
+            g_job_id != 0U && g_job_total != 0U && rx->job_id == g_job_id) {
+            st.received_size = min_u32(g_job_offset, g_job_total);
+            st.total_size = g_job_total;
+        }
+    } else {
+        st.owner = has_job ? PANEL_OWNER_HOST : PANEL_OWNER_NONE;
+        st.mode = (g_panel_local_last_error == JOB_STATUS_OK) ?
+                  (has_job ? PANEL_MODE_ONLINE : PANEL_MODE_IDLE) : PANEL_MODE_ERROR;
+        st.job_state = has_job ? tx_panel_current_job_state() : JOB_STATE_IDLE;
+        st.flags = has_job ? PANEL_STATUS_FLAG_OWNER_LINK : 0U;
+        if (sle_job_client_is_connected()) {
+            st.flags |= PANEL_STATUS_FLAG_ANY_LINK;
+        }
+        if (g_panel_local_terminal_confirmed) {
+            st.flags |= PANEL_STATUS_FLAG_TERMINAL_CONFIRMED;
+        }
+        st.job_id = g_job_id;
+        st.received_size = g_job_offset;
+        st.total_size = g_job_total;
+        st.executed_lines = 0;
+        st.cache_free = JOB_CACHE_SIZE - min_u32(g_job_offset, JOB_CACHE_SIZE);
+        st.last_error = g_panel_local_last_error;
     }
-    st.job_id = g_job_id;
-    st.received_size = g_job_offset;
-    st.total_size = g_job_total;
-    st.executed_lines = 0;
-    st.cache_free = JOB_CACHE_SIZE - min_u32(g_job_offset, JOB_CACHE_SIZE);
-    st.last_error = g_panel_local_last_error;
     st.tick_ms = now;
 
     g_panel_status_last_ms = now;
+    g_panel_status_pending = false;
+    g_panel_status_wait_rx_window = false;
     tx_panel_mirror_status(&st);
-    (void)sle_job_client_update_panel_status_adv(&st);
 }
 
-static void tx_panel_mirror_rx_status(const status_resp_payload_t *rx)
+static void tx_panel_queue_after_rx_window(void)
 {
-    if (rx == NULL || !sle_job_client_panel_is_connected()) {
-        return;
+    g_panel_status_pending = true;
+    g_panel_status_wait_rx_window = true;
+}
+
+static bool tx_panel_cache_rx_status(const status_resp_payload_t *rx)
+{
+    if (rx == NULL) {
+        return false;
     }
 
-    panel_status_payload_t st = {0};
-    st.seq = g_panel_status_seq++;
-    if (g_panel_status_seq == 0U) {
-        g_panel_status_seq = 1U;
-    }
-    st.owner = (rx->job_id != 0U || rx->total_size != 0U ||
-                rx->state != JOB_STATE_IDLE) ? PANEL_OWNER_HOST : PANEL_OWNER_NONE;
-    st.mode = (rx->status == JOB_STATUS_OK && rx->state != JOB_STATE_ERROR) ?
-              ((st.owner == PANEL_OWNER_HOST) ? PANEL_MODE_ONLINE : PANEL_MODE_IDLE) :
-              PANEL_MODE_ERROR;
-    st.job_state = rx->state;
-    st.flags = PANEL_STATUS_FLAG_ANY_LINK;
-    if (st.owner == PANEL_OWNER_HOST) {
-        st.flags |= PANEL_STATUS_FLAG_OWNER_LINK;
-    }
-    st.job_id = rx->job_id;
-    st.received_size = rx->received_size;
-    st.total_size = rx->total_size;
-    st.executed_lines = rx->executed_lines;
-    st.cache_free = rx->cache_free;
-    st.last_error = rx->status;
-    st.tick_ms = (uint32_t)uapi_systick_get_ms();
-
-    tx_panel_mirror_status(&st);
+    bool event_changed = !g_panel_rx_status_valid ||
+                         g_panel_rx_status.job_id != rx->job_id ||
+                         g_panel_rx_status.total_size != rx->total_size ||
+                         g_panel_rx_status.state != rx->state ||
+                         g_panel_rx_status.status != rx->status;
+    memcpy(&g_panel_rx_status, rx, sizeof(g_panel_rx_status));
+    g_panel_rx_status_valid = true;
+    return event_changed;
 }
 
 static uint16_t peek_seq(void)
@@ -841,9 +920,6 @@ static errcode_t send_packet_wait_ack_internal(uint8_t type, const void *payload
             osal_printk("[JOB_TX_SEND_CALL] type=0x%02x seq=%u try=%u packet=%u status=%s\r\n",
                         type, seq, (unsigned int)retry, packet_len, sle_job_client_get_status());
         }
-        if (type != PKT_JOB_DATA && sle_job_client_pause_panel_status_adv("reliable-tx")) {
-            osal_msleep(60);
-        }
         uint32_t t_send = (uint32_t)uapi_systick_get_ms();
         errcode_t ret = sle_job_client_send_packet_ex(packet, packet_len, force_write_req);
         uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
@@ -966,6 +1042,9 @@ static errcode_t abort_rx_and_clear_transaction(const char *reason)
     }
 
     errcode_t ret = send_packet_wait_ack(PKT_JOB_ABORT, NULL, 0);
+    if (ret == ERRCODE_SUCC) {
+        g_panel_local_terminal_confirmed = true;
+    }
     set_host_job_topology_active(false);
     tx_panel_publish_local_status(true);
     return ret;
@@ -1046,7 +1125,8 @@ static void response_cb(const uint8_t *data, uint16_t length)
         memcpy(&g_last_status_resp, &st, sizeof(g_last_status_resp));
         g_last_status_resp_valid = true;
         update_async_data_progress_from_status(&st);
-        tx_panel_mirror_rx_status(&st);
+        bool panel_event_changed = tx_panel_cache_rx_status(&st);
+        tx_panel_publish_local_status(panel_event_changed);
         if (g_status_sem_ready) {
             osal_sem_up(&g_status_sem);
         }
@@ -1063,7 +1143,6 @@ static void response_cb(const uint8_t *data, uint16_t length)
         if (g_host_job_topology_active && topology_state_is_terminal(st.state)) {
             clear_local_job_state();
             set_host_job_topology_active(false);
-            tx_panel_publish_local_status(true);
         }
         return;
     }
@@ -1081,14 +1160,26 @@ static void response_cb(const uint8_t *data, uint16_t length)
         }
         if (g_host_job_topology_active && topology_state_is_terminal(st.job_state)) {
             clear_local_job_state();
+            g_panel_local_terminal_confirmed = true;
             set_host_job_topology_active(false);
             tx_panel_publish_local_status(true);
         }
     }
 }
 
-static errcode_t send_job_begin(uint32_t job_id, uint32_t total_size, uint16_t crc)
+static errcode_t send_job_begin(uint32_t job_id, uint32_t total_size, uint16_t crc,
+                                bool rx_auto_start, uint32_t exec_preroll_bytes)
 {
+    if (rx_auto_start) {
+        job_begin_stream_payload_t begin = {0};
+        begin.job_id = job_id;
+        begin.total_size = total_size;
+        begin.job_crc16 = crc;
+        begin.options = JOB_BEGIN_OPTION_AUTO_EXEC_PREROLL;
+        begin.exec_preroll_bytes = exec_preroll_bytes;
+        return send_packet_wait_ack(PKT_JOB_BEGIN, &begin, sizeof(begin));
+    }
+
     job_begin_payload_t begin = {0};
     begin.job_id = job_id;
     begin.total_size = total_size;
@@ -1309,7 +1400,8 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
     }
 
     uint8_t flags = JOB_TX_DATA_FAST_CUM_ACK_ENABLE ? SLE_JOB_PACKET_FLAG_DATA_FAST_ACK : 0U;
-    if (JOB_TX_DATA_FAST_CUM_ACK_ENABLE && g_preroll_bytes > 0U &&
+    if (JOB_TX_DATA_FAST_CUM_ACK_ENABLE && !g_rx_auto_start_enabled &&
+        g_preroll_bytes > 0U &&
         !g_preroll_signaled && next_offset >= g_preroll_bytes) {
         flags |= SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK;
     }
@@ -1478,7 +1570,7 @@ static void handle_data_byte(uint8_t ch)
         }
     }
 
-    if (g_preroll_bytes > 0 && !g_preroll_signaled &&
+    if (!g_rx_auto_start_enabled && g_preroll_bytes > 0 && !g_preroll_signaled &&
         g_job_offset >= g_preroll_bytes && g_job_offset < g_job_total) {
         if (flush_job_chunk() != ERRCODE_SUCC) {
             osal_printk("[JOB_TX] preroll chunk send fail off=%u\r\n", (unsigned int)g_job_offset);
@@ -1516,8 +1608,18 @@ static void handle_data_byte(uint8_t ch)
             host_sendf("@ERR chunk_send_fail_abort\r\n");
             return;
         }
+        if (g_rx_auto_start_enabled && !g_panel_local_exec_started &&
+            g_preroll_bytes > 0U && g_job_offset >= g_preroll_bytes) {
+            g_panel_local_exec_started = true;
+            g_panel_local_job_state = JOB_STATE_EXECUTING;
+            osal_printk("[JOB_TX_AUTO_EXEC] threshold forwarded job=%u off=%u threshold=%u\r\n",
+                        (unsigned int)g_job_id, (unsigned int)g_job_offset,
+                        (unsigned int)g_preroll_bytes);
+            tx_panel_queue_after_rx_window();
+        }
         host_sendf("@ACK type=%u seq=0 status=%u offset=%u\r\n",
                    PKT_JOB_DATA, JOB_STATUS_OK, (unsigned int)g_job_offset);
+        sle_job_client_poll_link_diagnostics();
         tx_panel_publish_local_status(false);
     }
 
@@ -1624,27 +1726,38 @@ static void handle_command_line(char *line)
     }
 
     if (strncmp(line, "@BEGIN ", 7) == 0) {
-        unsigned long job_id;
-        unsigned long total;
-        unsigned long crc;
+        unsigned long job_id = 0;
+        unsigned long total = 0;
+        unsigned long crc = 0;
         unsigned long preroll = 0;
+        unsigned long auto_start = 0;
         const char *tag = " preroll=";
         const char *preroll_ptr = strstr(line, tag);
+        const char *auto_tag = " auto_start=";
+        const char *auto_ptr = strstr(line, auto_tag);
         int parsed = sscanf(line + 7, "%lu %lu %lx", &job_id, &total, &crc);
         if (parsed == 3 && preroll_ptr != NULL) {
             preroll = strtoul(preroll_ptr + strlen(tag), NULL, 10);
         }
-        if (JOB_DIAG_LOG) {
-            osal_printk("[JOB_TX_BEGIN_PARSE] raw=\"%s\" job=%u total=%u crc=0x%04x preroll=%u found_preroll=%d\r\n",
-                        line, (unsigned int)job_id, (unsigned int)total, (unsigned int)crc,
-                        (unsigned int)preroll, (int)(preroll_ptr != NULL));
+        if (parsed == 3 && auto_ptr != NULL) {
+            auto_start = strtoul(auto_ptr + strlen(auto_tag), NULL, 10);
         }
-        if (parsed != 3 || total == 0) {
+        bool rx_auto_start = auto_start == 1U;
+        if (JOB_DIAG_LOG) {
+            osal_printk("[JOB_TX_BEGIN_PARSE] raw=\"%s\" job=%u total=%u crc=0x%04x "
+                        "preroll=%u found_preroll=%d auto_start=%u\r\n",
+                        line, (unsigned int)job_id, (unsigned int)total, (unsigned int)crc,
+                        (unsigned int)preroll, (int)(preroll_ptr != NULL),
+                        rx_auto_start ? 1U : 0U);
+        }
+        if (parsed != 3 || total == 0 || (auto_ptr != NULL && !rx_auto_start) ||
+            (rx_auto_start && (preroll == 0 || preroll >= total))) {
             host_sendf("@ERR bad_begin\r\n");
             return;
         }
         set_host_job_topology_active(true);
-        if (send_job_begin((uint32_t)job_id, (uint32_t)total, (uint16_t)crc) != ERRCODE_SUCC) {
+        if (send_job_begin((uint32_t)job_id, (uint32_t)total, (uint16_t)crc,
+                           rx_auto_start, (uint32_t)preroll) != ERRCODE_SUCC) {
             (void)abort_rx_and_clear_transaction("job-begin-fail");
             host_sendf("@ERR begin_failed\r\n");
             return;
@@ -1666,15 +1779,23 @@ static void handle_command_line(char *line)
         clear_async_data_retx();
         g_preroll_bytes = (uint32_t)preroll;
         g_preroll_signaled = false;
+        g_rx_auto_start_enabled = rx_auto_start;
         g_panel_local_job_state = JOB_STATE_RECEIVING_JOB;
         g_panel_local_exec_started = false;
         g_panel_local_last_error = JOB_STATUS_OK;
+        g_panel_local_terminal_confirmed = false;
+        memset(&g_panel_rx_status, 0, sizeof(g_panel_rx_status));
+        g_panel_rx_status_valid = false;
         if (JOB_DIAG_LOG) {
-            osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x preroll=%u\r\n",
+            osal_printk("[JOB_TX_DATA_MODE] begin job=%u size=%u crc=0x%04x preroll=%u "
+                        "auto_start=%u\r\n",
                         (unsigned int)g_job_id, (unsigned int)g_job_total, g_job_crc,
-                        (unsigned int)g_preroll_bytes);
+                        (unsigned int)g_preroll_bytes,
+                        g_rx_auto_start_enabled ? 1U : 0U);
         }
-        host_sendf("@DATA_READY job=%u size=%u\r\n", (unsigned int)g_job_id, (unsigned int)g_job_total);
+        host_sendf("@DATA_READY job=%u size=%u auto_start=%s\r\n",
+                   (unsigned int)g_job_id, (unsigned int)g_job_total,
+                   g_rx_auto_start_enabled ? "rx" : "legacy");
         tx_panel_publish_local_status(true);
         return;
     }

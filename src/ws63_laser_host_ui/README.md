@@ -77,8 +77,14 @@ The two upload actions are intentionally separate:
 
 - **Upload only** sends the complete job without a preroll request and stops at
   `JOB_READY`.
-- **Upload and execute** uses the configured preroll when it is non-zero; a zero
-  preroll uploads the complete job before sending `EXEC_START`.
+- **Upload and execute** sends an RX auto-start threshold when preroll is
+  non-zero, so DATA remains continuous while RX starts execution locally. A
+  zero preroll uploads the complete job before sending `EXEC_START`. Host keeps
+  the legacy preroll handshake only when TX does not advertise RX auto-start
+  support in `@DATA_READY`. For the RX auto-start path, the Host task display
+  switches to execution state as soon as the TX cumulative offset reaches the
+  preroll threshold, while the remaining DATA continues uploading in the
+  background.
 
 ## Requirements
 
