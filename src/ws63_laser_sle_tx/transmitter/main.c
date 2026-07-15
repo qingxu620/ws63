@@ -32,12 +32,24 @@
 
 _Static_assert(sizeof(job_data_payload_t) + JOB_TX_DATA_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
                "JOB_TX_DATA_CHUNK_MAX too large for SLE payload");
+_Static_assert(JOB_TX_UART_QUEUE_SIZE > 1U &&
+               (JOB_TX_UART_QUEUE_SIZE & (JOB_TX_UART_QUEUE_SIZE - 1U)) == 0U,
+               "JOB_TX_UART_QUEUE_SIZE must be a power of two");
 
 static uint8_t g_uart_rx_buf[JOB_TX_UART_RX_BUF_SIZE];
 static uart_buffer_config_t g_uart_cfg = {
     .rx_buffer = g_uart_rx_buf,
     .rx_buffer_size = JOB_TX_UART_RX_BUF_SIZE,
 };
+
+static uint8_t g_uart_queue[JOB_TX_UART_QUEUE_SIZE];
+static volatile uint32_t g_uart_queue_head = 0;
+static volatile uint32_t g_uart_queue_tail = 0;
+static volatile uint32_t g_uart_queue_drops = 0;
+static volatile bool g_uart_queue_error = false;
+static volatile bool g_uart_queue_discard = false;
+static osal_wait g_uart_queue_wait;
+static bool g_uart_queue_wait_ready = false;
 
 static osal_semaphore g_ack_sem;
 static bool g_ack_sem_ready = false;
@@ -76,6 +88,8 @@ static volatile uint8_t g_async_data_status = JOB_STATUS_OK;
 static volatile uint32_t g_async_data_credit = 0;
 static volatile bool g_async_data_error = false;
 static volatile uint32_t g_async_data_last_ack_ms = 0;
+static volatile uint32_t g_final_data_submit_ms = 0;
+static volatile bool g_final_data_ack_logged = false;
 static uint8_t g_async_retx_packet[SLE_JOB_PACKET_MAX_SIZE];
 static uint16_t g_async_retx_packet_len = 0;
 static uint16_t g_async_retx_seq = 0;
@@ -98,6 +112,66 @@ static bool g_panel_local_terminal_confirmed = false;
 
 static void tx_panel_publish_local_status(bool force);
 static void clear_async_data_retx(void);
+
+static bool uart_queue_pop(uint8_t *ch)
+{
+    if (ch == NULL) {
+        return false;
+    }
+
+    uint32_t lock = osal_irq_lock();
+    uint32_t tail = g_uart_queue_tail;
+    if (g_uart_queue_error || tail == g_uart_queue_head) {
+        osal_irq_restore(lock);
+        return false;
+    }
+
+    *ch = g_uart_queue[tail];
+    g_uart_queue_tail = (tail + 1U) & (JOB_TX_UART_QUEUE_SIZE - 1U);
+    osal_irq_restore(lock);
+    return true;
+}
+
+static int uart_queue_ready(const void *param)
+{
+    unused(param);
+    return g_uart_queue_error || g_uart_queue_head != g_uart_queue_tail;
+}
+
+static void uart_rx_callback(const void *buffer, uint16_t length, bool error)
+{
+    const uint8_t *data = (const uint8_t *)buffer;
+    bool wake = false;
+
+    if (error || (data == NULL && length > 0U)) {
+        g_uart_queue_error = true;
+        g_uart_queue_discard = true;
+        wake = true;
+    }
+
+    if (g_uart_queue_discard) {
+        g_uart_queue_drops += length;
+    } else {
+        wake = (g_uart_queue_head == g_uart_queue_tail);
+        for (uint16_t i = 0; data != NULL && i < length; i++) {
+            uint32_t head = g_uart_queue_head;
+            uint32_t next = (head + 1U) & (JOB_TX_UART_QUEUE_SIZE - 1U);
+            if (next == g_uart_queue_tail) {
+                g_uart_queue_drops += (uint32_t)(length - i);
+                g_uart_queue_error = true;
+                g_uart_queue_discard = true;
+                wake = true;
+                break;
+            }
+            g_uart_queue[head] = data[i];
+            g_uart_queue_head = next;
+        }
+    }
+
+    if (wake && g_uart_queue_wait_ready) {
+        osal_wait_wakeup(&g_uart_queue_wait);
+    }
+}
 
 static void set_host_job_topology_active(bool active)
 {
@@ -146,6 +220,8 @@ static void clear_local_job_state(void)
     g_async_data_credit = 0;
     g_async_data_error = false;
     g_async_data_last_ack_ms = 0;
+    g_final_data_submit_ms = 0;
+    g_final_data_ack_logged = false;
     clear_async_data_retx();
     g_panel_local_job_state = JOB_STATE_IDLE;
     g_panel_local_exec_started = false;
@@ -497,10 +573,23 @@ static bool tx_data_async_stream_enabled(void)
             JOB_TX_DATA_FAST_CUM_ACK_ENABLE);
 }
 
+static bool status_matches_active_data_job(const status_resp_payload_t *st)
+{
+    if (st == NULL || g_job_id == 0U || st->status != JOB_STATUS_OK ||
+        st->job_id != g_job_id || st->total_size != g_job_total ||
+        st->received_size > st->total_size) {
+        return false;
+    }
+
+    return st->state == JOB_STATE_RECEIVING_JOB ||
+           st->state == JOB_STATE_JOB_READY ||
+           st->state == JOB_STATE_EXECUTING ||
+           st->state == JOB_STATE_PAUSED;
+}
+
 static void update_async_data_progress_from_status(const status_resp_payload_t *st)
 {
-    if (st == NULL || !tx_data_async_stream_enabled() ||
-        g_job_id == 0U || st->job_id != g_job_id || st->status != JOB_STATUS_OK) {
+    if (!tx_data_async_stream_enabled() || !status_matches_active_data_job(st)) {
         return;
     }
 
@@ -609,41 +698,16 @@ static bool wait_async_data_window(uint16_t seq, uint32_t data_index,
     uint32_t start = (uint32_t)uapi_systick_get_ms();
     uint32_t last_host_busy_ms = 0;
     uint32_t last_probe_waited_ms = 0;
-    bool logged_wait = false;
     bool logged_stall = false;
 
     while (!g_async_data_error) {
         uint32_t ack_offset = g_async_data_ack_offset;
         uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
         if (outstanding <= window) {
-            uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
-            if (waited >= JOB_TX_TIMING_SLOW_MS || logged_wait) {
-                osal_printk("[TX_DATA_WIN_OK] t=%u seq=%u data_idx=%u off=%u len=%u "
-                            "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
-                            "credit=%u waited=%u\r\n",
-                            (unsigned int)uapi_systick_get_ms(), seq,
-                            (unsigned int)data_index, (unsigned int)offset,
-                            (unsigned int)len, (unsigned int)next_offset,
-                            (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
-                            (unsigned int)outstanding, (unsigned int)window,
-                            (unsigned int)g_async_data_credit, (unsigned int)waited);
-            }
             return true;
         }
 
         uint32_t waited = (uint32_t)uapi_systick_get_ms() - start;
-        if (!logged_wait && waited >= JOB_TX_TIMING_SLOW_MS) {
-            logged_wait = true;
-            osal_printk("[TX_DATA_WIN_WAIT] t=%u seq=%u data_idx=%u off=%u len=%u "
-                        "next=%u ack_off=%u ack_seq=%u outstanding=%u window=%u "
-                        "credit=%u waited=%u\r\n",
-                        (unsigned int)uapi_systick_get_ms(), seq,
-                        (unsigned int)data_index, (unsigned int)offset,
-                        (unsigned int)len, (unsigned int)next_offset,
-                        (unsigned int)ack_offset, (unsigned int)g_async_data_ack_seq,
-                        (unsigned int)outstanding, (unsigned int)window,
-                        (unsigned int)g_async_data_credit, (unsigned int)waited);
-        }
         if (waited >= TX_DATA_HOST_BUSY_PERIOD_MS &&
             (last_host_busy_ms == 0U ||
              (uint32_t)(waited - last_host_busy_ms) >= TX_DATA_HOST_BUSY_PERIOD_MS)) {
@@ -805,6 +869,15 @@ static bool handle_async_data_ack(const ack_payload_t *ack)
     g_async_data_credit = ack->credit;
     g_async_data_last_ack_ms = now_ms;
     note_async_data_ack_offset(g_async_data_ack_offset);
+
+    if (!g_final_data_ack_logged && g_final_data_submit_ms != 0U &&
+        g_job_total > 0U && ack->offset >= g_job_total) {
+        g_final_data_ack_logged = true;
+        osal_printk("[TX_FINAL_ACK_RX] seq=%u off=%u submit_to_ack_ms=%u\r\n",
+                    (unsigned int)ack->ack_seq,
+                    (unsigned int)ack->offset,
+                    (unsigned int)(now_ms - g_final_data_submit_ms));
+    }
 
     if ((ack_gap_ms >= JOB_TX_TIMING_SLOW_MS) ||
         (JOB_TX_TIMING_EVERY_PACKETS > 0U &&
@@ -1198,14 +1271,8 @@ static errcode_t send_job_end(void)
 
 static bool status_confirms_job_end(const status_resp_payload_t *st)
 {
-    if (st == NULL || st->status != JOB_STATUS_OK || st->job_id != g_job_id ||
-        st->total_size != g_job_total || st->received_size < g_job_total) {
-        return false;
-    }
-
-    return st->state == JOB_STATE_JOB_READY ||
-           st->state == JOB_STATE_EXECUTING ||
-           st->state == JOB_STATE_PAUSED;
+    return status_matches_active_data_job(st) &&
+           st->received_size >= g_job_total;
 }
 
 static bool stream_final_data_submitted(uint32_t target_offset)
@@ -1300,7 +1367,11 @@ static bool wait_async_data_drain(uint32_t target_offset)
         return true;
     }
 
-    uint32_t start = (uint32_t)uapi_systick_get_ms();
+    bool final_drain = target_offset == g_job_total &&
+                       g_job_total > 0U && g_job_offset >= g_job_total;
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    uint32_t start = (final_drain && g_final_data_submit_ms != 0U) ?
+                     g_final_data_submit_ms : now;
 #if !JOB_TX_DATA_FAST_CUM_ACK_ENABLE
     if (stream_final_data_submitted(target_offset)) {
         while (!g_async_data_error && g_async_data_ack_offset < target_offset) {
@@ -1337,12 +1408,25 @@ static bool wait_async_data_drain(uint32_t target_offset)
     while (!g_async_data_error && g_async_data_ack_offset < target_offset) {
         uint32_t elapsed = (uint32_t)uapi_systick_get_ms() - start;
 #if JOB_TX_DATA_WINDOW_STATUS_PROBE_ENABLE
-        if (elapsed >= JOB_TX_DATA_WINDOW_STALL_MS &&
-            (last_probe_elapsed_ms == 0U ||
-             (uint32_t)(elapsed - last_probe_elapsed_ms) >= JOB_TX_DATA_WINDOW_STALL_MS)) {
+        uint32_t first_probe_ms = final_drain ? JOB_TX_FINAL_DATA_STATUS_PROBE_MS :
+                                               JOB_TX_DATA_WINDOW_STALL_MS;
+        bool first_probe_due = last_probe_elapsed_ms == 0U && elapsed >= first_probe_ms;
+        bool repeat_probe_due = last_probe_elapsed_ms != 0U &&
+                                (uint32_t)(elapsed - last_probe_elapsed_ms) >=
+                                JOB_TX_DATA_WINDOW_STALL_MS;
+        if (first_probe_due || repeat_probe_due) {
             last_probe_elapsed_ms = elapsed;
-            (void)request_rx_status_sync("data_drain", 0, target_offset, NULL,
-                                         JOB_TX_DATA_STATUS_PROBE_WAIT_MS);
+            status_resp_payload_t st = {0};
+            bool got_status = request_rx_status_sync(final_drain ? "final_data" : "data_drain",
+                                                     0, target_offset, &st,
+                                                     JOB_TX_DATA_STATUS_PROBE_WAIT_MS);
+            if (final_drain && got_status && status_confirms_job_end(&st)) {
+                osal_printk("[TX_FINAL_DATA_STATUS_OK] target=%u rx=%u state=%u waited=%u\r\n",
+                            (unsigned int)target_offset,
+                            (unsigned int)st.received_size,
+                            (unsigned int)st.state,
+                            (unsigned int)((uint32_t)uapi_systick_get_ms() - start));
+            }
         }
 #endif
         if (elapsed >= JOB_TX_ASYNC_DATA_DRAIN_TIMEOUT_MS) {
@@ -1434,15 +1518,35 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
         }
 
         uint32_t t_send = (uint32_t)uapi_systick_get_ms();
-        errcode_t ret = sle_job_client_send_packet_ex(packet, packet_len, false);
+        bool final_packet = g_job_total > 0U && next_offset >= g_job_total;
+        if (final_packet) {
+            g_final_data_submit_ms = t_send;
+            g_final_data_ack_logged = false;
+        }
+        errcode_t ret = sle_job_client_send_packet_ex_timeout(
+            packet, packet_len, final_packet, final_packet ?
+            JOB_TX_FINAL_DATA_STATUS_PROBE_MS : JOB_SLE_WRITE_CFM_TIMEOUT_MS);
         uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
-        if (ret == ERRCODE_SLE_SUCCESS && !g_async_data_error) {
+        bool final_submit_uncertain = final_packet && ret == ERRCODE_SLE_TIMEOUT;
+        if ((ret == ERRCODE_SLE_SUCCESS || final_submit_uncertain) && !g_async_data_error) {
             uint32_t next_offset = dbg_off + dbg_dlen;
             uint32_t ack_offset = g_async_data_ack_offset;
             uint32_t outstanding = (next_offset > ack_offset) ? (next_offset - ack_offset) : 0U;
-            register_async_data_retx(packet, packet_len, seq, dbg_data_index,
-                                     dbg_off, dbg_dlen,
-                                     (uint32_t)uapi_systick_get_ms());
+            if (!final_packet) {
+                register_async_data_retx(packet, packet_len, seq, dbg_data_index,
+                                         dbg_off, dbg_dlen,
+                                         (uint32_t)uapi_systick_get_ms());
+            } else {
+                clear_async_data_retx();
+            }
+            if (final_packet) {
+                osal_printk("[TX_FINAL_DATA_WRITE_REQ] seq=%u off=%u len=%u ret=0x%x "
+                            "cfm_ms=%u uncertain=%u\r\n",
+                            (unsigned int)seq, (unsigned int)dbg_off,
+                            (unsigned int)dbg_dlen, (unsigned int)ret,
+                            (unsigned int)send_ms,
+                            (unsigned int)(final_submit_uncertain ? 1U : 0U));
+            }
             if (tx_should_log_timing(PKT_JOB_DATA, dbg_data_index, send_ms)) {
                 osal_printk("[TX_DATA_WIN] t=%u seq=%u data_idx=%u off=%u len=%u "
                             "next=%u send_ms=%u retry=%u ack_off=%u ack_seq=%u "
@@ -1461,6 +1565,9 @@ static errcode_t send_job_data_chunk_async(const void *payload, uint16_t payload
                             sle_job_client_get_status());
             }
             return ERRCODE_SUCC;
+        }
+        if (final_packet) {
+            g_final_data_submit_ms = 0;
         }
 
         osal_printk("[TX_DATA_ASYNC_SEND_FAIL] t=%u seq=%u data_idx=%u off=%u len=%u "
@@ -1954,6 +2061,18 @@ static errcode_t job_uart_init(void)
     errcode_t ret = uapi_uart_init(LASER_UART_BUS, &pin_cfg, &attr, NULL, &g_uart_cfg);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[JOB_TX] uart init failed: 0x%x\r\n", ret);
+        return ret;
+    }
+
+    ret = uapi_uart_register_rx_callback(
+        LASER_UART_BUS, UART_RX_CONDITION_FULL_OR_SUFFICIENT_DATA_OR_IDLE,
+        JOB_TX_UART_RX_BUF_SIZE, uart_rx_callback);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[JOB_TX] uart rx callback register failed: 0x%x\r\n", ret);
+    } else {
+        osal_printk("[JOB_TX_UART] rx=irq driver_buf=%u queue=%u\r\n",
+                    (unsigned int)JOB_TX_UART_RX_BUF_SIZE,
+                    (unsigned int)JOB_TX_UART_QUEUE_SIZE);
     }
     return ret;
 }
@@ -1967,8 +2086,40 @@ static int uart_rx_task(void *arg)
     uint32_t data_idle_last_log_ms = 0;
     uint32_t data_idle_last_busy_ms = 0;
     while (1) {
-        int32_t ret = uapi_uart_read(LASER_UART_BUS, &ch, 1, JOB_TX_UART_READ_TIMEOUT_MS);
-        if (ret <= 0) {
+        if (g_uart_queue_error) {
+            uint32_t lock = osal_irq_lock();
+            if (!g_uart_queue_error) {
+                osal_irq_restore(lock);
+                continue;
+            }
+            uint32_t drops = g_uart_queue_drops;
+            g_uart_queue_tail = g_uart_queue_head;
+            osal_irq_restore(lock);
+
+            if (g_data_mode || g_host_job_topology_active) {
+                errcode_t reset_ret = abort_rx_and_clear_transaction("uart-rx-error");
+                host_sendf("@ERR uart_rx_error drops=%u recovery=%s\r\n",
+                           (unsigned int)drops,
+                           (reset_ret == ERRCODE_SUCC) ? "safe" : "unconfirmed");
+            } else {
+                osal_printk("[JOB_TX_UART_RX_ERROR] drops=%u idle=1\r\n",
+                            (unsigned int)drops);
+            }
+
+            lock = osal_irq_lock();
+            g_uart_queue_error = false;
+            g_uart_queue_discard = false;
+            g_uart_queue_drops = 0;
+            g_uart_queue_tail = g_uart_queue_head;
+            osal_irq_restore(lock);
+            data_idle_ticks = 0;
+            data_idle_start_ms = 0;
+            data_idle_last_log_ms = 0;
+            data_idle_last_busy_ms = 0;
+            continue;
+        }
+
+        if (!uart_queue_pop(&ch)) {
             if (g_data_mode) {
                 uint32_t now = (uint32_t)uapi_systick_get_ms();
                 if (data_idle_start_ms == 0U) {
@@ -1983,7 +2134,8 @@ static int uart_rx_task(void *arg)
                     uint32_t ack_offset = g_async_data_ack_offset;
                     uint32_t outstanding = (g_job_offset > ack_offset) ?
                                            (g_job_offset - ack_offset) : 0U;
-                    if (idle_ms >= JOB_TX_DATA_UART_IDLE_LOG_MS &&
+                    if (g_panel_local_job_state != JOB_STATE_PAUSED &&
+                        idle_ms >= JOB_TX_DATA_UART_IDLE_LOG_MS &&
                         (data_idle_last_log_ms == 0U ||
                          (uint32_t)(now - data_idle_last_log_ms) >= JOB_TX_DATA_UART_IDLE_LOG_MS)) {
                         data_idle_last_log_ms = now;
@@ -2002,7 +2154,8 @@ static int uart_rx_task(void *arg)
                                     (unsigned int)(g_data_mode ? 1U : 0U),
                                     (unsigned int)(g_preroll_signaled ? 1U : 0U));
                     }
-                    if (idle_ms >= JOB_TX_DATA_UART_IDLE_BUSY_MS &&
+                    if (g_panel_local_job_state != JOB_STATE_PAUSED &&
+                        idle_ms >= JOB_TX_DATA_UART_IDLE_BUSY_MS &&
                         (data_idle_last_busy_ms == 0U ||
                          (uint32_t)(now - data_idle_last_busy_ms) >= JOB_TX_DATA_UART_IDLE_BUSY_MS)) {
                         data_idle_last_busy_ms = now;
@@ -2057,7 +2210,13 @@ static int uart_rx_task(void *arg)
             }
             sle_job_client_poll_connect();
             tx_panel_publish_local_status(false);
-            osal_msleep(1);
+            if (g_uart_queue_wait_ready) {
+                (void)osal_wait_timeout_uninterruptible(
+                    &g_uart_queue_wait, uart_queue_ready, NULL,
+                    JOB_TX_UART_READ_TIMEOUT_MS);
+            } else {
+                osal_msleep(1);
+            }
             continue;
         }
         data_idle_ticks = 0;
@@ -2155,6 +2314,12 @@ static void laser_sle_job_tx_entry(void)
         g_status_sem_ready = true;
     } else {
         osal_printk("[JOB_TX_BOOT] status sem init failed\r\n");
+    }
+    if (osal_wait_init(&g_uart_queue_wait) == OSAL_SUCCESS) {
+        g_uart_queue_wait_ready = true;
+    } else {
+        osal_printk("[JOB_TX_BOOT] uart queue wait init failed\r\n");
+        return;
     }
     if (job_uart_init() != ERRCODE_SUCC) {
         return;

@@ -55,12 +55,11 @@
 #define SLE_JOB_ADV_TX_POWER 20U
 #define SLE_JOB_CONNECTED_ANNOUNCE_ENABLE 1
 #define SLE_JOB_RX_WORK_QUEUE_SIZE 8U
-#define SLE_JOB_RX_CB_SLOW_MS 5U
-#define SLE_JOB_RX_WORK_SLOW_MS 20U
+#define SLE_JOB_RX_CB_SLOW_MS 50U
+#define SLE_JOB_RX_WORK_SLOW_MS 50U
 #define SLE_JOB_RX_WORK_USE_SEM 1
-#define SLE_JOB_RX_CB_GAP_SLOW_MS 250U
 #define SLE_JOB_NOTIFY_CALL_SLOW_MS 20U
-#define SLE_JOB_RX_SLOW_LOG_PERIOD_MS 2000U
+#define SLE_JOB_RX_SLOW_LOG_PERIOD_MS 10000U
 
 typedef struct {
     uint16_t conn_id;
@@ -113,7 +112,6 @@ static uint32_t g_rx_work_enqueued = 0;
 static uint32_t g_rx_work_dropped = 0;
 static uint8_t g_rx_work_max_used = 0;
 static uint32_t g_rx_cb_last_owner_ms = 0;
-static uint32_t g_rx_cb_data_index = 0;
 static uint32_t g_rx_cb_slow_count = 0;
 static uint32_t g_rx_cb_slow_last_log_ms = 0;
 static uint32_t g_rx_work_slow_count = 0;
@@ -240,12 +238,6 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
     uint32_t prev_cb_ms = g_rx_cb_last_owner_ms;
     uint32_t cb_gap_ms = (prev_cb_ms == 0U) ? 0U : (uint32_t)(cb_start_ms - prev_cb_ms);
     g_rx_cb_last_owner_ms = cb_start_ms;
-    uint32_t data_index = 0;
-    if (diag.is_data) {
-        g_rx_cb_data_index++;
-        data_index = g_rx_cb_data_index;
-    }
-
     uint32_t t_lock = (uint32_t)uapi_systick_get_ms();
     uint32_t pre_lock_ms = t_lock - cb_start_ms;
     osal_mutex_lock(&g_rx_work_mutex);
@@ -292,7 +284,6 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
 #endif
 
     uint32_t cb_ms = (uint32_t)uapi_systick_get_ms() - cb_start_ms;
-    bool cb_gap_slow = cb_gap_ms >= SLE_JOB_RX_CB_GAP_SLOW_MS;
     bool cb_phase_slow = cb_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          pre_lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
@@ -300,7 +291,7 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
                          unlock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          sem_up_ms >= SLE_JOB_RX_CB_SLOW_MS;
     bool queue_pressure = used > (SLE_JOB_RX_WORK_QUEUE_SIZE / 2U);
-    bool cb_slow = cb_gap_slow || cb_phase_slow || queue_pressure;
+    bool cb_slow = cb_phase_slow || queue_pressure;
     bool slow_log_due = false;
     if (cb_slow) {
         g_rx_cb_slow_count++;
@@ -312,51 +303,16 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
         }
     }
     if (slow_log_due) {
-        bool motion_busy = false;
-        uint16_t motion_q = 0;
-        unsigned long motion_enq = 0;
-        unsigned long motion_exec = 0;
-        unsigned long motion_late = 0;
-        unsigned long motion_missed = 0;
-        unsigned long motion_max_late = 0;
-        unsigned long motion_last_activity = 0;
-        motion_busy = sle_job_motion_executor_is_busy();
-        motion_q = sle_job_motion_executor_queue_depth();
-        motion_enq = sle_job_motion_executor_enqueued_count();
-        motion_exec = sle_job_motion_executor_executed_count();
-        motion_late = sle_job_motion_executor_late_sample_count();
-        motion_missed = sle_job_motion_executor_missed_sample_count();
-        motion_max_late = sle_job_motion_executor_max_sample_late_us();
-        motion_last_activity = sle_job_motion_executor_last_activity_ms();
-        osal_printk("[RX_CB_SLOW] count=%u conn=%u len=%u serial=%u cb_gap_ms=%u cb_ms=%u "
-                    "pre_lock_ms=%u lock_ms=%u copy_ms=%u unlock_ms=%u sem_up_ms=%u "
-                    "type=0x%02x seq=%u payload=%u header=%u data_idx=%u "
-                    "job=%u off=%u data_len=%u q_used=%u q_max=%u drops=%u wake=%u "
-                    "motion_busy=%u motion_q=%u motion_enq=%lu motion_exec=%lu "
-                    "motion_late=%lu motion_missed=%lu motion_max_late_us=%lu motion_last=%lu\r\n",
+        osal_printk("[RX_CB_SLOW] count=%u type=0x%02x seq=%u cb_ms=%u gap_ms=%u "
+                    "lock_ms=%u copy_ms=%u sem_ms=%u q=%u/%u drops=%u\r\n",
                     (unsigned int)g_rx_cb_slow_count,
-                    (unsigned int)conn_id, (unsigned int)len,
-                    (unsigned int)serial, (unsigned int)cb_gap_ms,
+                    (unsigned int)diag.type, (unsigned int)diag.seq,
                     (unsigned int)cb_ms,
-                    (unsigned int)pre_lock_ms, (unsigned int)lock_ms,
-                    (unsigned int)copy_ms, (unsigned int)unlock_ms,
+                    (unsigned int)cb_gap_ms, (unsigned int)lock_ms,
+                    (unsigned int)copy_ms,
                     (unsigned int)sem_up_ms,
-                    (unsigned int)diag.type,
-                    (unsigned int)diag.seq, (unsigned int)diag.payload_len,
-                    (unsigned int)(diag.header_ok ? 1U : 0U),
-                    (unsigned int)data_index, (unsigned int)diag.job_id,
-                    (unsigned int)diag.offset, (unsigned int)diag.data_len,
                     (unsigned int)used, (unsigned int)g_rx_work_max_used,
-                    (unsigned int)g_rx_work_dropped,
-                    (unsigned int)SLE_JOB_RX_WORK_USE_SEM,
-                    (unsigned int)(motion_busy ? 1U : 0U),
-                    (unsigned int)motion_q,
-                    motion_enq,
-                    motion_exec,
-                    motion_late,
-                    motion_missed,
-                    motion_max_late,
-                    motion_last_activity);
+                    (unsigned int)g_rx_work_dropped);
     }
     return true;
 }
@@ -464,7 +420,6 @@ static errcode_t rx_work_queue_start(void)
     g_rx_work_dropped = 0;
     g_rx_work_max_used = 0;
     g_rx_cb_last_owner_ms = 0;
-    g_rx_cb_data_index = 0;
     g_rx_cb_slow_count = 0;
     g_rx_cb_slow_last_log_ms = 0;
     g_rx_work_slow_count = 0;

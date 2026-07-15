@@ -37,7 +37,7 @@
 #define SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE 0
 #define SLE_JOB_SEND_SLOW_MS 50U
 #define SLE_JOB_EXEC_START_ACK_GRACE_MS 200U
-#define SLE_JOB_FAST_ACK_LOG_EVERY 32U
+#define SLE_JOB_FAST_ACK_LOG_EVERY 0U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -300,7 +300,8 @@ static void start_panel_status_task_once(void)
 #endif
 }
 
-static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status, const char *reason)
+static errcode_t send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq,
+                                      sle_job_status_t status, const char *reason)
 {
     sle_job_ack_payload_t ack = {0};
     ack.ack_type = ack_type;
@@ -352,11 +353,12 @@ static void send_ack_with_reason(uint8_t ack_type, uint16_t ack_seq, sle_job_sta
                     state_name(g_state), (reason != NULL) ? reason : "unspecified");
         g_nack_count++;
     }
+    return send_ret;
 }
 
 static void send_ack(uint8_t ack_type, uint16_t ack_seq, sle_job_status_t status)
 {
-    send_ack_with_reason(ack_type, ack_seq, status, NULL);
+    (void)send_ack_with_reason(ack_type, ack_seq, status, NULL);
 }
 
 static bool data_fast_cum_ack_active(const sle_job_packet_view_t *pkt)
@@ -398,10 +400,13 @@ static bool data_fast_cum_ack_due(uint32_t rx_offset, uint32_t total_size)
 
 static bool maybe_send_data_progress_ack(uint16_t seq, bool fast_active, bool force_ack,
                                          sle_job_status_t status, const char *fail_reason,
-                                         uint32_t *ack_ms_out)
+                                         uint32_t *ack_ms_out, errcode_t *ack_ret_out)
 {
     if (ack_ms_out != NULL) {
         *ack_ms_out = 0;
+    }
+    if (ack_ret_out != NULL) {
+        *ack_ret_out = ERRCODE_SLE_FAIL;
     }
 
     uint32_t rx_offset = sle_job_cache_received();
@@ -413,13 +418,16 @@ static bool maybe_send_data_progress_ack(uint16_t seq, bool fast_active, bool fo
         uint32_t now = (uint32_t)uapi_systick_get_ms();
         uint32_t age_ms = (old_ack_ms == 0U) ? 0U : (uint32_t)(now - old_ack_ms);
         uint32_t t_ack = now;
-        send_ack_with_reason(SLE_JOB_PKT_JOB_DATA, seq, status,
-                             (status == SLE_JOB_STATUS_OK) ?
-                             (fast_active ? (force_ack ? "force_cum" : "fast_cum") : NULL) :
-                             fail_reason);
+        errcode_t ack_ret = send_ack_with_reason(
+            SLE_JOB_PKT_JOB_DATA, seq, status,
+            (status == SLE_JOB_STATUS_OK) ?
+            (fast_active ? (force_ack ? "force_cum" : "fast_cum") : NULL) : fail_reason);
         uint32_t ack_ms = (uint32_t)uapi_systick_get_ms() - t_ack;
         if (ack_ms_out != NULL) {
             *ack_ms_out = ack_ms;
+        }
+        if (ack_ret_out != NULL) {
+            *ack_ret_out = ack_ret;
         }
         if (fast_active) {
             g_data_cum_ack_count++;
@@ -1320,8 +1328,18 @@ static void handle_job_data(const sle_job_packet_view_t *pkt)
     bool force_ack = (pkt->flags & SLE_JOB_PACKET_FLAG_DATA_FORCE_ACK) != 0U ||
                      auto_exec_due;
     uint32_t pre_ack_ms = (uint32_t)uapi_systick_get_ms() - t_start;
+    errcode_t ack_ret = ERRCODE_SLE_FAIL;
     bool ack_sent = maybe_send_data_progress_ack(pkt->seq, fast_ack, force_ack,
-                                                 st, "cache_write", &ack_ms);
+                                                  st, "cache_write", &ack_ms, &ack_ret);
+    if (st == SLE_JOB_STATUS_OK && sle_job_cache_total_size() > 0U &&
+        sle_job_cache_received() >= sle_job_cache_total_size()) {
+        osal_printk("[RX_FINAL_ACK_SUBMIT] seq=%u off=%u ret=0x%x ack_ms=%u committed=%u\r\n",
+                    (unsigned int)pkt->seq,
+                    (unsigned int)sle_job_cache_received(),
+                    (unsigned int)ack_ret,
+                    (unsigned int)ack_ms,
+                    (unsigned int)(g_data_cum_ack_offset >= sle_job_cache_received()));
+    }
     if (st == SLE_JOB_STATUS_OK) {
         bool auto_exec_ack_ready = !auto_exec_due ||
                                    (ack_sent &&

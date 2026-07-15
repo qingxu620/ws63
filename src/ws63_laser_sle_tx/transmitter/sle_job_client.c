@@ -715,7 +715,8 @@ errcode_t sle_job_client_init(void)
     return ret;
 }
 
-errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool force_write_req)
+errcode_t sle_job_client_send_packet_ex_timeout(const void *data, uint16_t len,
+                                                bool force_write_req, uint32_t cfm_timeout_ms)
 {
     if (data == NULL || len == 0 || !g_handles_ready || g_data_handle == 0) {
         return ERRCODE_SLE_FAIL;
@@ -767,9 +768,12 @@ errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool for
         return ret;
     }
     uint32_t t_cfm = (uint32_t)uapi_systick_get_ms();
-    if (osal_sem_down_timeout(&g_write_cfm_sem, JOB_SLE_WRITE_CFM_TIMEOUT_MS) != OSAL_SUCCESS) {
+    if (cfm_timeout_ms == 0U) {
+        cfm_timeout_ms = JOB_SLE_WRITE_CFM_TIMEOUT_MS;
+    }
+    if (osal_sem_down_timeout(&g_write_cfm_sem, cfm_timeout_ms) != OSAL_SUCCESS) {
         osal_printk("[JOB_SLE_WRITE_CFM_TIMEOUT] len=%u timeout=%u force_req=%u\r\n",
-                    (unsigned int)len, (unsigned int)JOB_SLE_WRITE_CFM_TIMEOUT_MS,
+                    (unsigned int)len, (unsigned int)cfm_timeout_ms,
                     (unsigned int)(force_write_req ? 1U : 0U));
         return ERRCODE_SLE_TIMEOUT;
     }
@@ -785,6 +789,12 @@ errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool for
                     (unsigned int)total_ms, (unsigned int)(force_write_req ? 1U : 0U));
     }
     return g_last_write_cfm_status;
+}
+
+errcode_t sle_job_client_send_packet_ex(const void *data, uint16_t len, bool force_write_req)
+{
+    return sle_job_client_send_packet_ex_timeout(data, len, force_write_req,
+                                                 JOB_SLE_WRITE_CFM_TIMEOUT_MS);
 }
 
 errcode_t sle_job_client_send_packet(const void *data, uint16_t len)
@@ -915,11 +925,7 @@ void sle_job_client_poll_link_diagnostics(void)
 {
     uint32_t now = (uint32_t)uapi_systick_get_ms();
     if (g_rx_rssi_log_pending) {
-        int8_t rssi = g_rx_rssi;
-        errcode_t status = g_rx_rssi_status;
         g_rx_rssi_log_pending = false;
-        osal_printk("[tx_link_rssi] conn=%u rssi=%d status=0x%x\r\n",
-                    (unsigned int)g_conn_id, (int)rssi, (unsigned int)status);
     }
     if (g_conn_id == SLE_CONN_INVALID || !g_handles_ready ||
         (g_rx_rssi_last_request_ms != 0U &&
