@@ -441,10 +441,11 @@ static void apply_status_resp_as(const status_resp_payload_t *st, uint8_t owner,
     uint8_t effective_mode = (st->status == JOB_STATUS_OK && st->state != JOB_STATE_ERROR) ?
         mode : PANEL_MODE_ERROR;
     panel_model_apply_rx_panel_status(owner, effective_mode, st->state, flags,
-                                      g_model.seq + 1U, st->job_id,
-                                      st->received_size, st->total_size,
-                                      st->executed_lines, st->cache_free,
-                                      st->status, 0U);
+                                       g_model.seq + 1U, st->job_id,
+                                       st->received_size, st->total_size,
+                                       st->executed_lines, st->completed_lines,
+                                       st->total_lines, st->cache_free,
+                                       st->status, 0U);
 }
 
 static void apply_panel_status(const panel_status_payload_t *st,
@@ -468,7 +469,8 @@ static void apply_panel_status(const panel_status_payload_t *st,
              PANEL_STATUS_FLAG_OWNER_LINK : PANEL_STATUS_FLAG_ANY_LINK;
     panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, flags, st->seq,
                                       st->job_id, st->received_size, st->total_size,
-                                      st->executed_lines, st->cache_free, st->last_error,
+                                      st->executed_lines, st->completed_lines,
+                                      st->total_lines, st->cache_free, st->last_error,
                                       st->tick_ms);
 }
 
@@ -671,7 +673,8 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
         g_client_connecting = false;
         if (!panel_transport_sle_tx_is_connected() && !panel_transport_sle_rx_is_connected()) {
             panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
-                                              0, g_model.seq + 1U, 0, 0, 0, 0, 0, 1, 0U);
+                                               0, g_model.seq + 1U, 0, 0, 0,
+                                               0, 0, 0, 0, 1, 0U);
         }
         start_seek_if_needed();
     }

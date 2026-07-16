@@ -215,6 +215,58 @@ int sle_job_cache_read_byte(void)
     return (int)ch;
 }
 
+int sle_job_cache_read_line(uint8_t *out, uint16_t out_size)
+{
+    if (out == NULL || out_size == 0U) {
+        return -1;
+    }
+    if (g_mutex_ready) {
+        osal_mutex_lock(&g_cache_mutex);
+    }
+
+    uint32_t available = g_data_len;
+    uint32_t count = 0;
+    while (count < available && count < out_size) {
+        uint32_t pos = (g_read_pos + count) % SLE_JOB_CACHE_SIZE;
+        uint8_t ch = g_cache[pos];
+        count++;
+        if (ch == '\r' || ch == '\n') {
+            break;
+        }
+    }
+
+    bool complete = count > 0U &&
+                    (g_cache[(g_read_pos + count - 1U) % SLE_JOB_CACHE_SIZE] == '\r' ||
+                     g_cache[(g_read_pos + count - 1U) % SLE_JOB_CACHE_SIZE] == '\n');
+    if (!complete && count == out_size) {
+        if (g_mutex_ready) {
+            osal_mutex_unlock(&g_cache_mutex);
+        }
+        return -2;
+    }
+    if (!complete && !g_all_received) {
+        count = 0;
+    }
+    if (count > 0U) {
+        uint32_t first = SLE_JOB_CACHE_SIZE - g_read_pos;
+        if (first > count) {
+            first = count;
+        }
+        memcpy(out, &g_cache[g_read_pos], first);
+        if (count > first) {
+            memcpy(out + first, &g_cache[0], count - first);
+        }
+        g_read_pos = (g_read_pos + count) % SLE_JOB_CACHE_SIZE;
+        g_data_len -= count;
+        g_consumed += count;
+    }
+
+    if (g_mutex_ready) {
+        osal_mutex_unlock(&g_cache_mutex);
+    }
+    return (int)count;
+}
+
 uint32_t sle_job_cache_size(void)
 {
     return SLE_JOB_CACHE_SIZE;

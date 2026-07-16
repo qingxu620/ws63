@@ -96,6 +96,15 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint32_t job_id;
+    uint32_t total_size;
+    uint16_t job_crc16;
+    uint16_t options;
+    uint32_t exec_preroll_bytes;
+    uint32_t total_lines;
+} sle_job_begin_stream_v2_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t job_id;
     uint32_t offset;
     uint16_t data_len;
     uint8_t data[];
@@ -147,6 +156,8 @@ typedef struct __attribute__((packed)) {
     uint32_t total_size;
     uint32_t cache_free;
     uint32_t executed_lines;
+    uint32_t completed_lines;
+    uint32_t total_lines;
 } sle_job_status_resp_payload_t;
 
 #define SLE_JOB_PANEL_OWNER_NONE   0U
@@ -179,6 +190,8 @@ typedef struct __attribute__((packed)) {
     uint32_t received_size;
     uint32_t total_size;
     uint32_t executed_lines;
+    uint32_t completed_lines;
+    uint32_t total_lines;
     uint32_t cache_free;
     uint32_t last_error;
     uint32_t tick_ms;
@@ -197,6 +210,7 @@ typedef struct __attribute__((packed)) {
 #define SLE_JOB_CMD_LASER_OFF 0x04
 #define SLE_JOB_CMD_SET_ORIGIN 0x05
 #define SLE_JOB_CMD_EMERGENCY_STOP 0x07
+#define SLE_JOB_CMD_PROGRESS_MARK 0x08
 
 #define SLE_JOB_FLAG_LASER_ON 0x01
 #define SLE_JOB_FLAG_ABS_MODE 0x02
@@ -209,6 +223,7 @@ typedef struct {
     float target_y;
     float feed_rate;
     uint16_t laser_pwr;
+    uint32_t completion_line;
 } sle_job_motion_cmd_t;
 
 #ifdef __cplusplus

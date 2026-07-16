@@ -19,6 +19,7 @@ from transports.sle_tx_transport import (
     UploadInterrupted,
     WaitResult,
     clamp_stream_preroll_request,
+    count_rx_executable_lines,
     crc16_ccitt,
     is_noisy_sdk_log,
     is_noisy_runtime_log,
@@ -44,6 +45,11 @@ class StatusParsingTests(unittest.TestCase):
             prepare_gcode_for_rx(b"G20\n")
         with self.assertRaisesRegex(RuntimeError, "行长度上限"):
             prepare_gcode_for_rx(b"X" * (GCODE_LINE_MAX_BYTES + 1))
+
+    def test_execution_line_count_matches_rx_semicolon_stripping(self) -> None:
+        gcode = b"; heading\nG90 ; absolute\n  ; note\nG1 X1\n\nM5 ; off\n"
+
+        self.assertEqual(count_rx_executable_lines(gcode), 3)
 
     def test_upload_only_rejects_jobs_larger_than_firmware_cache(self) -> None:
         client = SleJobSerialClient(lambda channel, message: None)
@@ -139,6 +145,9 @@ class StatusParsingTests(unittest.TestCase):
         self.assertTrue(is_noisy_runtime_log("APP|[SYS INFO] mem: used:1, free:2; log: drop/all[0/2], at_recv 0."))
         self.assertTrue(is_noisy_runtime_log("@ACK type=2 seq=0 status=0 offset=214"))
 
+        self.assertTrue(is_noisy_runtime_log("@STATUS state=3 status=0 job=1 rx=10 total=10 free=1 lines=1"))
+        self.assertTrue(is_noisy_runtime_log("@PROGRESS state=3 status=0 job=1 rx=10 total=10 free=1 lines=1"))
+        self.assertFalse(is_noisy_runtime_log("@STATUS state=6 status=9 job=1 rx=10 total=10 free=1 lines=1"))
         self.assertFalse(is_noisy_runtime_log("@NACK type=2 seq=0 status=9 offset=214"))
         self.assertFalse(is_noisy_runtime_log("[TX_TO] type=0x02 seq=1 retry=0"))
         self.assertFalse(is_noisy_runtime_log("[RX_SEND_TIMING] type=0x80 send_ms=300"))
@@ -440,7 +449,7 @@ class StatusParsingTests(unittest.TestCase):
             client.upload_job(1, payload, 2.0)
 
         self.assertEqual(resync_count, 2)
-        self.assertEqual(commands, [f"@BEGIN 1 {len(payload)} {crc16_ccitt(payload):04x}"])
+        self.assertEqual(commands, [f"@BEGIN 1 {len(payload)} {crc16_ccitt(payload):04x} lines=1"])
         self.assertEqual(writes, [bytes((TX_UART_RESYNC_BYTE,)), payload, bytes((TX_UART_RESYNC_BYTE,))])
 
     def test_upload_unknown_command_after_pause_points_to_old_tx_firmware(self) -> None:
@@ -585,7 +594,7 @@ class StatusParsingTests(unittest.TestCase):
             client.upload_job(1, b"M5\n", 1.0)
 
         self.assertEqual(writes, [bytes((TX_UART_RESYNC_BYTE,))] * 2)
-        self.assertEqual(commands, ["@BEGIN 1 3 c84a"])
+        self.assertEqual(commands, ["@BEGIN 1 3 c84a lines=1"])
         self.assertEqual(resync_count, 2)
 
     def test_resync_retries_until_ack(self) -> None:
@@ -611,7 +620,8 @@ class StatusParsingTests(unittest.TestCase):
 
     def test_parses_firmware_status_format(self) -> None:
         status = parse_rx_status(
-            "@STATUS state=3 status=0 job=7 rx=900 total=1200 free=300 lines=42"
+            "@STATUS state=3 status=0 job=7 rx=900 total=1200 free=300 lines=42 "
+            "completed=31 total_lines=100"
         )
 
         self.assertIsNotNone(status)
@@ -620,6 +630,31 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(status.received_size, 900)
         self.assertEqual(status.job_total, 1200)
         self.assertEqual(status.cache_free, 300)
+        self.assertEqual(status.executed_lines, 42)
+        self.assertEqual(status.completed_lines, 31)
+        self.assertEqual(status.total_lines, 100)
+
+    def test_parses_unsolicited_progress_event(self) -> None:
+        status = parse_rx_status(
+            "@PROGRESS state=3 status=0 job=7 rx=8400 total=74856 free=90000 "
+            "lines=470 completed=311 total_lines=4299"
+        )
+
+        self.assertIsNotNone(status)
+        self.assertEqual(status.job_id, 7)
+        self.assertEqual(status.received_size, 8400)
+        self.assertEqual(status.completed_lines, 311)
+        self.assertEqual(status.total_lines, 4299)
+
+    def test_parses_legacy_firmware_status_without_execution_progress(self) -> None:
+        status = parse_rx_status(
+            "@STATUS state=3 status=0 job=7 rx=900 total=1200 free=300 lines=42"
+        )
+
+        self.assertIsNotNone(status)
+        self.assertEqual(status.executed_lines, 42)
+        self.assertEqual(status.completed_lines, 0)
+        self.assertEqual(status.total_lines, 0)
 
     def test_parses_mockup_compatible_status_format(self) -> None:
         status = parse_rx_status(

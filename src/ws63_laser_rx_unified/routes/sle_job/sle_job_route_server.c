@@ -116,12 +116,66 @@ static uint32_t g_rx_cb_slow_count = 0;
 static uint32_t g_rx_cb_slow_last_log_ms = 0;
 static uint32_t g_rx_work_slow_count = 0;
 static uint32_t g_rx_work_slow_last_log_ms = 0;
+static volatile uint32_t g_rx_diag_callback_count = 0;
+static volatile uint32_t g_rx_diag_max_callback_gap_ms = 0;
+static volatile uint32_t g_rx_diag_max_callback_ms = 0;
+static volatile uint32_t g_rx_diag_work_count = 0;
+static volatile uint32_t g_rx_diag_max_callback_to_work_ms = 0;
+static volatile uint32_t g_rx_diag_max_work_wait_ms = 0;
+static volatile uint32_t g_rx_diag_max_work_process_ms = 0;
+static volatile uint32_t g_rx_diag_notify_count = 0;
+static volatile uint32_t g_rx_diag_notify_fail_count = 0;
+static volatile uint32_t g_rx_diag_notify_slow_count = 0;
+static volatile uint32_t g_rx_diag_max_notify_ms = 0;
 static sle_job_rx_work_item_t g_rx_work_queue[SLE_JOB_RX_WORK_QUEUE_SIZE];
 
 static uint8_t sle_uuid_base[] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
+void sle_job_route_server_reset_diag(void)
+{
+    g_rx_diag_callback_count = 0;
+    g_rx_diag_max_callback_gap_ms = 0;
+    g_rx_diag_max_callback_ms = 0;
+    g_rx_diag_work_count = 0;
+    g_rx_diag_max_callback_to_work_ms = 0;
+    g_rx_diag_max_work_wait_ms = 0;
+    g_rx_diag_max_work_process_ms = 0;
+    g_rx_diag_notify_count = 0;
+    g_rx_diag_notify_fail_count = 0;
+    g_rx_diag_notify_slow_count = 0;
+    g_rx_diag_max_notify_ms = 0;
+    g_rx_work_dropped = 0;
+    g_rx_work_max_used = 0;
+    g_rx_cb_last_owner_ms = 0;
+    g_rx_cb_slow_count = 0;
+    g_rx_work_slow_count = 0;
+}
+
+void sle_job_route_server_get_diag(sle_job_route_diag_t *diag)
+{
+    if (diag == NULL) {
+        return;
+    }
+
+    diag->callback_count = g_rx_diag_callback_count;
+    diag->callback_slow_count = g_rx_cb_slow_count;
+    diag->max_callback_gap_ms = g_rx_diag_max_callback_gap_ms;
+    diag->max_callback_ms = g_rx_diag_max_callback_ms;
+    diag->work_count = g_rx_diag_work_count;
+    diag->work_slow_count = g_rx_work_slow_count;
+    diag->max_callback_to_work_ms = g_rx_diag_max_callback_to_work_ms;
+    diag->max_work_wait_ms = g_rx_diag_max_work_wait_ms;
+    diag->max_work_process_ms = g_rx_diag_max_work_process_ms;
+    diag->notify_count = g_rx_diag_notify_count;
+    diag->notify_fail_count = g_rx_diag_notify_fail_count;
+    diag->notify_slow_count = g_rx_diag_notify_slow_count;
+    diag->max_notify_ms = g_rx_diag_max_notify_ms;
+    diag->work_dropped = g_rx_work_dropped;
+    diag->work_max_used = g_rx_work_max_used;
+}
 
 static void conn_table_reset(void)
 {
@@ -238,6 +292,10 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
     uint32_t prev_cb_ms = g_rx_cb_last_owner_ms;
     uint32_t cb_gap_ms = (prev_cb_ms == 0U) ? 0U : (uint32_t)(cb_start_ms - prev_cb_ms);
     g_rx_cb_last_owner_ms = cb_start_ms;
+    g_rx_diag_callback_count++;
+    if (cb_gap_ms > g_rx_diag_max_callback_gap_ms) {
+        g_rx_diag_max_callback_gap_ms = cb_gap_ms;
+    }
     uint32_t t_lock = (uint32_t)uapi_systick_get_ms();
     uint32_t pre_lock_ms = t_lock - cb_start_ms;
     osal_mutex_lock(&g_rx_work_mutex);
@@ -247,6 +305,9 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
     if (next == g_rx_work_tail) {
         g_rx_work_dropped++;
         uint8_t used = rx_work_queue_used_locked();
+        if (used > g_rx_work_max_used) {
+            g_rx_work_max_used = used;
+        }
         osal_mutex_unlock(&g_rx_work_mutex);
         osal_printk("[RX_CB_DROP] conn=%u len=%u used=%u drops=%u lock_ms=%u cb_ms=%u\r\n",
                     (unsigned int)conn_id, (unsigned int)len, (unsigned int)used,
@@ -284,6 +345,9 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
 #endif
 
     uint32_t cb_ms = (uint32_t)uapi_systick_get_ms() - cb_start_ms;
+    if (cb_ms > g_rx_diag_max_callback_ms) {
+        g_rx_diag_max_callback_ms = cb_ms;
+    }
     bool cb_phase_slow = cb_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          pre_lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
@@ -356,6 +420,13 @@ static int rx_work_task(void *arg)
         uint32_t wait_ms = t_start - item.enqueue_ms;
         uint32_t cb_to_work_ms = t_start - item.cb_start_ms;
         uint32_t ready_to_work_ms = t_start - item.ready_ms;
+        g_rx_diag_work_count++;
+        if (wait_ms > g_rx_diag_max_work_wait_ms) {
+            g_rx_diag_max_work_wait_ms = wait_ms;
+        }
+        if (cb_to_work_ms > g_rx_diag_max_callback_to_work_ms) {
+            g_rx_diag_max_callback_to_work_ms = cb_to_work_ms;
+        }
         sle_job_rx_cb_diag_t diag = rx_cb_diag_parse_packet(item.data, item.len);
         if (item.conn_id == g_owner_conn_id && g_packet_cb != NULL) {
             g_packet_cb(item.conn_id, item.data, item.len);
@@ -366,6 +437,9 @@ static int rx_work_task(void *arg)
                         (unsigned int)(g_packet_cb != NULL));
         }
         uint32_t proc_ms = (uint32_t)uapi_systick_get_ms() - t_start;
+        if (proc_ms > g_rx_diag_max_work_process_ms) {
+            g_rx_diag_max_work_process_ms = proc_ms;
+        }
         bool work_slow = wait_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
                          proc_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
                          cb_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
@@ -424,6 +498,7 @@ static errcode_t rx_work_queue_start(void)
     g_rx_cb_slow_last_log_ms = 0;
     g_rx_work_slow_count = 0;
     g_rx_work_slow_last_log_ms = 0;
+    sle_job_route_server_reset_diag();
     osal_mutex_unlock(&g_rx_work_mutex);
 
     if (g_rx_work_task_started) {
@@ -1112,6 +1187,16 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
     uint32_t t_notify = (uint32_t)uapi_systick_get_ms();
     errcode_t ret = ssaps_notify_indicate(g_server_id, g_owner_conn_id, &param);
     uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_notify;
+    g_rx_diag_notify_count++;
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        g_rx_diag_notify_fail_count++;
+    }
+    if (call_ms >= SLE_JOB_NOTIFY_CALL_SLOW_MS) {
+        g_rx_diag_notify_slow_count++;
+    }
+    if (call_ms > g_rx_diag_max_notify_ms) {
+        g_rx_diag_max_notify_ms = call_ms;
+    }
     if ((ack_packet && ack_status != SLE_JOB_STATUS_OK) ||
         ret != ERRCODE_SLE_SUCCESS || call_ms >= SLE_JOB_NOTIFY_CALL_SLOW_MS) {
         osal_printk("[RX_NOTIFY_TRACE] t=%u pkt=0x%02x pkt_seq=%u ack=%u ack_type=0x%02x "

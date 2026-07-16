@@ -105,6 +105,15 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint32_t job_id;
+    uint32_t total_size;
+    uint16_t job_crc16;
+    uint16_t options;
+    uint32_t exec_preroll_bytes;
+    uint32_t total_lines;
+} job_begin_stream_v2_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t job_id;
     uint32_t offset;
     uint16_t data_len;
     uint8_t data[];
@@ -156,6 +165,8 @@ typedef struct __attribute__((packed)) {
     uint32_t total_size;
     uint32_t cache_free;
     uint32_t executed_lines;
+    uint32_t completed_lines;
+    uint32_t total_lines;
 } status_resp_payload_t;
 
 #define PANEL_OWNER_NONE   0U
@@ -189,6 +200,8 @@ typedef struct __attribute__((packed)) {
     uint32_t received_size;
     uint32_t total_size;
     uint32_t executed_lines;
+    uint32_t completed_lines;
+    uint32_t total_lines;
     uint32_t cache_free;
     uint32_t last_error;
     uint32_t tick_ms;

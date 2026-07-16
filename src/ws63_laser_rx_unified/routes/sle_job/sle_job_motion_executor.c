@@ -7,6 +7,8 @@
 #include "dac8563.h"
 #include "laser_ctrl.h"
 #include "soc_osal.h"
+#include "timer.h"
+#include "chip_core_irq.h"
 #include "systick.h"
 #include "tcxo.h"
 #include "watchdog.h"
@@ -29,6 +31,7 @@ static volatile bool g_worker_started = false;
 static bool g_output_armed = false;
 static volatile unsigned long g_enqueued_count = 0;
 static volatile unsigned long g_executed_count = 0;
+static volatile uint32_t g_completed_line = 0;
 static volatile unsigned long g_late_sample_count = 0;
 static volatile unsigned long g_missed_sample_count = 0;
 static volatile unsigned long g_motion_segment_count = 0;
@@ -38,6 +41,45 @@ static volatile unsigned long g_arm_count = 0;
 static volatile unsigned long g_move_count = 0;
 static volatile unsigned long g_dac_write_count = 0;
 static volatile unsigned long g_dac_skip_count = 0;
+static volatile unsigned long g_wait_call_count = 0;
+static volatile unsigned long g_sched_relief_count = 0;
+static uint32_t g_sched_relief_samples = 0;
+static volatile unsigned long g_timer_wait_count = 0;
+static volatile unsigned long g_timer_fail_count = 0;
+static volatile uint32_t g_timer_wait_max_us = 0;
+static volatile uint32_t g_timer_wake_late_max_us = 0;
+static volatile unsigned long g_short_clamped_count = 0;
+static volatile unsigned long g_deadline_catchup_count = 0;
+static volatile uint64_t g_planned_motion_us = 0;
+static volatile uint64_t g_actual_motion_us = 0;
+static volatile uint64_t g_short_clamped_added_us = 0;
+static volatile uint64_t g_deadline_late_total_us = 0;
+static volatile uint32_t g_late_histogram[6] = {0};
+static volatile uint64_t g_timer_start_total_us = 0;
+static volatile uint64_t g_timer_block_total_us = 0;
+static volatile uint64_t g_timer_wake_late_total_us = 0;
+static volatile uint32_t g_timer_wake_late_histogram[6] = {0};
+static volatile unsigned long g_deadline_reset_count = 0;
+static volatile uint64_t g_deadline_reset_discarded_us = 0;
+static volatile uint16_t g_queue_min_depth = UINT16_MAX;
+static volatile uint16_t g_queue_max_depth = 0;
+static volatile uint64_t g_queue_depth_sum = 0;
+static volatile uint32_t g_queue_depth_samples = 0;
+static volatile unsigned long g_queue_empty_count = 0;
+static timer_handle_t g_motion_timer = NULL;
+static osal_semaphore g_motion_timer_sem;
+static volatile bool g_motion_timer_waiting = false;
+static bool g_motion_timer_ready = false;
+static volatile bool g_motion_timer_fault = false;
+static volatile uint64_t g_dac_total_us = 0;
+static volatile uint64_t g_wait_total_us = 0;
+static volatile uint32_t g_dac_max_us = 0;
+static volatile uint32_t g_wait_max_us = 0;
+static volatile uint32_t g_min_planned_step_us = 0;
+static volatile uint32_t g_max_planned_step_us = 0;
+static volatile uint32_t g_min_dac_gap_us = 0;
+static volatile uint32_t g_max_dac_gap_us = 0;
+static uint64_t g_last_dac_start_us = 0;
 static uint16_t g_last_dac_x = 0;
 static uint16_t g_last_dac_y = 0;
 static bool g_last_dac_valid = false;
@@ -47,6 +89,8 @@ static uint32_t g_last_move_slow_log_ms = 0;
 #endif
 
 #define SLE_JOB_MOTION_LATE_WARN_US 100U
+
+static uint16_t motion_queue_used_locked(void);
 
 static inline double clamp_axis(double value, double min_value, double max_value)
 {
@@ -71,26 +115,52 @@ static inline uint16_t mm_to_dac(double mm, double scale)
     return (uint16_t)(value + 0.5);
 }
 
-static void write_current_position(bool force)
+static bool write_current_position(bool force)
 {
     uint16_t x = mm_to_dac(g_current_x, SLE_JOB_BEILV_X);
     uint16_t y = mm_to_dac(g_current_y, SLE_JOB_BEILV_Y);
     if (!force && g_last_dac_valid && x == g_last_dac_x && y == g_last_dac_y) {
         g_dac_skip_count++;
-        return;
+        return true;
     }
 
-    dac8563_write_xy(x, y);
+    uint64_t start_us = uapi_tcxo_get_us();
+    if (g_last_dac_start_us != 0U) {
+        uint64_t gap_us = start_us - g_last_dac_start_us;
+        uint32_t gap = (gap_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)gap_us;
+        if (g_min_dac_gap_us == 0U || gap < g_min_dac_gap_us) {
+            g_min_dac_gap_us = gap;
+        }
+        if (gap > g_max_dac_gap_us) {
+            g_max_dac_gap_us = gap;
+        }
+    }
+    g_last_dac_start_us = start_us;
+    errcode_t ret = dac8563_write_xy(x, y);
+    uint64_t elapsed_us = uapi_tcxo_get_us() - start_us;
+    g_dac_total_us += elapsed_us;
+    if (elapsed_us > g_dac_max_us) {
+        g_dac_max_us = (elapsed_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)elapsed_us;
+    }
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[JOB_MOTION] DAC write failed ret=0x%x, abort motion\r\n", ret);
+        laser_force_off();
+        g_abort_requested = true;
+        g_output_armed = false;
+        g_last_dac_valid = false;
+        return false;
+    }
     g_last_dac_x = x;
     g_last_dac_y = y;
     g_last_dac_valid = true;
     g_dac_write_count++;
+    return true;
 }
 
-static void arm_output_if_needed(void)
+static bool arm_output_if_needed(void)
 {
     if (g_output_armed) {
-        return;
+        return true;
     }
 
     uint32_t start_ms = (uint32_t)uapi_systick_get_ms();
@@ -99,14 +169,22 @@ static void arm_output_if_needed(void)
 
 #if SLE_JOB_DAC_RECOVER_ON_ARM
     uint32_t recover_start_ms = (uint32_t)uapi_systick_get_ms();
-    dac8563_recover();
+    errcode_t recover_ret = dac8563_recover();
     uint32_t recover_ms = (uint32_t)uapi_systick_get_ms() - recover_start_ms;
+    if (recover_ret != ERRCODE_SUCC) {
+        osal_printk("[JOB_MOTION] DAC recover failed ret=0x%x\r\n", recover_ret);
+        laser_force_off();
+        g_abort_requested = true;
+        return false;
+    }
 #else
     uint32_t recover_ms = 0;
 #endif
 
     uint32_t pos_start_ms = (uint32_t)uapi_systick_get_ms();
-    write_current_position(true);
+    if (!write_current_position(true)) {
+        return false;
+    }
     uint32_t pos_ms = (uint32_t)uapi_systick_get_ms() - pos_start_ms;
     g_output_armed = true;
     g_arm_count++;
@@ -124,6 +202,7 @@ static void arm_output_if_needed(void)
                     (int)(g_current_x * 1000.0),
                     (int)(g_current_y * 1000.0));
     }
+    return true;
 }
 
 static void update_activity(void)
@@ -140,27 +219,120 @@ static void kick_watchdog_periodic(uint64_t now_us, bool force)
     }
 }
 
+static void record_wait_duration(uint64_t start_us, uint64_t end_us)
+{
+    uint64_t elapsed_us = end_us - start_us;
+    g_wait_call_count++;
+    g_wait_total_us += elapsed_us;
+    if (elapsed_us > g_wait_max_us) {
+        g_wait_max_us = (elapsed_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)elapsed_us;
+    }
+}
+
+static void motion_timer_callback(uintptr_t data)
+{
+    (void)data;
+    g_motion_timer_waiting = false;
+    osal_sem_up(&g_motion_timer_sem);
+}
+
+static bool wait_with_motion_timer(uint64_t target_us, uint64_t now_us)
+{
+    uint64_t remain_us = target_us - now_us;
+    if (!g_motion_timer_ready || remain_us <= SLE_JOB_MOTION_TIMER_THRESHOLD_US) {
+        return false;
+    }
+
+    uint32_t timer_us = (uint32_t)(remain_us - SLE_JOB_MOTION_TIMER_TAIL_US);
+    g_motion_timer_waiting = true;
+    uint64_t start_begin_us = uapi_tcxo_get_us();
+    errcode_t ret = uapi_timer_start(g_motion_timer, timer_us, motion_timer_callback, 0);
+    g_timer_start_total_us += uapi_tcxo_get_us() - start_begin_us;
+    if (ret != ERRCODE_SUCC) {
+        g_motion_timer_waiting = false;
+        g_timer_fail_count++;
+        g_motion_timer_fault = true;
+        osal_printk("[JOB_MOTION_TIMER_FAIL] op=start ret=0x%x wait_us=%u\r\n",
+                    (unsigned int)ret, (unsigned int)timer_us);
+        laser_force_off();
+        g_abort_requested = true;
+        return true;
+    }
+
+    g_timer_wait_count++;
+    if (timer_us > g_timer_wait_max_us) {
+        g_timer_wait_max_us = timer_us;
+    }
+    uint32_t timeout_ms = (timer_us + 999U) / 1000U + SLE_JOB_MOTION_TIMER_TIMEOUT_MARGIN_MS;
+    uint64_t block_begin_us = uapi_tcxo_get_us();
+    int sem_ret = osal_sem_down_timeout(&g_motion_timer_sem, timeout_ms);
+    uint64_t wake_us = uapi_tcxo_get_us();
+    g_timer_block_total_us += wake_us - block_begin_us;
+    if (sem_ret != OSAL_SUCCESS) {
+        (void)uapi_timer_stop(g_motion_timer);
+        g_motion_timer_waiting = false;
+        g_timer_fail_count++;
+        g_motion_timer_fault = true;
+        osal_printk("[JOB_MOTION_TIMER_FAIL] op=wait wait_us=%u timeout_ms=%u\r\n",
+                    (unsigned int)timer_us, (unsigned int)timeout_ms);
+        laser_force_off();
+        g_abort_requested = true;
+        return true;
+    }
+
+    uint64_t timer_target_us = target_us - SLE_JOB_MOTION_TIMER_TAIL_US;
+    if (wake_us > timer_target_us) {
+        uint64_t late_us = wake_us - timer_target_us;
+        g_timer_wake_late_total_us += late_us;
+        if (late_us < 100U) {
+            g_timer_wake_late_histogram[0]++;
+        } else if (late_us < 500U) {
+            g_timer_wake_late_histogram[1]++;
+        } else if (late_us < 1000U) {
+            g_timer_wake_late_histogram[2]++;
+        } else if (late_us < 3000U) {
+            g_timer_wake_late_histogram[3]++;
+        } else if (late_us < 10000U) {
+            g_timer_wake_late_histogram[4]++;
+        } else {
+            g_timer_wake_late_histogram[5]++;
+        }
+        if (late_us > g_timer_wake_late_max_us) {
+            g_timer_wake_late_max_us = (late_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)late_us;
+        }
+    }
+    return true;
+}
+
 static bool delay_until_us_interruptible(uint64_t target_us)
 {
+    uint64_t start_us = uapi_tcxo_get_us();
+    uint64_t now_us = start_us;
     while (!g_abort_requested) {
-        uint64_t now_us = uapi_tcxo_get_us();
         kick_watchdog_periodic(now_us, false);
         if (now_us >= target_us) {
+            record_wait_duration(start_us, now_us);
             return true;
         }
 
         uint64_t remain_us = target_us - now_us;
+        if (wait_with_motion_timer(target_us, now_us)) {
+            now_us = uapi_tcxo_get_us();
+            continue;
+        }
         uint32_t chunk_us = (remain_us > SLE_JOB_MOTION_DELAY_CHUNK_US) ?
                             SLE_JOB_MOTION_DELAY_CHUNK_US : (uint32_t)remain_us;
         if (g_abort_requested) {
-            return false;
+            break;
         }
         if (chunk_us > 0U) {
             uapi_tcxo_delay_us(chunk_us);
             osal_yield();
         }
+        now_us = uapi_tcxo_get_us();
     }
 
+    record_wait_duration(start_us, uapi_tcxo_get_us());
     return false;
 }
 
@@ -174,6 +346,20 @@ static int ceil_step_count(double value)
 
 static void record_late_sample(uint64_t late_us)
 {
+    g_deadline_late_total_us += late_us;
+    if (late_us < 100U) {
+        g_late_histogram[0]++;
+    } else if (late_us < 500U) {
+        g_late_histogram[1]++;
+    } else if (late_us < 1000U) {
+        g_late_histogram[2]++;
+    } else if (late_us < 3000U) {
+        g_late_histogram[3]++;
+    } else if (late_us < 10000U) {
+        g_late_histogram[4]++;
+    } else {
+        g_late_histogram[5]++;
+    }
     if (late_us > (uint64_t)g_max_sample_late_us) {
         g_max_sample_late_us = (unsigned long)late_us;
     }
@@ -184,11 +370,11 @@ static void record_late_sample(uint64_t late_us)
 
 static void perform_move(double target_x, double target_y, double feed_rate_mm_min, bool laser_marking)
 {
+    uint64_t actual_start_us = uapi_tcxo_get_us();
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
     uint32_t move_start_ms = (uint32_t)uapi_systick_get_ms();
 #endif
     g_motion_active = true;
-    g_abort_requested = false;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 
     target_x = clamp_axis(target_x, SLE_JOB_GALVO_X_MIN_MM, SLE_JOB_GALVO_X_MAX_MM);
@@ -203,7 +389,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (distance <= 0.000001) {
         g_current_x = target_x;
         g_current_y = target_y;
-        write_current_position(false);
+        (void)write_current_position(false);
         update_activity();
         kick_watchdog_periodic(uapi_tcxo_get_us(), true);
         g_motion_active = false;
@@ -216,6 +402,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     }
 
     double duration_us = (distance / feed_sec) * 1000000.0;
+    double unclamped_duration_us = duration_us;
     g_motion_segment_count++;
     bool short_segment = (distance <= SLE_JOB_STEP_NUM || duration_us <= (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
     if (short_segment) {
@@ -223,7 +410,10 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     }
     if (laser_marking && short_segment && duration_us < (double)SLE_JOB_MOTION_MIN_MARK_SEGMENT_US) {
         duration_us = (double)SLE_JOB_MOTION_MIN_MARK_SEGMENT_US;
+        g_short_clamped_count++;
+        g_short_clamped_added_us += (uint64_t)(duration_us - unclamped_duration_us + 0.5);
     }
+    g_planned_motion_us += (uint64_t)(duration_us + 0.5);
 
     int time_steps = ceil_step_count(duration_us / (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
     int space_steps = ceil_step_count(distance / SLE_JOB_STEP_NUM);
@@ -232,8 +422,17 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (step_time_us < 1.0) {
         step_time_us = 1.0;
     }
+    uint32_t planned_step_us = (step_time_us >= (double)UINT32_MAX) ?
+                               UINT32_MAX : (uint32_t)(step_time_us + 0.5);
+    if (g_min_planned_step_us == 0U || planned_step_us < g_min_planned_step_us) {
+        g_min_planned_step_us = planned_step_us;
+    }
+    if (planned_step_us > g_max_planned_step_us) {
+        g_max_planned_step_us = planned_step_us;
+    }
 
     double next_step_us = (double)uapi_tcxo_get_us();
+    uint32_t catchup_budget = SLE_JOB_MOTION_CATCHUP_MAX_STEPS;
     for (int i = 1; i <= steps; i++) {
         if (g_abort_requested) {
             break;
@@ -252,14 +451,39 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
             if (late_us >= SLE_JOB_MOTION_LATE_WARN_US) {
                 unsigned long slipped = (unsigned long)((double)late_us / step_time_us);
                 g_missed_sample_count += (slipped > 0UL) ? slipped : 1UL;
-                next_step_us = (double)now_us;
+                if (catchup_budget > 0U && slipped > 0UL) {
+                    double reset_us = (double)now_us - step_time_us;
+                    if (reset_us > next_step_us) {
+                        g_deadline_reset_discarded_us +=
+                            (uint64_t)(reset_us - next_step_us + 0.5);
+                    }
+                    next_step_us = reset_us;
+                    catchup_budget--;
+                    g_deadline_catchup_count++;
+                } else {
+                    g_deadline_reset_discarded_us +=
+                        (uint64_t)((double)now_us - next_step_us + 0.5);
+                    next_step_us = (double)now_us;
+                }
+                g_deadline_reset_count++;
             }
         }
 
         double fraction = (double)i / (double)steps;
         g_current_x = start_x + dx * fraction;
         g_current_y = start_y + dy * fraction;
-        write_current_position(false);
+        if (!write_current_position(false)) {
+            break;
+        }
+
+#if SLE_JOB_MOTION_SCHED_RELIEF_INTERVAL > 0U && SLE_JOB_MOTION_SCHED_RELIEF_MS > 0U
+        g_sched_relief_samples++;
+        if (g_sched_relief_samples >= SLE_JOB_MOTION_SCHED_RELIEF_INTERVAL) {
+            g_sched_relief_samples = 0;
+            g_sched_relief_count++;
+            osal_msleep(SLE_JOB_MOTION_SCHED_RELIEF_MS);
+        }
+#endif
 
         kick_watchdog_periodic(now_us, false);
         if ((i % 200) == 0) {
@@ -270,13 +494,13 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     if (!g_abort_requested) {
         g_current_x = target_x;
         g_current_y = target_y;
-        write_current_position(false);
+        (void)write_current_position(false);
     }
 
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
-    g_abort_requested = false;
     g_motion_active = false;
+    g_actual_motion_us += uapi_tcxo_get_us() - actual_start_us;
 
     g_move_count++;
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
@@ -308,6 +532,7 @@ void sle_job_motion_executor_reset_stats(void)
 {
     g_enqueued_count = 0;
     g_executed_count = 0;
+    g_completed_line = 0;
     g_late_sample_count = 0;
     g_missed_sample_count = 0;
     g_motion_segment_count = 0;
@@ -317,6 +542,40 @@ void sle_job_motion_executor_reset_stats(void)
     g_move_count = 0;
     g_dac_write_count = 0;
     g_dac_skip_count = 0;
+    g_wait_call_count = 0;
+    g_sched_relief_count = 0;
+    g_sched_relief_samples = 0;
+    g_timer_wait_count = 0;
+    g_timer_fail_count = 0;
+    g_timer_wait_max_us = 0;
+    g_timer_wake_late_max_us = 0;
+    g_short_clamped_count = 0;
+    g_deadline_catchup_count = 0;
+    g_planned_motion_us = 0;
+    g_actual_motion_us = 0;
+    g_short_clamped_added_us = 0;
+    g_deadline_late_total_us = 0;
+    g_timer_start_total_us = 0;
+    g_timer_block_total_us = 0;
+    g_timer_wake_late_total_us = 0;
+    g_deadline_reset_count = 0;
+    g_deadline_reset_discarded_us = 0;
+    memset((void *)g_late_histogram, 0, sizeof(g_late_histogram));
+    memset((void *)g_timer_wake_late_histogram, 0, sizeof(g_timer_wake_late_histogram));
+    g_queue_min_depth = UINT16_MAX;
+    g_queue_max_depth = 0;
+    g_queue_depth_sum = 0;
+    g_queue_depth_samples = 0;
+    g_queue_empty_count = 0;
+    g_dac_total_us = 0;
+    g_wait_total_us = 0;
+    g_dac_max_us = 0;
+    g_wait_max_us = 0;
+    g_min_planned_step_us = 0;
+    g_max_planned_step_us = 0;
+    g_min_dac_gap_us = 0;
+    g_max_dac_gap_us = 0;
+    g_last_dac_start_us = 0;
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
     g_last_move_slow_log_ms = 0;
 #endif
@@ -334,6 +593,8 @@ void sle_job_motion_executor_init(void)
     g_queue_tail = 0;
     g_worker_started = false;
     g_output_armed = false;
+    g_motion_timer_waiting = false;
+    g_motion_timer_fault = false;
     sle_job_motion_executor_reset_stats();
     g_last_dac_x = 0;
     g_last_dac_y = 0;
@@ -344,7 +605,20 @@ void sle_job_motion_executor_init(void)
         osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
         g_queue_ready = true;
     }
-    write_current_position(true);
+    if (osal_sem_init(&g_motion_timer_sem, 0) == OSAL_SUCCESS &&
+        uapi_timer_adapter(SLE_JOB_MOTION_TIMER_INDEX, TIMER_2_IRQN,
+                           SLE_JOB_MOTION_TIMER_IRQ_PRIORITY) == ERRCODE_SUCC &&
+        uapi_timer_create(SLE_JOB_MOTION_TIMER_INDEX, &g_motion_timer) == ERRCODE_SUCC) {
+        g_motion_timer_ready = true;
+        osal_printk("[JOB_MOTION_TIMER] ready index=%u threshold_us=%u tail_us=%u\r\n",
+                    (unsigned int)SLE_JOB_MOTION_TIMER_INDEX,
+                    (unsigned int)SLE_JOB_MOTION_TIMER_THRESHOLD_US,
+                    (unsigned int)SLE_JOB_MOTION_TIMER_TAIL_US);
+    } else {
+        g_motion_timer_ready = false;
+        osal_printk("[JOB_MOTION_TIMER] init failed, using busy wait\r\n");
+    }
+    (void)write_current_position(true);
 }
 
 static bool motion_queue_pop(sle_job_motion_cmd_t *cmd)
@@ -364,6 +638,18 @@ static bool motion_queue_pop(sle_job_motion_cmd_t *cmd)
 
     memcpy(cmd, &g_motion_queue[g_queue_tail], sizeof(sle_job_motion_cmd_t));
     g_queue_tail = (uint16_t)((g_queue_tail + 1U) % SLE_JOB_MOTION_QUEUE_SIZE);
+    uint16_t depth = motion_queue_used_locked();
+    if (depth < g_queue_min_depth) {
+        g_queue_min_depth = depth;
+    }
+    if (depth > g_queue_max_depth) {
+        g_queue_max_depth = depth;
+    }
+    g_queue_depth_sum += depth;
+    g_queue_depth_samples++;
+    if (depth == 0U) {
+        g_queue_empty_count++;
+    }
     g_command_active = true;
     osal_mutex_unlock(&g_queue_mutex);
     return true;
@@ -384,7 +670,7 @@ static bool cmd_uses_laser(const sle_job_motion_cmd_t *cmd)
 
 bool sle_job_motion_executor_enqueue(const sle_job_motion_cmd_t *cmd)
 {
-    if (!g_queue_ready || !g_worker_started || cmd == NULL) {
+    if (!g_queue_ready || !g_worker_started || cmd == NULL || g_motion_timer_fault) {
         return false;
     }
 
@@ -394,6 +680,15 @@ bool sle_job_motion_executor_enqueue(const sle_job_motion_cmd_t *cmd)
         if (next != g_queue_tail) {
             memcpy(&g_motion_queue[g_queue_head], cmd, sizeof(sle_job_motion_cmd_t));
             g_queue_head = next;
+            uint16_t depth = motion_queue_used_locked();
+            if (depth < g_queue_min_depth) {
+                g_queue_min_depth = depth;
+            }
+            if (depth > g_queue_max_depth) {
+                g_queue_max_depth = depth;
+            }
+            g_queue_depth_sum += depth;
+            g_queue_depth_samples++;
             g_enqueued_count++;
             osal_mutex_unlock(&g_queue_mutex);
             osal_sem_up(&g_queue_sem);
@@ -461,21 +756,26 @@ errcode_t sle_job_motion_executor_start_task(void)
 
 void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
 {
-    if (cmd == NULL) {
+    if (cmd == NULL || g_motion_timer_fault) {
+        laser_force_off();
         return;
     }
 
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case SLE_JOB_CMD_G0_MOVE:
-            arm_output_if_needed();
+            if (!arm_output_if_needed()) {
+                break;
+            }
             laser_enable(false);
             perform_move(cmd->target_x, cmd->target_y, SLE_JOB_G0_FEED_RATE, false);
             break;
         case SLE_JOB_CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
             bool laser_on = cmd_uses_laser(cmd);
-            arm_output_if_needed();
+            if (!arm_output_if_needed()) {
+                break;
+            }
             if (laser_on && feed_rate > SLE_JOB_MARKING_FEED_RATE_MAX) {
                 feed_rate = SLE_JOB_MARKING_FEED_RATE_MAX;
             }
@@ -515,8 +815,15 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
             laser_force_off();
             update_activity();
             break;
+        case SLE_JOB_CMD_PROGRESS_MARK:
+            update_activity();
+            break;
         default:
             break;
+    }
+    if (!g_abort_requested && !g_motion_timer_fault &&
+        cmd->completion_line > g_completed_line) {
+        g_completed_line = cmd->completion_line;
     }
     g_executed_count++;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
@@ -527,8 +834,7 @@ void sle_job_motion_executor_set_origin(void)
     laser_force_off();
     g_current_x = 0.0;
     g_current_y = 0.0;
-    g_abort_requested = false;
-    write_current_position(true);
+    (void)write_current_position(true);
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
@@ -536,10 +842,18 @@ void sle_job_motion_executor_set_origin(void)
 void sle_job_motion_executor_request_abort(void)
 {
     g_abort_requested = true;
+    if (g_motion_timer_ready && g_motion_timer_waiting) {
+        (void)uapi_timer_stop(g_motion_timer);
+        g_motion_timer_waiting = false;
+        osal_sem_up(&g_motion_timer_sem);
+    }
 }
 
 void sle_job_motion_executor_clear_abort(void)
 {
+    while (osal_sem_down_timeout(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
+    }
+    g_motion_timer_fault = false;
     g_abort_requested = false;
 }
 
@@ -590,7 +904,7 @@ bool sle_job_motion_executor_worker_started(void)
 
 bool sle_job_motion_executor_abort_requested(void)
 {
-    return g_abort_requested;
+    return g_abort_requested || g_motion_timer_fault;
 }
 
 unsigned long sle_job_motion_executor_enqueued_count(void)
@@ -601,6 +915,11 @@ unsigned long sle_job_motion_executor_enqueued_count(void)
 unsigned long sle_job_motion_executor_executed_count(void)
 {
     return g_executed_count;
+}
+
+uint32_t sle_job_motion_executor_completed_line(void)
+{
+    return g_completed_line;
 }
 
 unsigned long sle_job_motion_executor_last_activity_ms(void)
@@ -641,4 +960,50 @@ unsigned long sle_job_motion_executor_dac_write_count(void)
 unsigned long sle_job_motion_executor_dac_skip_count(void)
 {
     return g_dac_skip_count;
+}
+
+void sle_job_motion_executor_get_diag(sle_job_motion_diag_t *diag)
+{
+    if (diag == NULL) {
+        return;
+    }
+
+    diag->dac_write_count = g_dac_write_count;
+    diag->dac_skip_count = g_dac_skip_count;
+    diag->wait_call_count = g_wait_call_count;
+    diag->late_sample_count = g_late_sample_count;
+    diag->missed_sample_count = g_missed_sample_count;
+    diag->max_sample_late_us = g_max_sample_late_us;
+    diag->sched_relief_count = g_sched_relief_count;
+    diag->timer_wait_count = g_timer_wait_count;
+    diag->timer_fail_count = g_timer_fail_count;
+    diag->dac_total_us = g_dac_total_us;
+    diag->wait_total_us = g_wait_total_us;
+    diag->dac_max_us = g_dac_max_us;
+    diag->wait_max_us = g_wait_max_us;
+    diag->min_planned_step_us = g_min_planned_step_us;
+    diag->max_planned_step_us = g_max_planned_step_us;
+    diag->min_dac_gap_us = g_min_dac_gap_us;
+    diag->max_dac_gap_us = g_max_dac_gap_us;
+    diag->timer_wait_max_us = g_timer_wait_max_us;
+    diag->timer_wake_late_max_us = g_timer_wake_late_max_us;
+    diag->short_clamped_count = g_short_clamped_count;
+    diag->deadline_catchup_count = g_deadline_catchup_count;
+    diag->queue_empty_count = g_queue_empty_count;
+    diag->planned_motion_us = g_planned_motion_us;
+    diag->actual_motion_us = g_actual_motion_us;
+    diag->short_clamped_added_us = g_short_clamped_added_us;
+    diag->deadline_late_total_us = g_deadline_late_total_us;
+    diag->timer_start_total_us = g_timer_start_total_us;
+    diag->timer_block_total_us = g_timer_block_total_us;
+    diag->timer_wake_late_total_us = g_timer_wake_late_total_us;
+    diag->deadline_reset_count = g_deadline_reset_count;
+    diag->deadline_reset_discarded_us = g_deadline_reset_discarded_us;
+    memcpy(diag->late_histogram, (const void *)g_late_histogram, sizeof(diag->late_histogram));
+    memcpy(diag->timer_wake_late_histogram, (const void *)g_timer_wake_late_histogram,
+           sizeof(diag->timer_wake_late_histogram));
+    diag->queue_min_depth = (g_queue_min_depth == UINT16_MAX) ? 0U : g_queue_min_depth;
+    diag->queue_max_depth = g_queue_max_depth;
+    diag->queue_avg_depth = (g_queue_depth_samples == 0U) ? 0U :
+        (uint16_t)(g_queue_depth_sum / g_queue_depth_samples);
 }

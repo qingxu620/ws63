@@ -58,7 +58,8 @@ TX_PRIORITY_CONTROL_OPPOSITES = {
 }
 
 RX_STATUS_RE = re.compile(
-    r"@STATUS state=(\d+) status=(\d+) job=(\d+) rx=(\d+) total=(\d+) free=(\d+) lines=(\d+)"
+    r"@(?:STATUS|PROGRESS) state=(\d+) status=(\d+) job=(\d+) rx=(\d+) total=(\d+) free=(\d+) lines=(\d+)"
+    r"(?: completed=(\d+) total_lines=(\d+))?"
 )
 RX_STATUS_COMPAT_RE = re.compile(
     r"@STATUS state=(\d+) error=(\d+) job_id=(\d+) exec_line=(\d+) "
@@ -77,6 +78,7 @@ NOISY_RUNTIME_LOG_RE = re.compile(
     r"xo update temp:\d+,diff:\d+,xo:0x[0-9a-fA-F]+"
     r"|APP\|\[SYS INFO\]\s+mem:"
     r"|@ACK type=2 seq=0 status=0 offset=\d+\b"
+    r"|@(?:STATUS|PROGRESS) state=\d+ status=0\b"
     r")"
 )
 
@@ -107,6 +109,9 @@ class RxStatus:
     received_size: int
     job_total: int
     cache_free: int
+    executed_lines: int = 0
+    completed_lines: int = 0
+    total_lines: int = 0
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,9 @@ def parse_rx_status(line: str) -> Optional[RxStatus]:
             received_size=int(match.group(4)),
             job_total=int(match.group(5)),
             cache_free=int(match.group(6)),
+            executed_lines=int(match.group(7)),
+            completed_lines=int(match.group(8) or 0),
+            total_lines=int(match.group(9) or 0),
         )
     match = RX_STATUS_COMPAT_RE.search(line)
     if match:
@@ -150,6 +158,7 @@ def parse_rx_status(line: str) -> Optional[RxStatus]:
             received_size=0,
             job_total=int(match.group(6)),
             cache_free=int(match.group(5)),
+            executed_lines=int(match.group(4)),
         )
     return None
 
@@ -164,6 +173,15 @@ def crc16_ccitt(data: bytes, initial: int = 0xFFFF) -> int:
             else:
                 crc = (crc << 1) & 0xFFFF
     return crc & 0xFFFF
+
+
+def count_rx_executable_lines(gcode: bytes) -> int:
+    """Count lines with content after RX-compatible semicolon stripping."""
+    return sum(
+        1
+        for raw_line in gcode.splitlines()
+        if raw_line.split(b";", 1)[0].strip()
+    )
 
 
 def normalize_gcode_text(text: str) -> str:
@@ -324,6 +342,9 @@ class SleJobSerialClient:
             for raw in ready:
                 line = raw.strip()
                 if line and not is_noisy_sdk_log(line):
+                    if line.startswith("@PROGRESS "):
+                        self._on_log("protocol", line)
+                        continue
                     self._lines.put(line)
                     if not is_noisy_runtime_log(line):
                         self._on_log("rx", line)
@@ -625,6 +646,9 @@ class SleJobSerialClient:
 
         crc = crc16_ccitt(gcode)
         total = len(gcode)
+        total_lines = count_rx_executable_lines(gcode)
+        if total_lines <= 0:
+            raise RuntimeError("G-code 不包含有效行")
         t_begin = time.perf_counter()
 
         with self._command_lock:
@@ -639,7 +663,7 @@ class SleJobSerialClient:
             try:
                 if status_cb:
                     status_cb("正在建立任务", 0)
-                cmd = f"@BEGIN {job_id} {total} {crc:04x}"
+                cmd = f"@BEGIN {job_id} {total} {crc:04x} lines={total_lines}"
                 if start_on_preroll and preroll_bytes > 0:
                     cmd += f" preroll={preroll_bytes} auto_start=1"
                 transaction_started = True
@@ -802,7 +826,7 @@ class SleJobSerialClient:
                             f"write_ms={write_ms} ack_wait_ms={ack_wait_ms} "
                             f"total_ms={chunk_ms}",
                         )
-                    pct = acked_offset * 100 // total
+                    pct = acked_offset * 100.0 / total
                     if (
                         rx_auto_start
                         and not rx_auto_exec_ui_started

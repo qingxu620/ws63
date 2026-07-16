@@ -5,6 +5,7 @@
 #include "panel_model.h"
 #include "protocol.h"
 #include "soc_osal.h"
+#include "systick.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -20,10 +21,21 @@ enum {
 };
 
 static uint32_t g_online_full_hold_seconds = 0;
+static uint32_t g_online_full_hold_last_ms = 0;
+static uint32_t g_online_full_hold_accum_ms = 0;
 static uint32_t g_online_full_job_id = 0;
 static uint32_t g_online_full_total_size = 0;
 static uint32_t g_online_auto_idle_job_id = 0;
 static uint32_t g_online_auto_idle_total_size = 0;
+static uint32_t g_job_timer_last_ms = 0;
+static uint32_t g_job_timer_accum_ms = 0;
+
+static void reset_job_timer(void)
+{
+    g_model.job_seconds = 0;
+    g_job_timer_last_ms = 0;
+    g_job_timer_accum_ms = 0;
+}
 
 static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
 {
@@ -123,6 +135,8 @@ static bool rx_job_state_is_terminal(uint8_t job_state)
 static void reset_online_full_hold(void)
 {
     g_online_full_hold_seconds = 0;
+    g_online_full_hold_last_ms = 0;
+    g_online_full_hold_accum_ms = 0;
     g_online_full_job_id = 0;
     g_online_full_total_size = 0;
 }
@@ -135,9 +149,7 @@ static bool model_is_online_full(void)
            g_model.job_id != 0U && g_model.total_size != 0U &&
            g_model.received_size >= g_model.total_size &&
            g_model.progress >= 100 &&
-           (g_model.state == SYS_STATE_RECEIVING ||
-            g_model.state == SYS_STATE_READY ||
-            g_model.state == SYS_STATE_RUNNING);
+           g_model.state == SYS_STATE_DONE;
 }
 
 static void set_online_auto_idle(void)
@@ -155,7 +167,7 @@ static void set_online_auto_idle(void)
     g_model.mode = PANEL_MODE_IDLE;
     g_model.job_id = 0;
     g_model.progress = 0;
-    g_model.job_seconds = 0;
+    reset_job_timer();
     g_model.total_size = 0;
     g_model.total_lines = 0;
     g_model.received_size = 0;
@@ -220,7 +232,7 @@ static void update_progress_fields(void)
 static void reset_common(void)
 {
     panel_view_mode_t view_mode = g_model.view_mode;
-    g_model.job_seconds = 0;
+    reset_job_timer();
     g_model.seq++;
     g_model.event_id++;
     g_model.owner = PANEL_OWNER_NONE;
@@ -478,10 +490,22 @@ void panel_model_set_progress(int pct)
 
 void panel_model_tick(void)
 {
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
     if (g_model.state == SYS_STATE_RUNNING || g_model.state == SYS_STATE_SENDING ||
         g_model.state == SYS_STATE_RECEIVING || state_is_requesting(g_model.state)) {
-        g_model.job_seconds++;
-        g_model.seq++;
+        if (g_job_timer_last_ms == 0U) {
+            g_job_timer_last_ms = now;
+        } else {
+            g_job_timer_accum_ms += (uint32_t)(now - g_job_timer_last_ms);
+            g_job_timer_last_ms = now;
+            uint32_t seconds = g_job_timer_accum_ms / 1000U;
+            if (seconds != g_model.job_seconds) {
+                g_model.job_seconds = seconds;
+                g_model.seq++;
+            }
+        }
+    } else {
+        g_job_timer_last_ms = 0U;
     }
 
     if (model_is_online_full()) {
@@ -490,8 +514,15 @@ void panel_model_tick(void)
             g_online_full_job_id = g_model.job_id;
             g_online_full_total_size = g_model.total_size;
             g_online_full_hold_seconds = 0;
+            g_online_full_hold_accum_ms = 0;
+            g_online_full_hold_last_ms = now;
+        } else if (g_online_full_hold_last_ms == 0U) {
+            g_online_full_hold_last_ms = now;
+        } else {
+            g_online_full_hold_accum_ms += (uint32_t)(now - g_online_full_hold_last_ms);
+            g_online_full_hold_last_ms = now;
+            g_online_full_hold_seconds = g_online_full_hold_accum_ms / 1000U;
         }
-        g_online_full_hold_seconds++;
         if (g_online_full_hold_seconds >= PANEL_ONLINE_FULL_HOLD_SECONDS) {
             set_online_auto_idle();
         }
@@ -620,7 +651,7 @@ void panel_model_start_offline_selected(void)
     g_model.progress = 0;
     g_model.received_size = 0;
     g_model.executed_lines = 0;
-    g_model.job_seconds = 0;
+    reset_job_timer();
     g_model.seq++;
     g_model.event_id++;
     update_progress_fields();
@@ -679,7 +710,7 @@ void panel_model_offline_execution_started(void)
     g_model.progress = 0;
     g_model.executed_lines = 0;
     g_model.received_size = g_model.total_size;
-    g_model.job_seconds = 0;
+    reset_job_timer();
     g_model.seq++;
     g_model.event_id++;
 }
@@ -755,27 +786,31 @@ void panel_model_offline_error(const char *error)
 void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,
                                        uint8_t flags, uint32_t seq, uint32_t job_id,
                                        uint32_t received_size, uint32_t total_size,
-                                       uint32_t executed_lines, uint32_t cache_free,
+                                       uint32_t executed_lines, uint32_t completed_lines,
+                                       uint32_t total_lines, uint32_t cache_free,
                                        uint32_t last_error, uint32_t tick_ms)
 {
+    (void)executed_lines;
     system_state_t prev_state = g_model.state;
     uint32_t prev_job_id = g_model.job_id;
+    int prev_progress = g_model.progress;
     bool incoming_terminal = rx_job_state_is_terminal(job_state);
     bool incoming_full = job_id != 0U && total_size != 0U && received_size >= total_size;
     bool same_auto_idle_job = g_online_auto_idle_job_id != 0U &&
                               job_id == g_online_auto_idle_job_id &&
                               total_size == g_online_auto_idle_total_size;
 
-    if (g_model.view_mode == PANEL_VIEW_ONLINE && same_auto_idle_job &&
-        incoming_full && !incoming_terminal) {
-        g_model.rx_connected = (flags & PANEL_STATUS_FLAG_ANY_LINK) != 0U;
-        g_model.sle_connected = g_model.rx_connected;
-        g_model.tx_connected = (flags & PANEL_STATUS_FLAG_OWNER_LINK) != 0U;
-        return;
-    }
-    if (!same_auto_idle_job || !incoming_full || incoming_terminal) {
-        g_online_auto_idle_job_id = 0;
-        g_online_auto_idle_total_size = 0;
+    if (g_model.view_mode == PANEL_VIEW_ONLINE && g_online_auto_idle_job_id != 0U) {
+        if (same_auto_idle_job && incoming_full) {
+            g_model.rx_connected = (flags & PANEL_STATUS_FLAG_ANY_LINK) != 0U;
+            g_model.sle_connected = g_model.rx_connected;
+            g_model.tx_connected = (flags & PANEL_STATUS_FLAG_OWNER_LINK) != 0U;
+            return;
+        }
+        if (job_id != 0U && (!same_auto_idle_job || !incoming_full)) {
+            g_online_auto_idle_job_id = 0;
+            g_online_auto_idle_total_size = 0;
+        }
     }
 
     bool protect_online_job = g_model.view_mode == PANEL_VIEW_ONLINE &&
@@ -809,8 +844,8 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
         if (received_size < g_model.received_size) {
             received_size = g_model.received_size;
         }
-        if (executed_lines < g_model.executed_lines) {
-            executed_lines = g_model.executed_lines;
+        if (completed_lines < g_model.executed_lines) {
+            completed_lines = g_model.executed_lines;
         }
     }
 
@@ -890,19 +925,27 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
         g_model.mode = PANEL_MODE_ERROR;
         break;
     default:
-        g_model.state = SYS_STATE_NO_JOB;
+        if (job_id != 0U && total_size != 0U && received_size >= total_size &&
+            total_lines != 0U && completed_lines >= total_lines) {
+            g_model.state = SYS_STATE_DONE;
+        } else {
+            g_model.state = SYS_STATE_NO_JOB;
+        }
         break;
     }
     if (hold_local_request) {
         g_model.state = prev_state;
     }
+    bool entering_execution = g_model.state == SYS_STATE_RUNNING &&
+                              prev_state != SYS_STATE_RUNNING &&
+                              prev_state != SYS_STATE_PAUSED;
 
     g_model.job_id = job_id;
     g_model.received_size = received_size;
     g_model.total_size = total_size;
-    g_model.executed_lines = executed_lines;
+    g_model.executed_lines = completed_lines;
     g_model.cache_free = cache_free;
-    g_model.total_lines = (executed_lines > 0U) ? executed_lines : PANEL_FAKE_TOTAL_LINES;
+    g_model.total_lines = clamp_u32(total_lines, 0, PANEL_FAKE_TOTAL_LINES);
     g_model.rx_connected = (flags & 0x08U) != 0U;
     g_model.sle_connected = g_model.rx_connected;
     g_model.tx_connected = (flags & 0x04U) != 0U;
@@ -912,17 +955,31 @@ void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_
     g_model.laser_output_active = (flags & 0x02U) != 0U;
 
     if (state_uses_job_timer(g_model.state)) {
-        if (!state_uses_job_timer(prev_state) || prev_job_id != job_id) {
-            g_model.job_seconds = 0;
+        if (entering_execution || prev_job_id != job_id) {
+            reset_job_timer();
         }
     } else {
         if (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_ERROR ||
             g_model.state == SYS_STATE_LINK_LOST) {
-            g_model.job_seconds = 0;
+            reset_job_timer();
         }
     }
 
-    if (total_size > 0U) {
+    if (g_model.state == SYS_STATE_DONE && total_lines > 0U) {
+        g_model.progress = 100;
+    } else if ((g_model.state == SYS_STATE_RUNNING || g_model.state == SYS_STATE_PAUSED) &&
+        total_lines > 0U) {
+        g_model.progress = (int)(((uint64_t)completed_lines * 100U) / total_lines);
+        if (g_model.progress >= 100) {
+            g_model.progress = 99;
+        }
+        bool continuing_execution = prev_state == SYS_STATE_RUNNING ||
+                                    prev_state == SYS_STATE_PAUSED;
+        if (job_id == prev_job_id && continuing_execution &&
+            g_model.progress < prev_progress) {
+            g_model.progress = (prev_progress < 100) ? prev_progress : 99;
+        }
+    } else if (total_size > 0U) {
         g_model.progress = (int)(((uint64_t)received_size * 100U) / total_size);
     } else {
         g_model.progress = 0;

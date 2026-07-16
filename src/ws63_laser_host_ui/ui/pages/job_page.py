@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -135,6 +135,11 @@ class JobPage(QWidget):
         self._focus_active = False
         self._execution_active = False
         self._build_ui()
+        self._exec_progress_animation = QPropertyAnimation(
+            self.exec_progress, b"value", self
+        )
+        self._exec_progress_animation.setDuration(350)
+        self._exec_progress_animation.setEasingCurve(QEasingCurve.OutCubic)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -277,27 +282,47 @@ class JobPage(QWidget):
 
         right_column.addWidget(param_group, 0, 0)
 
-        # Card 2: 上传状态
-        prog_group = QGroupBox("上传状态")
+        # Card 2: 上传与执行进度
+        prog_group = QGroupBox("任务进度")
         pr_layout = QVBoxLayout(prog_group)
         pr_layout.setSpacing(7)
         pr_layout.setContentsMargins(14, 20, 14, 10)
 
-        status_row = QHBoxLayout()
         self.lbl_task = QLabel("空闲")
         self.lbl_task.setObjectName("taskLabel")
-        status_row.addWidget(self.lbl_task)
-        status_row.addStretch(1)
+        pr_layout.addWidget(self.lbl_task)
+
+        upload_row = QHBoxLayout()
+        upload_label = QLabel("上传进度")
+        upload_label.setStyleSheet("color:#475569; font-size:12px; font-weight:600;")
+        upload_row.addWidget(upload_label)
+        upload_row.addStretch(1)
         self.lbl_progress_pct = QLabel("0%")
         self.lbl_progress_pct.setStyleSheet("color:#0284c7; font-size:12px; font-weight:700;")
-        status_row.addWidget(self.lbl_progress_pct)
-        pr_layout.addLayout(status_row)
+        upload_row.addWidget(self.lbl_progress_pct)
+        pr_layout.addLayout(upload_row)
         
         self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
+        self.progress.setRange(0, 1000)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         pr_layout.addWidget(self.progress)
+
+        exec_row = QHBoxLayout()
+        exec_label = QLabel("RX 执行进度")
+        exec_label.setStyleSheet("color:#475569; font-size:12px; font-weight:600;")
+        exec_row.addWidget(exec_label)
+        exec_row.addStretch(1)
+        self.lbl_exec_progress_pct = QLabel("--")
+        self.lbl_exec_progress_pct.setStyleSheet("color:#dc2626; font-size:12px; font-weight:700;")
+        exec_row.addWidget(self.lbl_exec_progress_pct)
+        pr_layout.addLayout(exec_row)
+
+        self.exec_progress = QProgressBar()
+        self.exec_progress.setRange(0, 1000)
+        self.exec_progress.setValue(0)
+        self.exec_progress.setTextVisible(False)
+        pr_layout.addWidget(self.exec_progress)
 
         summary = QFrame()
         summary.setObjectName("progressSummary")
@@ -478,8 +503,9 @@ class JobPage(QWidget):
         self.lbl_task.setText(text)
         self.lbl_progress_detail.setText(text)
         if 0 <= progress_pct <= 100:
-            self.progress.setValue(int(progress_pct))
-            self.lbl_progress_pct.setText(f"{int(progress_pct)}%")
+            upload_permille = max(0, min(1000, round(progress_pct * 10)))
+            self.progress.setValue(upload_permille)
+            self.lbl_progress_pct.setText(f"{upload_permille / 10:.1f}%")
 
     def set_progress_text(self, text: str) -> None:
         self.lbl_progress_detail.setText(text)
@@ -502,6 +528,9 @@ class JobPage(QWidget):
             self.lbl_state.setStyleSheet("color: #EF4444; font-size: 24px; font-weight: 800;")
             self.lbl_substate.setText("激光器高速打标中")
         elif completed:
+            self._exec_progress_animation.stop()
+            self.exec_progress.setValue(1000)
+            self.lbl_exec_progress_pct.setText("100%")
             self.arc.set_value(100)
             self.arc.set_color("#10B981")
             self.arc.set_caption("执行完成")
@@ -521,6 +550,7 @@ class JobPage(QWidget):
 
     def update_state(self, rx_state: str, rx_state_code: int, job_id: int,
                      received: int, total: int, cache_free: int,
+                     completed_lines: int, total_lines: int,
                      focus: str, tx_link: str, rx_link: str) -> None:
         """Called by MainWindow to update system telemetry and visualization."""
         if rx_state_code == 1 and total > 0:
@@ -545,6 +575,29 @@ class JobPage(QWidget):
         self.cards["已接收字节"].setText(f"{received} 字节" if total > 0 else "--")
         self.cards["任务总字节"].setText(f"{total} 字节" if total > 0 else "--")
         self.cards["缓存剩余"].setText(f"{cache_free} 字节")
+
+        upload_permille = max(0, min(1000, int(received * 1000 / total))) if total > 0 else 0
+        self.progress.setValue(upload_permille)
+        self.lbl_progress_pct.setText(f"{upload_permille / 10:.1f}%")
+        if total_lines > 0:
+            exec_permille = max(0, min(1000, int(completed_lines * 1000 / total_lines)))
+            if rx_state_code in (3, 4) and exec_permille >= 1000:
+                exec_permille = 999
+            current = self.exec_progress.value()
+            self._exec_progress_animation.stop()
+            if exec_permille < current or exec_permille == 0:
+                self.exec_progress.setValue(exec_permille)
+            elif exec_permille > current:
+                self._exec_progress_animation.setStartValue(current)
+                self._exec_progress_animation.setEndValue(exec_permille)
+                self._exec_progress_animation.start()
+            self.lbl_exec_progress_pct.setText(
+                f"{exec_permille / 10:.1f}%  ({completed_lines}/{total_lines} 行)"
+            )
+        else:
+            self._exec_progress_animation.stop()
+            self.exec_progress.setValue(0)
+            self.lbl_exec_progress_pct.setText("等待 RX 执行进度")
 
         # Focus state styling
         focus_cn = "开启" if focus.startswith("ON") else "关闭"

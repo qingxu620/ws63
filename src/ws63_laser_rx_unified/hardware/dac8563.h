@@ -12,8 +12,8 @@
 extern "C" {
 #endif
 
-#define DAC_CMD_SETA_UPDATEA 0x18
-#define DAC_CMD_SETB_UPDATEB 0x19
+#define DAC_CMD_WRITE_A_INPUT 0x00
+#define DAC_CMD_WRITE_B_UPDATE_ALL 0x11
 #define DAC_CMD_UPDATE_ALL 0x0F
 #define DAC_CMD_GAIN 0x02
 #define DAC_CMD_PWR_UP 0x20
@@ -27,9 +27,9 @@ extern "C" {
 #define DAC_GAIN_B1_A1 0x0003
 
 errcode_t dac8563_init(void);
-void dac8563_recover(void);
-void dac8563_write_channel(uint8_t cmd, uint16_t value);
-void dac8563_write_xy(uint16_t x_val, uint16_t y_val);
+errcode_t dac8563_recover(void);
+errcode_t dac8563_write_channel(uint8_t cmd, uint16_t value);
+errcode_t dac8563_write_xy(uint16_t x_val, uint16_t y_val);
 
 #ifdef __cplusplus
 }

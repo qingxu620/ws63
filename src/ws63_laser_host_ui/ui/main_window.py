@@ -36,7 +36,7 @@ from ui.pages.gcode_page import GcodePage
 from ui.pages.job_page import JobPage
 from ui.pages.logs_page import LogsPage
 
-EXEC_STATUS_POLL_INTERVAL_MS = 1500
+EXEC_STATUS_POLL_INTERVAL_MS = 5000
 EXEC_STATUS_POLL_TIMEOUT_S = 6.0
 
 
@@ -207,6 +207,8 @@ class MainWindow(QMainWindow):
     def _on_log_message(self, channel: str, message: str) -> None:
         # Protocol state is safety-critical and must not depend on log rendering.
         self._process_protocol_message(message)
+        if channel == "protocol":
+            return
 
         # Write to file
         if self._log_file is not None and not self._log_file.closed:
@@ -267,17 +269,33 @@ class MainWindow(QMainWindow):
             )
             return
         self.state.prev_rx_state_code = previous_state
+        same_active_job = tracked_job > 0 and status.job_id in (0, tracked_job)
         self.state.rx_state_code = status.state
         self.state.rx_job_id = status.job_id
-        self.state.rx_received = status.received_size
-        self.state.rx_job_total = status.job_total
+        self.state.rx_received = (
+            max(self.state.rx_received, status.received_size)
+            if same_active_job else status.received_size
+        )
+        self.state.rx_job_total = max(self.state.rx_job_total, status.job_total) if same_active_job else status.job_total
         self.state.rx_cache_free = status.cache_free
+        self.state.rx_executed_lines = (
+            max(self.state.rx_executed_lines, status.executed_lines)
+            if same_active_job else status.executed_lines
+        )
+        self.state.rx_completed_lines = (
+            max(self.state.rx_completed_lines, status.completed_lines)
+            if same_active_job else status.completed_lines
+        )
+        self.state.rx_total_lines = (
+            max(self.state.rx_total_lines, status.total_lines)
+            if same_active_job else status.total_lines
+        )
 
         # Log state transitions
         if previous_state != status.state:
             self._enqueue_log("status", f"[RX_STATE] {previous_state} -> {status.state} job={status.job_id} rx={status.received_size}/{status.job_total}")
 
-        if self.state.execution_expected:
+        if self.state.execution_expected and previous_state != status.state:
             self._enqueue_log(
                 "status",
                 f"[EXEC_TRACK] evidence=STATUS prev={previous_state} state={status.state} "
@@ -374,9 +392,6 @@ class MainWindow(QMainWindow):
                     self.state.termination_requested or not self._exec_poll_timer.isActive()):
                 return
             self._exec_poll_failures = 0
-            self.worker.log.emit(
-                "status", f"[EXEC_POLL] STATUS {result.elapsed_ms}ms: {result.line}"
-            )
             self.status_line_received.emit(result.line)
         except Exception as exc:
             if (not self.state.execution_expected or self.state.execution_complete or
@@ -431,6 +446,8 @@ class MainWindow(QMainWindow):
             received=s.rx_received,
             total=s.rx_job_total,
             cache_free=s.rx_cache_free,
+            completed_lines=s.rx_completed_lines,
+            total_lines=s.rx_total_lines,
             focus="ON" if s.focus_active else "OFF",
             tx_link=s.tx_state.value,
             rx_link=s.rx_state.value,
@@ -484,8 +501,12 @@ class MainWindow(QMainWindow):
             self.state.rx_received = self.state.rx_job_total
             self._update_monitor()
         elif 0 <= pct <= 100 and any(tag in text for tag in ("上传", "预缓冲", "继续")):
-            self.state.rx_state_code = 1
-            self.state.rx_received = int(self.state.rx_job_total * pct / 100)
+            if not execution_start and self.state.rx_state_code != 3:
+                self.state.rx_state_code = 1
+            self.state.rx_received = max(
+                self.state.rx_received,
+                int(self.state.rx_job_total * pct / 100),
+            )
             self._update_monitor()
 
     # ---- Connection ----
@@ -835,6 +856,9 @@ class MainWindow(QMainWindow):
         self.state.rx_job_id = job_id
         self.state.rx_received = 0
         self.state.rx_job_total = len(gcode)
+        self.state.rx_executed_lines = 0
+        self.state.rx_completed_lines = 0
+        self.state.rx_total_lines = 0
         self.state.execution_expected = False
         self.state.termination_requested = False
         self.state.execution_complete = False

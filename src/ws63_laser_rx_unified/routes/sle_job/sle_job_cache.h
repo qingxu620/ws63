@@ -31,6 +31,7 @@ uint16_t sle_job_cache_crc(void);
 bool sle_job_cache_is_ready(void);
 
 int sle_job_cache_read_byte(void);
+int sle_job_cache_read_line(uint8_t *out, uint16_t out_size);
 void sle_job_cache_set_all_received(void);
 bool sle_job_cache_is_all_received(void);
 

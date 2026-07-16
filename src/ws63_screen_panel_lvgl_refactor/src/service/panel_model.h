@@ -131,7 +131,8 @@ void panel_model_offline_error(const char *error);
 void panel_model_apply_rx_panel_status(uint8_t owner, uint8_t mode, uint8_t job_state,
                                        uint8_t flags, uint32_t seq, uint32_t job_id,
                                        uint32_t received_size, uint32_t total_size,
-                                       uint32_t executed_lines, uint32_t cache_free,
+                                       uint32_t executed_lines, uint32_t completed_lines,
+                                       uint32_t total_lines, uint32_t cache_free,
                                        uint32_t last_error, uint32_t tick_ms);
 void panel_model_get_button_permissions(panel_button_permissions_t *out);
 const char *panel_model_state_text(system_state_t state);

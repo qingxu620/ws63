@@ -139,10 +139,8 @@ static int panel_task(void *arg)
         }
 #endif
 
-        /* Job time tick (every ~1s) */
-        if ((tick_count % PANEL_JOB_TIME_PERIOD_TICKS) == 0) {
-            panel_model_tick();
-        }
+        /* The model derives elapsed time from systick, not loop iterations. */
+        panel_model_tick();
 
     }
 

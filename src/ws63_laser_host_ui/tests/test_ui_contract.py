@@ -409,6 +409,7 @@ class UiContractTests(unittest.TestCase):
         page.update_state(
             rx_state="数据传输中", rx_state_code=1, job_id=1,
             received=50, total=100, cache_free=1000,
+            completed_lines=0, total_lines=100,
             focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
         )
         self.assertEqual(page.arc._value, 50)
@@ -418,12 +419,15 @@ class UiContractTests(unittest.TestCase):
         page.update_state(
             rx_state="正在执行", rx_state_code=3, job_id=1,
             received=100, total=100, cache_free=1000,
+            completed_lines=25, total_lines=100,
             focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
         )
         self.assertEqual(page.arc._value, 0)
         self.assertEqual(page.arc._caption, "正在执行")
         self.assertEqual(page.lbl_substate.text(), "任务正在执行")
-        self.assertNotIn("执行行数", page.cards)
+        self.assertEqual(page.progress.value(), 1000)
+        self.assertEqual(page._exec_progress_animation.endValue(), 250)
+        self.assertIn("25/100 行", page.lbl_exec_progress_pct.text())
 
     def test_preroll_execution_visual_survives_receiving_status_refresh(self) -> None:
         page = JobPage()
@@ -432,6 +436,7 @@ class UiContractTests(unittest.TestCase):
         page.update_state(
             rx_state="数据传输中", rx_state_code=1, job_id=7,
             received=6000, total=12000, cache_free=96400,
+            completed_lines=0, total_lines=1000,
             focus="OFF", tx_link="CONNECTED", rx_link="CONNECTED",
         )
 
@@ -470,6 +475,39 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(window.state.rx_state_code, 3)
         self.assertEqual(window.page_job.arc._caption, "等待 RX 完成")
         self.assertTrue(window.page_job.arc._spinning)
+
+    def test_unsolicited_progress_updates_state_without_rendering_log(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        rendered: list[tuple[str, str]] = []
+        window.page_logs.append_log = lambda channel, message: rendered.append((channel, message))
+
+        window._on_log_message(
+            "protocol",
+            "@PROGRESS state=3 status=0 job=9 rx=600 total=1000 free=500 "
+            "lines=70 completed=50 total_lines=100",
+        )
+
+        self.assertEqual(window.state.rx_received, 600)
+        self.assertEqual(window.state.rx_completed_lines, 50)
+        self.assertEqual(window.state.rx_total_lines, 100)
+        self.assertFalse(any(channel == "protocol" for channel, _message in rendered))
+
+    def test_same_job_progress_cannot_move_backwards(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_job_id = 9
+        window.state.rx_received = 600
+        window.state.rx_completed_lines = 50
+        window.state.rx_total_lines = 100
+
+        window._parse_rx_line(
+            "@PROGRESS state=3 status=0 job=9 rx=500 total=1000 free=500 "
+            "lines=60 completed=40 total_lines=100"
+        )
+
+        self.assertEqual(window.state.rx_received, 600)
+        self.assertEqual(window.state.rx_completed_lines, 50)
 
     def test_status_transition_completes_without_rx_log_port(self) -> None:
         window = MainWindow()
