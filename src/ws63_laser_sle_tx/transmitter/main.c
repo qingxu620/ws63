@@ -28,6 +28,8 @@
 #define TX_PANEL_RX_STATUS_TIMEOUT_MS 1000U
 #define TX_DATA_HOST_BUSY_PERIOD_MS 1000U
 #define TX_FIRMWARE_PACKAGE "ws63-liteos-app_tx_all.fwpkg"
+#define TX_HOST_MODE_SLE 1U
+#define TX_HOST_MODE_WIFI 2U
 
 _Static_assert(sizeof(job_data_payload_t) + JOB_TX_DATA_CHUNK_MAX <= SLE_JOB_PACKET_MAX_PAYLOAD,
                "JOB_TX_DATA_CHUNK_MAX too large for SLE payload");
@@ -61,6 +63,9 @@ static volatile bool g_rx_status_report_host = false;
 static uint32_t g_rx_status_req_ms = 0;
 static uint32_t g_rx_status_poll_ms = 0;
 static uint8_t g_data_status_progress_bucket = 0;
+static uint32_t g_data_credit_probe_last_ms = 0;
+static uint32_t g_data_credit_probe_log_last_ms = 0;
+static uint32_t g_data_credit_probe_count = 0;
 static status_resp_payload_t g_panel_rx_status;
 static volatile bool g_panel_rx_status_valid = false;
 static volatile uint16_t g_wait_ack_seq = 0;
@@ -114,9 +119,15 @@ static uint8_t g_panel_local_job_state = JOB_STATE_IDLE;
 static bool g_panel_local_exec_started = false;
 static uint32_t g_panel_local_last_error = JOB_STATUS_OK;
 static bool g_panel_local_terminal_confirmed = false;
+static volatile bool g_sle_client_initialized = false;
+static uint8_t g_host_mode_target = TX_HOST_MODE_SLE;
+static bool g_host_link_state_known = false;
+static bool g_host_rx_link_last = false;
+static bool g_host_screen_link_last = false;
 
 static void tx_panel_publish_local_status(bool force);
 static void clear_async_data_retx(void);
+static void tx_publish_host_link_state(bool force_mode);
 
 static bool uart_queue_pop(uint8_t *ch)
 {
@@ -185,16 +196,12 @@ static void set_host_job_topology_active(bool active)
     }
 
     g_host_job_topology_active = active;
-    if (active) {
-        sle_job_client_set_background_seek_allowed(false);
-    } else {
-        sle_job_client_set_background_seek_allowed(true);
-    }
+    sle_job_client_set_background_seek_busy(active);
     sle_job_client_poll_connect();
-    osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u seek_bg=%u\r\n",
+    osal_printk("[JOB_TX_TOPO] host_job=%u panel_link=%u seek_mode=%s\r\n",
                 active ? 1U : 0U,
                 sle_job_client_panel_link_allowed() ? 1U : 0U,
-                active ? 0U : 1U);
+                active ? "busy-5s" : "idle-continuous");
 }
 
 static bool topology_state_is_terminal(uint8_t state)
@@ -239,6 +246,9 @@ static void clear_local_job_state(void)
     g_rx_status_req_ms = 0;
     g_rx_status_poll_ms = 0;
     g_data_status_progress_bucket = 0;
+    g_data_credit_probe_last_ms = 0;
+    g_data_credit_probe_log_last_ms = 0;
+    g_data_credit_probe_count = 0;
     memset(&g_panel_rx_status, 0, sizeof(g_panel_rx_status));
     g_panel_rx_status_valid = false;
 }
@@ -543,6 +553,49 @@ static void host_sendf(const char *fmt, ...)
     (void)uapi_uart_write(LASER_UART_BUS, (const uint8_t *)buf, (uint32_t)n, 0);
 }
 
+static const char *tx_link_ready_text(bool ready)
+{
+    return ready ? "ready" : "connecting";
+}
+
+static void tx_publish_host_link_state(bool force_mode)
+{
+    if (!g_sle_client_initialized) {
+        return;
+    }
+
+    bool rx_ready = sle_job_client_is_connected();
+    bool screen_ready = sle_job_client_panel_is_connected();
+    bool rx_changed = !g_host_link_state_known || rx_ready != g_host_rx_link_last;
+    bool screen_changed = !g_host_link_state_known || screen_ready != g_host_screen_link_last;
+
+    if (rx_changed) {
+        host_sendf("@LINK peer=RX state=%s\r\n", rx_ready ? "CONNECTED" : "DISCONNECTED");
+    }
+    if (screen_changed) {
+        host_sendf("@LINK peer=SCREEN state=%s\r\n",
+                   screen_ready ? "CONNECTED" : "DISCONNECTED");
+    }
+
+    g_host_link_state_known = true;
+    g_host_rx_link_last = rx_ready;
+    g_host_screen_link_last = screen_ready;
+
+    if (g_host_mode_target == TX_HOST_MODE_SLE) {
+        if (rx_ready) {
+            if (force_mode || rx_changed || screen_changed) {
+                host_sendf("@MODE active=SLE rx=ready screen=%s\r\n",
+                           tx_link_ready_text(screen_ready));
+            }
+        } else if (force_mode || rx_changed) {
+            host_sendf("@MODE target=SLE state=CONNECTING rx=connecting screen=%s\r\n",
+                       tx_link_ready_text(screen_ready));
+        }
+    } else if (rx_changed && !rx_ready) {
+        host_sendf("@MODE target=WIFI state=EXTERNAL_VERIFY rx=disconnected\r\n");
+    }
+}
+
 static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t fallback)
 {
     if (type == PKT_JOB_DATA && payload != NULL) {
@@ -685,16 +738,32 @@ static bool request_rx_status_sync(const char *reason, uint16_t ref_seq,
     g_rx_status_req_ms = t_send;
     errcode_t ret = sle_job_client_send_packet(packet, packet_len);
     uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
-    osal_printk("[TX_STATUS_PROBE] t=%u reason=%s status_seq=%u ref_seq=%u "
-                "ref_off=%u ret=0x%x send_ms=%u ack_off=%u ack_seq=%u "
-                "seq_neutral=1\r\n",
-                (unsigned int)uapi_systick_get_ms(),
-                (reason != NULL) ? reason : "none",
-                (unsigned int)seq, (unsigned int)ref_seq,
-                (unsigned int)ref_offset, (unsigned int)ret,
-                (unsigned int)send_ms,
-                (unsigned int)g_async_data_ack_offset,
-                (unsigned int)g_async_data_ack_seq);
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    bool credit_probe = reason != NULL && strcmp(reason, "data_credit") == 0;
+    bool log_probe = true;
+    if (credit_probe) {
+        g_data_credit_probe_count++;
+        log_probe = ret != ERRCODE_SLE_SUCCESS ||
+                    g_data_credit_probe_log_last_ms == 0U ||
+                    (uint32_t)(now - g_data_credit_probe_log_last_ms) >=
+                    JOB_TX_DATA_CREDIT_PROBE_LOG_MS;
+        if (log_probe) {
+            g_data_credit_probe_log_last_ms = now;
+        }
+    }
+    if (log_probe) {
+        osal_printk("[TX_STATUS_PROBE] t=%u reason=%s count=%u status_seq=%u ref_seq=%u "
+                    "ref_off=%u ret=0x%x send_ms=%u ack_off=%u ack_seq=%u "
+                    "seq_neutral=1\r\n",
+                    (unsigned int)now,
+                    (reason != NULL) ? reason : "none",
+                    (unsigned int)(credit_probe ? g_data_credit_probe_count : 0U),
+                    (unsigned int)seq, (unsigned int)ref_seq,
+                    (unsigned int)ref_offset, (unsigned int)ret,
+                    (unsigned int)send_ms,
+                    (unsigned int)g_async_data_ack_offset,
+                    (unsigned int)g_async_data_ack_seq);
+    }
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_rx_status_req_pending = false;
         return false;
@@ -748,7 +817,6 @@ static bool wait_async_data_window(uint16_t seq, uint32_t data_index,
     uint32_t start = (uint32_t)uapi_systick_get_ms();
     uint32_t last_host_busy_ms = 0;
     uint32_t last_probe_waited_ms = 0;
-    uint32_t last_credit_probe_ms = 0;
     bool logged_stall = false;
 
     while (!g_async_data_error) {
@@ -774,10 +842,12 @@ static bool wait_async_data_window(uint16_t seq, uint32_t data_index,
             maybe_retransmit_async_data(waited);
         }
 #if JOB_TX_DATA_WINDOW_STATUS_PROBE_ENABLE
+        uint32_t now = (uint32_t)uapi_systick_get_ms();
         if (window_allowed && !credit_allowed &&
-            (last_credit_probe_ms == 0U ||
-             (uint32_t)(waited - last_credit_probe_ms) >= JOB_TX_DATA_CREDIT_PROBE_INTERVAL_MS)) {
-            last_credit_probe_ms = waited;
+            (g_data_credit_probe_last_ms == 0U ||
+             (uint32_t)(now - g_data_credit_probe_last_ms) >=
+             JOB_TX_DATA_CREDIT_PROBE_INTERVAL_MS)) {
+            g_data_credit_probe_last_ms = now;
             status_resp_payload_t st = {0};
             (void)request_rx_status_sync("data_credit", seq, offset, &st,
                                          JOB_TX_DATA_STATUS_PROBE_WAIT_MS);
@@ -1890,7 +1960,7 @@ static void handle_uart_control_frame(uint8_t code)
     }
 }
 
-static void send_route_switch_to_wifi(void)
+static bool send_route_switch_to_wifi(void)
 {
     route_switch_payload_t payload = {0};
     payload.target_route = SLE_JOB_ROUTE_TARGET_LEGACY_WIFI;
@@ -1901,9 +1971,45 @@ static void send_route_switch_to_wifi(void)
     osal_printk("[JOB_TX_ROUTE_SWITCH] target=LEGACY_WIFI\r\n");
     if (send_packet_wait_ack(PKT_ROUTE_SWITCH, &payload, sizeof(payload)) == ERRCODE_SUCC) {
         host_sendf("@OK route_switch_accepted target=LEGACY_WIFI\r\n");
+        return true;
     } else {
         host_sendf("@ERR route_switch_failed status=%u\r\n", (unsigned int)g_wait_status);
+        return false;
     }
+}
+
+static void handle_host_mode_sle(void)
+{
+    g_host_mode_target = TX_HOST_MODE_SLE;
+    host_sendf("@OK mode_request target=SLE\r\n");
+
+    /* RX is the required control link. Screen is restored opportunistically
+     * and must not delay Host control becoming usable. */
+    sle_job_client_set_panel_link_allowed(true);
+    sle_job_client_set_background_seek_allowed(true);
+    sle_job_client_request_connect_now();
+    tx_publish_host_link_state(true);
+}
+
+static void handle_host_mode_wifi(void)
+{
+    if (g_data_mode || g_host_job_topology_active) {
+        host_sendf("@ERR mode_switch_busy target=WIFI data_mode=%u job=%u\r\n",
+                   g_data_mode ? 1U : 0U, g_host_job_topology_active ? 1U : 0U);
+        return;
+    }
+
+    g_host_mode_target = TX_HOST_MODE_WIFI;
+    host_sendf("@OK mode_request target=WIFI\r\n");
+    if (send_route_switch_to_wifi()) {
+        host_sendf("@MODE target=WIFI state=PENDING reason=external_verify\r\n");
+        return;
+    }
+
+    /* The RX rejected the switch and remains on SLE. Restore the authoritative
+     * local target so the Host cannot remain stuck in a false WiFi mode. */
+    g_host_mode_target = TX_HOST_MODE_SLE;
+    tx_publish_host_link_state(true);
 }
 
 static void handle_command_line(char *line)
@@ -2105,12 +2211,12 @@ static void handle_command_line(char *line)
         }
         return;
     }
-    if (strcmp(line, "@RX MODE=GRBL") == 0) {
-        if (g_data_mode) {
-            host_sendf("@ERR route_switch_busy data_mode=1\r\n");
-            return;
-        }
-        send_route_switch_to_wifi();
+    if (strcmp(line, "@MODE SLE") == 0) {
+        handle_host_mode_sle();
+        return;
+    }
+    if (strcmp(line, "@MODE WIFI") == 0 || strcmp(line, "@RX MODE=GRBL") == 0) {
+        handle_host_mode_wifi();
         return;
     }
 
@@ -2311,6 +2417,7 @@ static int uart_rx_task(void *arg)
                 data_idle_last_busy_ms = 0;
             }
             sle_job_client_poll_connect();
+            tx_publish_host_link_state(false);
             tx_poll_rx_status_for_panel();
             tx_panel_publish_local_status(false);
             if (g_uart_queue_wait_ready) {
@@ -2395,6 +2502,7 @@ static int sle_init_task(void *arg)
         osal_printk("[JOB_TX_BOOT] sle client init failed: 0x%x\r\n", ret);
     } else {
         sle_job_client_set_panel_link_allowed(true);
+        g_sle_client_initialized = true;
     }
     return (ret == ERRCODE_SUCC) ? 0 : -1;
 }

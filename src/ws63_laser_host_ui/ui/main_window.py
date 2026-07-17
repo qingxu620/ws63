@@ -4,6 +4,7 @@ Main window — integrates all pages, manages transport, workers, and state.
 from __future__ import annotations
 
 import os
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 from app.config_store import ConfigStore, HostConfig
 from app.event_bus import EventBus
 from app.gcode_validator import prepare_gcode_for_upload, format_diagnostic
-from app.state_models import AppState, LinkState
+from app.state_models import AppState, ConnectionMode, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
     parse_rx_status, prepare_gcode_for_rx, RX_EXEC_DONE_RE,
@@ -38,11 +39,22 @@ from ui.pages.logs_page import LogsPage
 
 EXEC_STATUS_POLL_INTERVAL_MS = 5000
 EXEC_STATUS_POLL_TIMEOUT_S = 6.0
+MODE_STATUS_SYNC_RETRY_MS = 100
+CANCELLED_TASK_HOLD_MS = 2000
+
+LINK_EVENT_RE = re.compile(
+    r"@LINK\s+peer=(RX|SCREEN)\s+state=(CONNECTED|DISCONNECTED|CONNECTING|ERROR)\b",
+    re.IGNORECASE,
+)
+MODE_EVENT_RE = re.compile(r"@MODE\s+([^\r\n]+)", re.IGNORECASE)
+PROTOCOL_FIELD_RE = re.compile(r"\b([A-Z_]+)=([^\s]+)", re.IGNORECASE)
 
 
 class MainWindow(QMainWindow):
     focus_state_changed = Signal(bool)
     status_line_received = Signal(str)
+    mode_request_acknowledged = Signal(str)
+    mode_request_failed = Signal(str, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -75,9 +87,19 @@ class MainWindow(QMainWindow):
         self._log_view_error_reported = False
         self._exec_poll_inflight = False
         self._exec_poll_failures = 0
+        self._cancelled_job_id = 0
         self._exec_poll_timer = QTimer(self)
         self._exec_poll_timer.setInterval(EXEC_STATUS_POLL_INTERVAL_MS)
         self._exec_poll_timer.timeout.connect(self._poll_execution_status)
+        self._mode_status_sync_pending = False
+        self._mode_status_sync_timer = QTimer(self)
+        self._mode_status_sync_timer.setSingleShot(True)
+        self._mode_status_sync_timer.setInterval(MODE_STATUS_SYNC_RETRY_MS)
+        self._mode_status_sync_timer.timeout.connect(self._try_mode_status_sync)
+        self._cancelled_task_timer = QTimer(self)
+        self._cancelled_task_timer.setSingleShot(True)
+        self._cancelled_task_timer.setInterval(CANCELLED_TASK_HOLD_MS)
+        self._cancelled_task_timer.timeout.connect(self._return_cancelled_task_to_idle)
 
         # UI
         self._build_ui()
@@ -167,7 +189,7 @@ class MainWindow(QMainWindow):
         self.page_job.focus_on_requested.connect(self._on_focus_on)
         self.page_job.focus_off_requested.connect(self._on_focus_off)
         self.page_job.status_requested.connect(self._on_status)
-        self.page_job.switch_wifi_requested.connect(self._on_switch_wifi)
+        self.page_job.mode_requested.connect(self._on_mode_selected)
 
         # Connection & Settings page
         self.page_conn.save_requested.connect(self._on_save_settings)
@@ -176,6 +198,8 @@ class MainWindow(QMainWindow):
         self.event_bus.log_message.connect(self._on_log_message)
         self.focus_state_changed.connect(self._apply_focus_state)
         self.status_line_received.connect(self._parse_rx_line)
+        self.mode_request_acknowledged.connect(self._on_mode_request_acknowledged)
+        self.mode_request_failed.connect(self._on_mode_request_failed)
 
     def _enqueue_log(self, channel: str, message: str) -> None:
         self.event_bus.emit_log(channel, message)
@@ -235,6 +259,8 @@ class MainWindow(QMainWindow):
                 )
 
     def _process_protocol_message(self, message: str) -> None:
+        self._process_mode_protocol_message(message)
+
         # @STATUS may arrive on the TX command port or either optional log port.
         self._parse_rx_line(message)
 
@@ -254,6 +280,152 @@ class MainWindow(QMainWindow):
             )
             self._mark_execution_complete()
 
+    @staticmethod
+    def _protocol_fields(text: str) -> dict[str, str]:
+        return {
+            key.upper(): value.rstrip(",;")
+            for key, value in PROTOCOL_FIELD_RE.findall(text)
+        }
+
+    @staticmethod
+    def _connection_mode(value: str) -> Optional[ConnectionMode]:
+        normalized = value.strip().upper()
+        if normalized == "SLE":
+            return ConnectionMode.SLE_VIA_TX
+        if normalized in ("WIFI", "WI-FI", "LEGACY_WIFI"):
+            return ConnectionMode.WIFI_TCP
+        return None
+
+    def _process_mode_protocol_message(self, message: str) -> None:
+        link_match = LINK_EVENT_RE.search(message)
+        if link_match is not None:
+            peer = link_match.group(1).upper()
+            link_state = LinkState(link_match.group(2).upper())
+            if peer == "RX":
+                self.state.sle_rx_state = link_state
+                if (link_state == LinkState.DISCONNECTED and
+                        self.state.mode_target == ConnectionMode.SLE_VIA_TX and
+                        self.state.mode_transition == "ACTIVE"):
+                    self.state.mode_transition = "CONNECTING"
+            else:
+                self.state.screen_state = link_state
+            self._refresh_mode_ui()
+
+        mode_match = MODE_EVENT_RE.search(message)
+        if mode_match is not None:
+            fields = self._protocol_fields(mode_match.group(1))
+            active_mode = self._connection_mode(fields.get("ACTIVE", ""))
+            target_mode = self._connection_mode(fields.get("TARGET", ""))
+            transition = fields.get("STATE", "").upper()
+
+            if active_mode == ConnectionMode.SLE_VIA_TX:
+                was_confirmed = (
+                    self.state.mode == ConnectionMode.SLE_VIA_TX
+                    and self.state.mode_target == ConnectionMode.SLE_VIA_TX
+                    and self.state.mode_transition == "ACTIVE"
+                    and self.state.sle_rx_state == LinkState.CONNECTED
+                )
+                self.state.mode = ConnectionMode.SLE_VIA_TX
+                self.state.mode_target = ConnectionMode.SLE_VIA_TX
+                self.state.mode_transition = "ACTIVE"
+                self.state.sle_rx_state = (
+                    LinkState.CONNECTED
+                    if fields.get("RX", "").lower() == "ready"
+                    else self.state.sle_rx_state
+                )
+                screen = fields.get("SCREEN", "").lower()
+                if screen == "ready":
+                    self.state.screen_state = LinkState.CONNECTED
+                elif screen == "connecting":
+                    self.state.screen_state = LinkState.CONNECTING
+                self._refresh_mode_ui()
+                if not was_confirmed:
+                    self._schedule_mode_status_sync()
+            elif target_mode is not None and transition:
+                self.state.mode_target = target_mode
+                self.state.mode_transition = transition
+                if fields.get("RX", "").lower() == "connecting":
+                    self.state.sle_rx_state = LinkState.CONNECTING
+                elif fields.get("RX", "").lower() == "disconnected":
+                    self.state.sle_rx_state = LinkState.DISCONNECTED
+                screen = fields.get("SCREEN", "").lower()
+                if screen == "ready":
+                    self.state.screen_state = LinkState.CONNECTED
+                elif screen == "connecting":
+                    self.state.screen_state = LinkState.CONNECTING
+                self._refresh_mode_ui(reason=fields.get("REASON", ""))
+
+        # Compatibility with the route-switch response used before @MODE events.
+        if "@OK route_switch_accepted" in message:
+            self.state.mode_target = ConnectionMode.WIFI_TCP
+            self.state.mode_transition = "PENDING"
+            self._refresh_mode_ui()
+        elif "@ERR route_switch_failed" in message:
+            self.state.mode_target = ConnectionMode.WIFI_TCP
+            self.state.mode_transition = "FAILED"
+            self._refresh_mode_ui(reason="route_switch_failed")
+
+    @staticmethod
+    def _link_text(state: LinkState) -> str:
+        return {
+            LinkState.CONNECTED: "已连接",
+            LinkState.DISCONNECTED: "未连接",
+            LinkState.CONNECTING: "连接中",
+            LinkState.ERROR: "故障",
+        }.get(state, state.value)
+
+    def _refresh_mode_ui(self, *, reason: str = "") -> None:
+        target = self.state.mode_target
+        transition = self.state.mode_transition
+        rx_text = self._link_text(self.state.sle_rx_state)
+        screen_text = self._link_text(self.state.screen_state)
+
+        if transition == "FAILED":
+            status = f"{target.value} 切换失败"
+            if reason:
+                status += f"：{reason}"
+            tone = "error"
+            badge_value = f"{target.value}失败"
+            badge_tone = "error"
+        elif target == ConnectionMode.WIFI_TCP:
+            if transition == "EXTERNAL_VERIFY":
+                status = "Wi-Fi 路由已脱离 SLE，请在 LaserGRBL 侧验证"
+            elif transition == "REQUESTING":
+                status = "正在请求切换至 Wi-Fi / LaserGRBL"
+            else:
+                status = "Wi-Fi 切换请求已接受，等待 LaserGRBL 外部验证"
+            tone = "pending"
+            badge_value = "WiFi待验证"
+            badge_tone = "warn"
+        elif transition == "ACTIVE" and self.state.sle_rx_state == LinkState.CONNECTED:
+            status = f"SLE 已生效 · RX{rx_text} · Screen{screen_text}"
+            tone = "ok"
+            badge_value = "SLE"
+            badge_tone = "ok"
+        elif transition == "REQUESTING":
+            status = "正在请求 TX 恢复 RX 与 Screen 星闪连接"
+            tone = "pending"
+            badge_value = "SLE请求中"
+            badge_tone = "warn"
+        elif transition == "CONNECTING":
+            status = f"SLE 连接中 · RX{rx_text} · Screen{screen_text}"
+            tone = "pending"
+            badge_value = "SLE连接中"
+            badge_tone = "warn"
+        else:
+            status = f"SLE 状态待 TX 确认 · RX{rx_text} · Screen{screen_text}"
+            tone = "default"
+            badge_value = self.state.mode.value
+            badge_tone = "info"
+
+        self.page_job.set_mode_selection(target.value, status, tone)
+        sle_controls_enabled = (
+            target == ConnectionMode.SLE_VIA_TX
+            and transition not in ("REQUESTING", "CONNECTING", "FAILED")
+        )
+        self.page_job.set_sle_controls_enabled(sle_controls_enabled)
+        self.badge_mode.set_value(badge_value, badge_tone)
+
     def _parse_rx_line(self, message: str) -> None:
         status = parse_rx_status(message)
         if status is None:
@@ -261,6 +433,17 @@ class MainWindow(QMainWindow):
         previous_state = self.state.rx_state_code
         tracked_job = self.state.rx_job_id
         same_job_before_update = tracked_job <= 0 or status.job_id in (0, tracked_job)
+        cancelled_status = (
+            self._cancelled_job_id > 0
+            and status.job_id in (0, self._cancelled_job_id)
+        )
+        if status.state == 3 and (self.state.termination_requested or cancelled_status):
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] ignore_post_cancel_executing job={status.job_id} "
+                f"tracked_job={tracked_job}",
+            )
+            return
         if self.state.execution_complete and status.state == 3 and same_job_before_update:
             self._enqueue_log(
                 "status",
@@ -432,7 +615,7 @@ class MainWindow(QMainWindow):
         val_rx = rx_map.get(s.rx_state, s.rx_state.value)
         val_focus = "开启" if s.focus_active else "关闭"
 
-        self.badge_mode.set_value(s.mode.value, "info")
+        self._refresh_mode_ui()
         self.badge_tx.set_value(val_tx, tone_tx)
         self.badge_rx.set_value(val_rx, tone_rx)
         self.badge_focus.set_value(val_focus, tone_focus)
@@ -460,6 +643,12 @@ class MainWindow(QMainWindow):
         execution_start = text.startswith(
             ("执行中", "执行已启动", "预缓冲执行中", "预缓冲完成，启动执行", "RX 已自动启动")
         )
+        if execution_start and self._cancelled_job_id > 0:
+            self._enqueue_log(
+                "status",
+                f"[EXEC_TRACK] ignore_post_cancel_start job={self._cancelled_job_id} text={text}",
+            )
+            return
         if execution_start and self.state.execution_complete:
             self._enqueue_log(
                 "status",
@@ -471,6 +660,7 @@ class MainWindow(QMainWindow):
 
         self.page_job.set_task_status(text, pct)
         if execution_start:
+            self._cancelled_task_timer.stop()
             was_expected = self.state.execution_expected
             self.state.execution_expected = True
             self.state.termination_requested = False
@@ -489,7 +679,15 @@ class MainWindow(QMainWindow):
             self.state.execution_complete = False
             self._stop_execution_status_poll()
             self.page_job.set_execution_state(False)
+            if text in ("已放弃", "已取消并清空"):
+                self._cancelled_job_id = self.state.rx_job_id
+                self.state.prev_rx_state_code = self.state.rx_state_code
+                self.state.rx_state_code = 5
+                self._update_monitor()
+                self.page_job.show_cancelled_state()
+                self._cancelled_task_timer.start()
         elif text in ("停止命令失败", "放弃命令失败", "取消命令失败"):
+            self._cancelled_task_timer.stop()
             self.state.termination_requested = False
         elif text == "执行失败":
             self.state.execution_expected = False
@@ -508,6 +706,26 @@ class MainWindow(QMainWindow):
                 int(self.state.rx_job_total * pct / 100),
             )
             self._update_monitor()
+
+    def _return_cancelled_task_to_idle(self) -> None:
+        self._cancelled_task_timer.stop()
+        if not self.state.termination_requested or self.state.execution_expected:
+            return
+
+        self.state.prev_rx_state_code = self.state.rx_state_code
+        self.state.rx_state_code = 0
+        self.state.rx_job_id = 0
+        self.state.rx_received = 0
+        self.state.rx_job_total = 0
+        self.state.rx_cache_free = JOB_MAX_SIZE
+        self.state.rx_executed_lines = 0
+        self.state.rx_completed_lines = 0
+        self.state.rx_total_lines = 0
+        self.state.termination_requested = False
+        self.state.execution_complete = False
+        self._update_monitor()
+        self.page_job.set_task_status("空闲", -1)
+        self._enqueue_log("status", "[EXEC_TRACK] cancelled task returned to idle")
 
     # ---- Connection ----
 
@@ -543,6 +761,11 @@ class MainWindow(QMainWindow):
         self._stop_execution_status_poll()
         self.client.close()
         self.state.tx_state = LinkState.DISCONNECTED
+        self.state.sle_rx_state = LinkState.DISCONNECTED
+        self.state.screen_state = LinkState.DISCONNECTED
+        self.state.mode_transition = "UNKNOWN"
+        self._mode_status_sync_pending = False
+        self._mode_status_sync_timer.stop()
         self.page_conn.set_connected(False)
         self._update_status_badges()
         self._update_monitor()
@@ -730,7 +953,9 @@ class MainWindow(QMainWindow):
                 self.state.execution_expected = False
                 self.state.execution_complete = False
                 self._stop_execution_status_poll()
-            self.worker.task_status.emit("控制命令已接管上传", -1)
+            self.worker.task_status.emit(
+                "已取消并清空" if "@ABORT" in str(exc) else "控制命令已接管上传", -1
+            )
             return
         self.worker.task_status.emit("上传完成，RX 任务已就绪", 100)
 
@@ -805,7 +1030,9 @@ class MainWindow(QMainWindow):
                     self.state.execution_expected = False
                     self.state.execution_complete = False
                     self._stop_execution_status_poll()
-                self.worker.task_status.emit("控制命令已接管上传", -1)
+                self.worker.task_status.emit(
+                    "已取消并清空" if "@ABORT" in str(exc) else "控制命令已接管上传", -1
+                )
                 return
             self.worker.log.emit("status", f"[EXEC_FLOW] 上传阶段完成")
 
@@ -851,6 +1078,8 @@ class MainWindow(QMainWindow):
             return b""
 
     def _begin_job_tracking(self, gcode: bytes, job_id: int) -> None:
+        self._cancelled_task_timer.stop()
+        self._cancelled_job_id = 0
         self.state.prev_rx_state_code = self.state.rx_state_code
         self.state.rx_state_code = 1
         self.state.rx_job_id = job_id
@@ -869,6 +1098,8 @@ class MainWindow(QMainWindow):
         )
 
     def _on_exec_start(self) -> None:
+        self._cancelled_task_timer.stop()
+        self._cancelled_job_id = 0
         job_id = self.page_job.get_job_id()
         timeout = self.page_job.get_timeout()
         self.state.execution_complete = False
@@ -1029,20 +1260,98 @@ class MainWindow(QMainWindow):
             self.status_line_received.emit(result.line)
         self._run_job_worker(_work)
 
+    def _schedule_mode_status_sync(self) -> None:
+        self._mode_status_sync_pending = True
+        self._try_mode_status_sync()
+
+    def _try_mode_status_sync(self) -> None:
+        if not self._mode_status_sync_pending:
+            return
+        if not self._client_is_open():
+            self._mode_status_sync_pending = False
+            return
+        if self.worker.is_busy():
+            if not self._mode_status_sync_timer.isActive():
+                self._mode_status_sync_timer.start()
+            return
+        self._mode_status_sync_pending = False
+        self._enqueue_log("status", "SLE 已恢复，自动同步 RX 状态")
+        self._on_status()
+
     def _apply_focus_state(self, active: bool) -> None:
         self.state.focus_active = active
         self.page_job.set_focus_state(active)
         self._update_status_badges()
         self._update_monitor()
 
-    def _on_switch_wifi(self) -> None:
-        def _work():
-            self.client.send_control("@RX MODE=GRBL", "@OK route_switch_accepted", 8.0)
-            self.worker.task_status.emit("Wi-Fi 切换请求已接受，等待外部验证", 100)
-            self.worker.log.emit(
-                "status", "ROUTE_SWITCH accepted；请用 LaserGRBL 验证 Wi-Fi 路由"
-            )
+    def _on_mode_selected(self, requested: str) -> None:
+        target = self._connection_mode(requested)
+        if target is None:
+            self._enqueue_log("error", f"不支持的控制模式: {requested}")
+            self._refresh_mode_ui()
+            return
+        if not self._client_is_open():
+            self._enqueue_log("error", "TX 命令串口未连接，无法切换控制模式")
+            self._refresh_mode_ui()
+            return
+        if self.worker.is_busy():
+            self._enqueue_log("error", "任务进行中，无法切换控制模式")
+            self._refresh_mode_ui()
+            return
+
+        self.state.mode_target = target
+        self.state.mode_transition = "REQUESTING"
+        self._refresh_mode_ui()
+        command_target = "SLE" if target == ConnectionMode.SLE_VIA_TX else "WIFI"
+
+        def _work() -> None:
+            try:
+                self.client.send_control(
+                    f"@MODE {command_target}",
+                    f"@OK mode_request target={command_target}",
+                    8.0,
+                )
+            except Exception as exc:
+                self.mode_request_failed.emit(command_target, str(exc))
+                raise
+            self.mode_request_acknowledged.emit(command_target)
+
         self._run_job_worker(_work)
+
+    def _on_mode_request_acknowledged(self, requested: str) -> None:
+        target = self._connection_mode(requested)
+        if target is None or target != self.state.mode_target:
+            return
+        if target == ConnectionMode.SLE_VIA_TX:
+            if self.state.mode_transition not in ("ACTIVE", "FAILED"):
+                self.state.mode_transition = "CONNECTING"
+            self.page_job.set_task_status("SLE 重连请求已接受", -1)
+            self._enqueue_log("status", "MODE_REQUEST SLE accepted；等待 RX 连接确认")
+        else:
+            if self.state.mode_transition not in ("EXTERNAL_VERIFY", "FAILED"):
+                self.state.mode_transition = "PENDING"
+            self.page_job.set_task_status("Wi-Fi 切换请求已接受，等待外部验证", 100)
+            self._enqueue_log(
+                "status", "MODE_REQUEST WIFI accepted；请用 LaserGRBL 验证 Wi-Fi 路由"
+            )
+        self._refresh_mode_ui()
+
+    def _on_mode_request_failed(self, requested: str, reason: str) -> None:
+        target = self._connection_mode(requested)
+        if target is None or target != self.state.mode_target:
+            return
+        if (target == ConnectionMode.SLE_VIA_TX and
+                self.state.mode_transition == "ACTIVE"):
+            return
+        if (target == ConnectionMode.WIFI_TCP and
+                self.state.mode_transition == "EXTERNAL_VERIFY"):
+            return
+        self.state.mode_transition = "FAILED"
+        self._refresh_mode_ui(reason=reason)
+
+    def _on_switch_wifi(self) -> None:
+        """Compatibility entry point for old callers of the one-way action."""
+        self._on_mode_selected("WIFI")
 
     def _on_save_settings(self, config: HostConfig) -> None:
         self.config_store.save(config)
@@ -1066,6 +1375,9 @@ class MainWindow(QMainWindow):
             return
         self.client.close()
         self._stop_execution_status_poll()
+        self._cancelled_task_timer.stop()
+        self._mode_status_sync_pending = False
+        self._mode_status_sync_timer.stop()
         self.tx_monitor.close()
         self.rx_monitor.close()
         self._close_log_file()

@@ -68,6 +68,7 @@ static volatile uint32_t g_queue_depth_samples = 0;
 static volatile unsigned long g_queue_empty_count = 0;
 static timer_handle_t g_motion_timer = NULL;
 static osal_semaphore g_motion_timer_sem;
+static bool g_motion_timer_sem_ready = false;
 static volatile bool g_motion_timer_waiting = false;
 static bool g_motion_timer_ready = false;
 static volatile bool g_motion_timer_fault = false;
@@ -591,7 +592,6 @@ void sle_job_motion_executor_init(void)
     g_last_activity_ms = 0;
     g_queue_head = 0;
     g_queue_tail = 0;
-    g_worker_started = false;
     g_output_armed = false;
     g_motion_timer_waiting = false;
     g_motion_timer_fault = false;
@@ -601,11 +601,20 @@ void sle_job_motion_executor_init(void)
     g_last_dac_valid = false;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
-    if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
-        osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
-        g_queue_ready = true;
+    if (!g_queue_ready) {
+        if (osal_mutex_init(&g_queue_mutex) == OSAL_SUCCESS &&
+            osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
+            g_queue_ready = true;
+        }
     }
-    if (osal_sem_init(&g_motion_timer_sem, 0) == OSAL_SUCCESS &&
+    while (g_queue_ready &&
+           osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
+    }
+    if (!g_motion_timer_sem_ready &&
+        osal_sem_init(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
+        g_motion_timer_sem_ready = true;
+    }
+    if (g_motion_timer_sem_ready && !g_motion_timer_ready &&
         uapi_timer_adapter(SLE_JOB_MOTION_TIMER_INDEX, TIMER_2_IRQN,
                            SLE_JOB_MOTION_TIMER_IRQ_PRIORITY) == ERRCODE_SUCC &&
         uapi_timer_create(SLE_JOB_MOTION_TIMER_INDEX, &g_motion_timer) == ERRCODE_SUCC) {
@@ -614,9 +623,12 @@ void sle_job_motion_executor_init(void)
                     (unsigned int)SLE_JOB_MOTION_TIMER_INDEX,
                     (unsigned int)SLE_JOB_MOTION_TIMER_THRESHOLD_US,
                     (unsigned int)SLE_JOB_MOTION_TIMER_TAIL_US);
-    } else {
-        g_motion_timer_ready = false;
+    }
+    if (!g_motion_timer_ready) {
         osal_printk("[JOB_MOTION_TIMER] init failed, using busy wait\r\n");
+    }
+    while (g_motion_timer_sem_ready &&
+           osal_sem_down_timeout(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
     }
     (void)write_current_position(true);
 }
@@ -738,6 +750,9 @@ errcode_t sle_job_motion_executor_start_task(void)
     if (!g_queue_ready) {
         return ERRCODE_FAIL;
     }
+    if (g_worker_started) {
+        return ERRCODE_SUCC;
+    }
 
     osal_kthread_lock();
     osal_task *task = osal_kthread_create(sle_job_motion_executor_task, NULL, "laser_motion", SLE_JOB_TASK_STACK_SIZE_DEFAULT);
@@ -851,7 +866,8 @@ void sle_job_motion_executor_request_abort(void)
 
 void sle_job_motion_executor_clear_abort(void)
 {
-    while (osal_sem_down_timeout(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
+    while (g_motion_timer_sem_ready &&
+           osal_sem_down_timeout(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
     }
     g_motion_timer_fault = false;
     g_abort_requested = false;

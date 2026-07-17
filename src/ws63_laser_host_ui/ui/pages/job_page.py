@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QIntValidator, QPainter, QPen
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget, QGroupBox,
 )
 
@@ -128,6 +128,8 @@ class JobPage(QWidget):
     focus_on_requested = Signal(int)        # power 1-100
     focus_off_requested = Signal()
     status_requested = Signal()
+    mode_requested = Signal(str)
+    # Kept for integrations that still listen to the old one-way action.
     switch_wifi_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -450,24 +452,50 @@ class JobPage(QWidget):
 
         right_column.addWidget(safety_group, 2, 0)
 
-        # Card 6: 路由切换
-        route_group = QGroupBox("路由切换")
+        # Card 6: explicit control-mode selection
+        route_group = QGroupBox("控制模式")
         route_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         r_layout = QVBoxLayout(route_group)
         r_layout.setSpacing(5)
         r_layout.setContentsMargins(14, 18, 14, 8)
 
-        route_desc = QLabel("将接收板的指令通信路由切换至 Wi-Fi / GRBL 无线控制旁路。")
+        route_desc = QLabel("选择 Host 要求的控制通路；实际生效状态以 TX/RX 回报为准。")
         route_desc.setWordWrap(True)
         route_desc.setStyleSheet("color: #475569; font-size: 13px;")
         r_layout.addWidget(route_desc)
 
-        self.btn_wifi = QPushButton("切换至 Wi-Fi / GRBL 控制")
-        self.btn_wifi.setObjectName("btnPrimary")
-        self.btn_wifi.setCursor(self.cursor())
-        self.btn_wifi.setMinimumHeight(32)
-        self.btn_wifi.clicked.connect(self.switch_wifi_requested.emit)
-        r_layout.addWidget(self.btn_wifi)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        self.mode_buttons = QButtonGroup(self)
+        self.mode_buttons.setExclusive(True)
+
+        self.btn_sle = QPushButton("SLE 星闪")
+        self.btn_wifi = QPushButton("Wi-Fi / LaserGRBL")
+        for button in (self.btn_sle, self.btn_wifi):
+            button.setObjectName("modeOption")
+            button.setCheckable(True)
+            button.setCursor(self.cursor())
+            button.setMinimumHeight(32)
+            self.mode_buttons.addButton(button)
+            mode_row.addWidget(button, 1)
+        self.btn_sle.setChecked(True)
+        self.btn_sle.clicked.connect(lambda: self.mode_requested.emit("SLE"))
+        self.btn_wifi.clicked.connect(self._request_wifi_mode)
+        r_layout.addLayout(mode_row)
+
+        self.lbl_mode_status = QLabel("SLE 状态待 TX 确认")
+        self.lbl_mode_status.setObjectName("modeStatus")
+        self.lbl_mode_status.setWordWrap(True)
+        self.lbl_mode_status.setStyleSheet("color: #64748B; font-size: 12px;")
+        r_layout.addWidget(self.lbl_mode_status)
+
+        route_group.setStyleSheet(
+            "QPushButton#modeOption { background:#F8FAFC; color:#334155; "
+            "border:1px solid #CBD5E1; border-radius:6px; padding:5px 8px; }"
+            "QPushButton#modeOption:hover { border-color:#38BDF8; }"
+            "QPushButton#modeOption:checked { background:#0284C7; color:white; "
+            "border-color:#0284C7; font-weight:700; }"
+        )
 
         right_column.addWidget(route_group, 2, 1)
 
@@ -480,6 +508,43 @@ class JobPage(QWidget):
         self.timeout_edit.setText(str(config.timeout_cmd))
         self.preroll_edit.setText(str(config.preroll_bytes))
         self.focus_power.setText(str(config.focus_power))
+
+    def _request_wifi_mode(self) -> None:
+        self.mode_requested.emit("WIFI")
+        self.switch_wifi_requested.emit()
+
+    def set_mode_selection(self, mode: str, status: str, tone: str = "default") -> None:
+        """Render requested/confirmed mode without emitting another request."""
+        normalized = mode.strip().upper()
+        self.btn_sle.setChecked(normalized == "SLE")
+        self.btn_wifi.setChecked(normalized in ("WIFI", "WI-FI"))
+        colors = {
+            "ok": "#059669",
+            "pending": "#D97706",
+            "error": "#DC2626",
+            "default": "#64748B",
+        }
+        self.lbl_mode_status.setText(status)
+        self.lbl_mode_status.setStyleSheet(
+            f"color: {colors.get(tone, colors['default'])}; font-size: 12px;"
+        )
+
+    def set_sle_controls_enabled(self, enabled: bool) -> None:
+        """Gate controls that require the TX-to-RX SLE command path."""
+        for control in (
+            self.btn_upload,
+            self.btn_upload_exec,
+            self.btn_exec,
+            self.btn_abort,
+            self.btn_stop,
+            self.btn_resume,
+            self.btn_force_cancel,
+            self.btn_status,
+            self.btn_outline_scan,
+            self.btn_focus,
+            self.focus_power,
+        ):
+            control.setEnabled(enabled)
 
     def get_job_id(self) -> int:
         try:
@@ -537,6 +602,18 @@ class JobPage(QWidget):
             self.lbl_state.setText("执行完成")
             self.lbl_state.setStyleSheet("color: #10B981; font-size: 24px; font-weight: 800;")
             self.lbl_substate.setText("任务已完成，控制已释放")
+
+    def show_cancelled_state(self) -> None:
+        self._execution_active = False
+        self.arc.set_spinning(False)
+        self._exec_progress_animation.stop()
+        self.arc.set_color("#D97706")
+        self.arc.set_caption("已取消")
+        self.lbl_state.setText("已取消")
+        self.lbl_state.setStyleSheet(
+            "color: #D97706; font-size: 24px; font-weight: 800;"
+        )
+        self.lbl_substate.setText("任务已取消，正在返回空闲")
 
     def _on_focus(self) -> None:
         if self._focus_active:

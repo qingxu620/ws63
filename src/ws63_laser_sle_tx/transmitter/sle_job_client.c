@@ -29,7 +29,7 @@
 #define SLE_LINK_ROLE_PANEL 2U
 #define JOB_SLE_WRITE_CALL_SLOW_MS 20U
 #define PANEL_BACKGROUND_SEEK_BURST_MS 1200U
-#define PANEL_BACKGROUND_SEEK_RETRY_MS 5000U
+#define PANEL_BACKGROUND_SEEK_BUSY_RETRY_MS 5000U
 #define JOB_SLE_RSSI_POLL_PERIOD_MS 5000U
 
 #ifndef SLE_SEEK_ACTIVE
@@ -41,6 +41,7 @@ static uint16_t g_conn_id = SLE_CONN_INVALID;
 static uint16_t g_panel_conn_id = SLE_CONN_INVALID;
 static bool g_panel_link_allowed = false;
 static bool g_background_seek_allowed = true;
+static bool g_background_seek_busy = false;
 static bool g_sle_enabled = false;
 static bool g_seek_active = false;
 static bool g_connecting = false;
@@ -99,9 +100,9 @@ static void tune_job_link_after_connect(uint16_t conn_id, uint8_t role)
 #endif
 }
 
-static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
-static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x01};
+static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
 
 static bool uuid16_equals(const sle_uuid_t *uuid, uint16_t expect)
 {
@@ -210,7 +211,8 @@ static void start_seek_if_needed(void)
 
     uint32_t now = (uint32_t)uapi_systick_get_ms();
     bool panel_only_seek = !need_rx_link() && need_panel_link();
-    uint32_t retry_ms = panel_only_seek ? PANEL_BACKGROUND_SEEK_RETRY_MS : CONNECT_RETRY_INTERVAL_MS;
+    uint32_t retry_ms = (panel_only_seek && g_background_seek_busy) ?
+                        PANEL_BACKGROUND_SEEK_BUSY_RETRY_MS : CONNECT_RETRY_INTERVAL_MS;
     if (g_last_connect_ms != 0 &&
         (uint32_t)(now - g_last_connect_ms) < retry_ms) {
         return;
@@ -237,7 +239,8 @@ static void start_seek_if_needed(void)
 
 static void stop_panel_background_seek_if_expired(void)
 {
-    if (!g_seek_active || g_connecting || need_rx_link() || !need_panel_link() ||
+    if (!g_background_seek_busy || !g_seek_active || g_connecting ||
+        need_rx_link() || !need_panel_link() ||
         g_seek_started_ms == 0) {
         return;
     }
@@ -658,6 +661,7 @@ errcode_t sle_job_client_init(void)
     g_panel_conn_id = SLE_CONN_INVALID;
     g_panel_link_allowed = false;
     g_background_seek_allowed = true;
+    g_background_seek_busy = false;
     g_sle_enabled = false;
     g_seek_active = false;
     g_connecting = false;
@@ -870,6 +874,35 @@ void sle_job_client_set_background_seek_allowed(bool allowed)
         return;
     }
 
+    start_seek_if_needed();
+}
+
+void sle_job_client_set_background_seek_busy(bool busy)
+{
+    if (g_background_seek_busy == busy) {
+        return;
+    }
+
+    g_background_seek_busy = busy;
+    osal_printk("[tx_seek] background_busy=%u retry_ms=%u\r\n",
+                busy ? 1U : 0U,
+                busy ? (unsigned int)PANEL_BACKGROUND_SEEK_BUSY_RETRY_MS : 0U);
+
+    if (!busy) {
+        /* Resume idle continuous discovery without waiting for the busy retry period. */
+        g_last_connect_ms = 0;
+    }
+    sle_job_client_poll_connect();
+}
+
+void sle_job_client_request_connect_now(void)
+{
+    /* A Host mode selection is an explicit request, so do not inherit the
+     * normal reconnect backoff. Healthy RX/Screen links are kept intact. */
+    g_last_connect_ms = 0;
+    osal_printk("[tx_seek] immediate product-link check rx=%u panel=%u\r\n",
+                sle_job_client_is_connected() ? 1U : 0U,
+                sle_job_client_panel_is_connected() ? 1U : 0U);
     start_seek_if_needed();
 }
 

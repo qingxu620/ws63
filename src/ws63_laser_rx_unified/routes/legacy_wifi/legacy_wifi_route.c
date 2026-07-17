@@ -32,6 +32,8 @@
 #define GRBL_RESET_CHAR 0x18
 #define WIFI_ROUTE_SWITCH_TASK_STACK_SIZE 0x1000U
 #define WIFI_ROUTE_SWITCH_DELAY_MS 100U
+#define WIFI_ROUTE_STOP_WAIT_MS 2000U
+#define WIFI_ROUTE_STOP_POLL_MS 10U
 
 static char g_rx_line[RX_LINE_MAX];
 static int g_rx_pos = 0;
@@ -46,10 +48,15 @@ static unsigned long g_line_id = 0;
 static unsigned long g_ok_count = 0;
 static unsigned long g_error_count = 0;
 static unsigned long g_status_count = 0;
+static unsigned long g_tcp_session_id = 0;
+static bool g_tcp_first_rx_logged = false;
+static volatile bool g_client_io_failed = false;
 static bool g_wifi_event_registered = false;
 static volatile bool g_route_started = false;
+static volatile bool g_route_task_running = false;
 static volatile bool g_stop_requested = false;
 static volatile bool g_sle_switch_pending = false;
+static volatile bool g_softap_started = false;
 #if LEGACY_WIFI_STATUS_PERIODIC
 static unsigned long g_last_status_ms = 0;
 #endif
@@ -145,29 +152,78 @@ static void log_tcp_rx_chunk(const uint8_t *buf, int len)
     if (len == 1 && buf[0] == '?') {
         g_tcp_rx_realtime_q++;
     }
+
+    if (!g_tcp_first_rx_logged && len > 0) {
+        static const char hex_digits[] = "0123456789ABCDEF";
+        char preview[(LEGACY_WIFI_TCP_FIRST_RX_PREVIEW_BYTES * 3U) + 1U];
+        unsigned int limit = ((unsigned int)len < LEGACY_WIFI_TCP_FIRST_RX_PREVIEW_BYTES) ?
+                             (unsigned int)len : LEGACY_WIFI_TCP_FIRST_RX_PREVIEW_BYTES;
+        unsigned int out = 0;
+        const char *kind = "data";
+
+        for (unsigned int i = 0; i < limit; i++) {
+            preview[out++] = hex_digits[(buf[i] >> 4) & 0x0FU];
+            preview[out++] = hex_digits[buf[i] & 0x0FU];
+            if (i + 1U < limit) {
+                preview[out++] = ' ';
+            }
+        }
+        preview[out] = '\0';
+
+        if (buf[0] == GRBL_RESET_CHAR) {
+            kind = "ctrl-x";
+        } else if (len >= 4 && memcmp(buf, "GET ", 4) == 0) {
+            kind = "websocket-http";
+        } else if (buf[0] == '?') {
+            kind = "status-query";
+        }
+
+        g_tcp_first_rx_logged = true;
+        osal_printk("[WIFI_TCP_FIRST_RX] session=%lu len=%d kind=%s hex=%s%s\r\n",
+                    g_tcp_session_id, len, kind, preview,
+                    ((unsigned int)len > limit) ? " ..." : "");
+    }
 }
 
-static void wifi_send_str(const char *str)
+static bool wifi_send_str(const char *str)
 {
+    if (str == NULL) {
+        return false;
+    }
+
     int sock = g_client_sock;
     const char *ptr = str;
     size_t left = strlen(str);
     size_t total = left;
+    size_t sent_total = 0;
 
-    while (sock >= 0 && left > 0) {
+    if (sock < 0) {
+        return false;
+    }
+
+    while (left > 0) {
         int sent = send(sock, ptr, left, 0);
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
         if (sent <= 0) {
-            osal_printk("[laser wifi] tcp send failed errno=%d\r\n", errno);
-            return;
+            int send_errno = (sent < 0) ? errno : 0;
+            g_client_io_failed = true;
+            osal_printk("[WIFI_TCP_SEND_FAIL] session=%lu sock=%d sent=%u total=%u ret=%d errno=%d\r\n",
+                        g_tcp_session_id, sock, (unsigned int)sent_total,
+                        (unsigned int)total, sent, send_errno);
+            return false;
         }
         ptr += sent;
         left -= (size_t)sent;
+        sent_total += (size_t)sent;
+        g_tcp_tx_bytes += (unsigned long)sent;
     }
 
     if (total > 0) {
         g_tcp_tx_messages++;
-        g_tcp_tx_bytes += (unsigned long)total;
     }
+    return true;
 }
 
 static void send_ok(void)
@@ -194,15 +250,26 @@ static bool enqueue_motion_cmd(const legacy_wifi_motion_cmd_t *cmd)
     return true;
 }
 
-static void send_grbl_startup(const char *source)
+static bool send_grbl_startup(const char *source)
 {
-    char buf[112];
+    char buf[192];
 
-    wifi_send_str("\r\nGrbl 1.1f ['$' for help]\r\n");
-    snprintf(buf, sizeof(buf), "[MSG:WS63 WiFi Laser ready source=%s uptime=%lums reset=0x%04x count=%u]\r\n",
-             source, (unsigned long)uapi_systick_get_ms(), (unsigned int)get_cpu_utils_reset_cause(),
-             get_cpu_utils_reset_count());
-    wifi_send_str(buf);
+    int len = snprintf(buf, sizeof(buf),
+                       "\r\nGrbl 1.1f ['$' for help]\r\n"
+                       "[MSG:WS63 WiFi Laser ready source=%s uptime=%lums reset=0x%04x count=%u]\r\n",
+                       source, (unsigned long)uapi_systick_get_ms(),
+                       (unsigned int)get_cpu_utils_reset_cause(), get_cpu_utils_reset_count());
+    if (len <= 0 || (size_t)len >= sizeof(buf)) {
+        g_client_io_failed = true;
+        osal_printk("[WIFI_GRBL_BANNER] session=%lu source=%s format_failed len=%d\r\n",
+                    g_tcp_session_id, source, len);
+        return false;
+    }
+
+    bool sent = wifi_send_str(buf);
+    osal_printk("[WIFI_GRBL_BANNER] session=%lu source=%s bytes=%d sent=%u\r\n",
+                g_tcp_session_id, source, len, sent ? 1U : 0U);
+    return sent;
 }
 
 static bool parsed_line_contains_gcode(const legacy_wifi_gcode_line_t *gc, int expected_code)
@@ -439,7 +506,7 @@ static bool handle_dollar_command(const char *line)
         wifi_send_str(buf);
     } else if (strcmp(line, "$D") == 0) {
         snprintf(buf, sizeof(buf),
-                 "[MSG:wifi motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu tcp_rx_chunks=%lu tcp_rx_bytes=%lu qmark=%lu tcp_tx_msg=%lu tcp_tx_bytes=%lu lines=%lu ok=%lu err=%lu status=%lu]\r\nok\r\n",
+                 "[MSG:wifi motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu dac_skip=%lu timer_wait=%lu timer_fail=%lu timer_late_max=%lu tcp_rx_chunks=%lu tcp_rx_bytes=%lu qmark=%lu tcp_tx_msg=%lu tcp_tx_bytes=%lu lines=%lu ok=%lu err=%lu status=%lu]\r\nok\r\n",
                  legacy_wifi_motion_executor_is_busy() ? 1 : 0, (unsigned int)legacy_wifi_motion_executor_queue_depth(),
                  legacy_wifi_motion_executor_abort_requested() ? 1 : 0, legacy_wifi_motion_executor_worker_started() ? 1 : 0,
                  legacy_wifi_motion_executor_enqueued_count(), legacy_wifi_motion_executor_executed_count(),
@@ -450,7 +517,12 @@ static bool handle_dollar_command(const char *line)
                  (unsigned int)laser_pwm_last_requested_power(), (unsigned int)laser_pwm_last_effective_power(),
                  legacy_wifi_motion_executor_max_sample_late_us(), legacy_wifi_motion_executor_late_sample_count(),
                  legacy_wifi_motion_executor_missed_sample_count(), legacy_wifi_motion_executor_motion_segment_count(),
-                 legacy_wifi_motion_executor_short_segment_count(), g_tcp_rx_chunks, g_tcp_rx_bytes,
+                 legacy_wifi_motion_executor_short_segment_count(),
+                 legacy_wifi_motion_executor_dac_skip_count(),
+                 legacy_wifi_motion_executor_timer_wait_count(),
+                 legacy_wifi_motion_executor_timer_fail_count(),
+                 legacy_wifi_motion_executor_timer_wake_late_max_us(),
+                 g_tcp_rx_chunks, g_tcp_rx_bytes,
                  g_tcp_rx_realtime_q, g_tcp_tx_messages, g_tcp_tx_bytes, g_line_id,
                   g_ok_count, g_error_count, g_status_count);
         wifi_send_str(buf);
@@ -534,6 +606,8 @@ static bool handle_realtime_char(uint8_t ch)
         case '~':
             return true;
         case GRBL_RESET_CHAR:
+            osal_printk("[WIFI_GRBL_RESET] session=%lu char=0x%02x\r\n",
+                        g_tcp_session_id, (unsigned int)ch);
             g_rx_pos = 0;
             handle_emergency_stop();
             wait_motion_idle(100);
@@ -683,7 +757,28 @@ static int start_softap(void)
         return -1;
     }
 
+    g_softap_started = true;
     return 0;
+}
+
+static void stop_softap(void)
+{
+    if (!g_softap_started && wifi_is_softap_enabled() == 0) {
+        return;
+    }
+
+    td_char ifname[WIFI_IFNAME_MAX_SIZE + 1] = LEGACY_WIFI_AP_IFNAME;
+    struct netif *netif_p = netif_find(ifname);
+    if (netif_p != TD_NULL) {
+        err_t dhcp_ret = netifapi_dhcps_stop(netif_p);
+        if (dhcp_ret != ERR_OK) {
+            osal_printk("[laser wifi] stop dhcp server failed: %d\r\n", (int)dhcp_ret);
+        }
+    }
+
+    errcode_t ret = wifi_softap_disable();
+    g_softap_started = false;
+    osal_printk("[laser wifi] softap stopped ret=0x%x\r\n", ret);
 }
 
 static int start_tcp_server(void)
@@ -722,11 +817,68 @@ static int start_tcp_server(void)
     return 0;
 }
 
-static void close_client(void)
+static void log_client_sockopt_failure(const char *name)
+{
+    osal_printk("[WIFI_TCP_SOCKOPT] session=%lu option=%s errno=%d\r\n",
+                g_tcp_session_id, name, errno);
+}
+
+static void configure_client_socket(int client)
+{
+    int enabled = 1;
+    int sock_buf = LEGACY_WIFI_TCP_SOCK_BUF_SIZE;
+    int keep_idle = LEGACY_WIFI_TCP_KEEPIDLE_SEC;
+    int keep_interval = LEGACY_WIFI_TCP_KEEPINTVL_SEC;
+    int keep_count = LEGACY_WIFI_TCP_KEEPCNT;
+    struct timeval recv_timeout = {
+        .tv_sec = (long)(LEGACY_WIFI_TCP_RECV_POLL_MS / 1000U),
+        .tv_usec = (long)((LEGACY_WIFI_TCP_RECV_POLL_MS % 1000U) * 1000U),
+    };
+    struct timeval send_timeout = {
+        .tv_sec = (long)(LEGACY_WIFI_TCP_SEND_TIMEOUT_MS / 1000U),
+        .tv_usec = (long)((LEGACY_WIFI_TCP_SEND_TIMEOUT_MS % 1000U) * 1000U),
+    };
+
+    if (setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled)) != 0) {
+        log_client_sockopt_failure("TCP_NODELAY");
+    }
+    if (setsockopt(client, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled)) != 0) {
+        log_client_sockopt_failure("SO_KEEPALIVE");
+    }
+    if (setsockopt(client, IPPROTO_TCP, TCP_KEEPIDLE, &keep_idle, sizeof(keep_idle)) != 0) {
+        log_client_sockopt_failure("TCP_KEEPIDLE");
+    }
+    if (setsockopt(client, IPPROTO_TCP, TCP_KEEPINTVL, &keep_interval, sizeof(keep_interval)) != 0) {
+        log_client_sockopt_failure("TCP_KEEPINTVL");
+    }
+    if (setsockopt(client, IPPROTO_TCP, TCP_KEEPCNT, &keep_count, sizeof(keep_count)) != 0) {
+        log_client_sockopt_failure("TCP_KEEPCNT");
+    }
+    if (setsockopt(client, SOL_SOCKET, SO_SNDBUF, &sock_buf, sizeof(sock_buf)) != 0) {
+        log_client_sockopt_failure("SO_SNDBUF");
+    }
+    if (setsockopt(client, SOL_SOCKET, SO_RCVBUF, &sock_buf, sizeof(sock_buf)) != 0) {
+        log_client_sockopt_failure("SO_RCVBUF");
+    }
+    if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                   &recv_timeout, sizeof(recv_timeout)) != 0) {
+        log_client_sockopt_failure("SO_RCVTIMEO");
+    }
+    if (setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+                   &send_timeout, sizeof(send_timeout)) != 0) {
+        log_client_sockopt_failure("SO_SNDTIMEO");
+    }
+}
+
+static void close_client(const char *reason)
 {
     int sock = g_client_sock;
     g_client_sock = -1;
     if (sock >= 0) {
+        osal_printk("[WIFI_TCP_CLOSE] session=%lu sock=%d reason=%s "
+                    "rx_chunks=%lu rx_bytes=%lu tx_msg=%lu tx_bytes=%lu\r\n",
+                    g_tcp_session_id, sock, (reason != NULL) ? reason : "unknown",
+                    g_tcp_rx_chunks, g_tcp_rx_bytes, g_tcp_tx_messages, g_tcp_tx_bytes);
         lwip_close(sock);
     }
     g_rx_pos = 0;
@@ -737,9 +889,12 @@ static void close_client(void)
 int legacy_wifi_route_task_entry(void *arg)
 {
     unused(arg);
+    g_route_task_running = true;
+    int task_ret = 0;
 
     if (start_softap() != 0 || start_tcp_server() != 0) {
-        return -1;
+        task_ret = -1;
+        goto route_task_exit;
     }
 
     while (!g_stop_requested) {
@@ -757,7 +912,13 @@ int legacy_wifi_route_task_entry(void *arg)
             continue;
         }
 
+        g_tcp_session_id++;
+        if (g_tcp_session_id == 0U) {
+            g_tcp_session_id = 1U;
+        }
         g_client_sock = client;
+        g_client_io_failed = false;
+        g_tcp_first_rx_logged = false;
         g_rx_pos = 0;
         g_tcp_rx_chunks = 0;
         g_tcp_rx_bytes = 0;
@@ -768,27 +929,72 @@ int legacy_wifi_route_task_entry(void *arg)
         g_ok_count = 0;
         g_error_count = 0;
         g_status_count = 0;
-        send_grbl_startup("tcp-connect");
+        configure_client_socket(client);
 
-        while (g_client_sock >= 0 && !g_stop_requested) {
+        uint32_t peer = ntohl(client_addr.sin_addr.s_addr);
+        osal_printk("[WIFI_TCP_ACCEPT] session=%lu sock=%d peer=%u.%u.%u.%u:%u\r\n",
+                    g_tcp_session_id, client,
+                    (unsigned int)((peer >> 24) & 0xFFU),
+                    (unsigned int)((peer >> 16) & 0xFFU),
+                    (unsigned int)((peer >> 8) & 0xFFU),
+                    (unsigned int)(peer & 0xFFU),
+                    (unsigned int)ntohs(client_addr.sin_port));
+
+        if (!send_grbl_startup("tcp-connect")) {
+            close_client("banner-send-failed");
+            continue;
+        }
+
+        const char *close_reason = "peer-eof";
+        while (g_client_sock >= 0 && !g_stop_requested && !g_client_io_failed) {
             int ret = recv(client, buf, sizeof(buf), 0);
-            if (ret <= 0) {
+            if (ret == 0) {
+                close_reason = "peer-eof";
+                break;
+            }
+            if (ret < 0) {
+                int recv_errno = errno;
+                if (recv_errno == EINTR) {
+                    continue;
+                }
+                if (recv_errno == EAGAIN
+#if EWOULDBLOCK != EAGAIN
+                    || recv_errno == EWOULDBLOCK
+#endif
+                ) {
+                    send_periodic_status();
+                    continue;
+                }
+                close_reason = "recv-error";
+                osal_printk("[WIFI_TCP_RECV_FAIL] session=%lu sock=%d errno=%d\r\n",
+                            g_tcp_session_id, client, recv_errno);
                 break;
             }
             log_tcp_rx_chunk(buf, ret);
             for (int i = 0; i < ret; i++) {
                 process_byte(buf[i]);
+                if (g_client_io_failed || g_stop_requested) {
+                    break;
+                }
             }
             send_periodic_status();
         }
 
-        close_client();
+        if (g_stop_requested) {
+            close_reason = "route-stop";
+        } else if (g_client_io_failed) {
+            close_reason = "send-error";
+        }
+        close_client(close_reason);
     }
 
-    g_route_started = false;
+route_task_exit:
+    stop_softap();
     g_stop_requested = false;
+    g_route_started = false;
+    g_route_task_running = false;
 
-    return 0;
+    return task_ret;
 }
 
 errcode_t legacy_wifi_route_init(void)
@@ -825,6 +1031,7 @@ errcode_t legacy_wifi_route_start(void)
     if (osal_kthread_set_priority(task, LEGACY_WIFI_TASK_PRIO_WIFI) != OSAL_SUCCESS) {
         osal_printk("[LEGACY_WIFI] set WiFi TCP priority failed\r\n");
     }
+    g_route_started = true;
     osal_kfree(task);
     osal_kthread_unlock();
 
@@ -835,7 +1042,6 @@ errcode_t legacy_wifi_route_start(void)
         return ret;
     }
 
-    g_route_started = true;
     return ERRCODE_SUCC;
 }
 
@@ -849,10 +1055,10 @@ bool legacy_wifi_route_is_idle(void)
 
 void legacy_wifi_route_force_stop(void)
 {
-    if (g_client_sock >= 0) {
-        close_client();
-    }
     g_stop_requested = true;
+    if (g_client_sock >= 0) {
+        close_client("route-stop");
+    }
     if (g_listen_sock >= 0) {
         lwip_close(g_listen_sock);
         g_listen_sock = -1;
@@ -860,4 +1066,16 @@ void legacy_wifi_route_force_stop(void)
     legacy_wifi_motion_executor_request_abort();
     legacy_wifi_motion_executor_flush();
     laser_force_off();
+
+    uint32_t start_ms = (uint32_t)uapi_systick_get_ms();
+    while (g_route_started || g_route_task_running) {
+        if ((uint32_t)((uint32_t)uapi_systick_get_ms() - start_ms) >= WIFI_ROUTE_STOP_WAIT_MS) {
+            osal_printk("[LEGACY_WIFI] route stop timeout started=%u task=%u softap=%u\r\n",
+                        g_route_started ? 1U : 0U,
+                        g_route_task_running ? 1U : 0U,
+                        g_softap_started ? 1U : 0U);
+            break;
+        }
+        osal_msleep(WIFI_ROUTE_STOP_POLL_MS);
+    }
 }

@@ -149,7 +149,8 @@ static errcode_t send_status_req(void)
     if (ensure_rx_control_link() != ERRCODE_SUCC) {
         return ERRCODE_SLE_FAIL;
     }
-    return encode_and_send(PKT_STATUS_REQ, panel_job_proto_next_seq(), NULL, 0);
+    /* RX treats STATUS_REQ as out-of-band and does not advance ordered seq. */
+    return encode_and_send(PKT_STATUS_REQ, panel_job_proto_peek_seq(), NULL, 0);
 }
 
 static errcode_t send_focus(bool on, uint8_t power)

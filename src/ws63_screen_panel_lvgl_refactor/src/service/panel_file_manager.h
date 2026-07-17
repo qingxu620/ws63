@@ -53,6 +53,7 @@ const panel_file_entry_t *panel_file_manager_get_entry(uint8_t index);
 const panel_file_entry_t *panel_file_manager_get_selected(void);
 
 bool panel_file_manager_select(uint8_t index);
+bool panel_file_manager_ensure_line_count(uint8_t index, uint32_t *line_count);
 bool panel_file_manager_read_preview(uint8_t index, char *out, size_t out_size);
 bool panel_file_manager_read_chunk(uint8_t index, uint32_t offset, uint8_t *out,
                                    size_t out_size, size_t *bytes_read, bool *eof);

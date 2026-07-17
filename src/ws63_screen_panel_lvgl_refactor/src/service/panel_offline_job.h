@@ -14,6 +14,7 @@ extern "C" {
 
 errcode_t panel_offline_job_init(void);
 errcode_t panel_offline_job_start_selected(void);
+bool panel_offline_job_is_ready(void);
 bool panel_offline_job_is_busy(void);
 
 #ifdef __cplusplus

@@ -71,9 +71,12 @@
 #define PANEL_SLE_STATUS_LISTEN_WINDOW_MS 1200U
 #define PANEL_SLE_STATUS_LISTEN_TASK_STACK_SIZE 0x1000
 #define PANEL_SLE_STATUS_LISTEN_TASK_PRIORITY 26
+#define PANEL_SLE_DISCONNECT_RETRY_MS 1000U
+#define PANEL_SLE_ANNOUNCE_RETRY_MS 1000U
+#define PANEL_SLE_RX_CONNECT_TIMEOUT_MS 5000U
 
-static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
-static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
+static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
 static uint8_t g_server_id = 0;
 static uint16_t g_panel_conn_id = PANEL_SLE_CONN_INVALID;
 static uint16_t g_rx_conn_id = PANEL_SLE_CONN_INVALID;
@@ -83,6 +86,8 @@ static uint16_t g_rx_data_handle = 0;
 static uint16_t g_rx_resp_handle = 0;
 static bool g_sle_enabled;
 static bool g_seek_active;
+static bool g_seek_start_pending;
+static bool g_seek_stop_pending;
 static bool g_client_connecting;
 static bool g_seek_for_status_listen;
 static bool g_rx_handles_ready;
@@ -90,7 +95,20 @@ static sle_addr_t g_pending_rx_addr = {0};
 static sle_addr_t g_rx_addr = {0};
 static bool g_rx_addr_valid;
 static bool g_rx_disconnect_expected;
+static bool g_tx_disconnect_expected;
 static bool g_rx_connect_cancel_after_connect;
+static bool g_announce_configured;
+static bool g_announce_active;
+static bool g_announce_start_pending;
+static bool g_announce_stop_pending;
+static uint32_t g_announce_request_ms;
+static uint32_t g_rx_disconnect_request_ms;
+static uint32_t g_tx_disconnect_request_ms;
+static uint32_t g_seek_start_request_ms;
+static uint32_t g_seek_stop_request_ms;
+static uint32_t g_rx_connect_request_ms;
+static uint8_t g_seek_stop_fail_streak;
+static panel_view_mode_t g_transport_view_mode = PANEL_VIEW_COUNT;
 static uint32_t g_last_seek_ms;
 static uint32_t g_status_listen_last_ms;
 static uint32_t g_status_listen_started_ms;
@@ -117,7 +135,7 @@ typedef struct {
 
 static panel_status_seq_tracker_t g_status_seq[PANEL_STATUS_SOURCE_COUNT];
 
-static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x01};
 
 static const char *panel_status_source_name(panel_status_source_t source)
 {
@@ -285,10 +303,23 @@ static bool rx_control_allowed_now(void)
 {
     /*
      * Normal product topology is Host/TX -> RX plus TX -> Screen mirror.
-     * The panel must not keep a background RX client link; it may connect to
-     * RX only while an explicit standalone/offline control session is active.
+     * A standalone session keeps Screen control authority while a job or
+     * command is active. Merely viewing Offline mode does not grant that
+     * authority when TX is present.
      */
     return g_standalone_session_active;
+}
+
+static bool rx_link_requested_now(void)
+{
+    /*
+     * Offline view is an explicit request to discover the fixed RX board.
+     * Keep the idle link only while TX is absent; an active standalone
+     * session may retain it until its command/job lifecycle is complete.
+     */
+    return g_standalone_session_active ||
+           (g_model.view_mode == PANEL_VIEW_OFFLINE &&
+            !panel_transport_sle_tx_is_connected());
 }
 
 static bool addr_matches_pending_rx(const sle_addr_t *addr)
@@ -296,25 +327,297 @@ static bool addr_matches_pending_rx(const sle_addr_t *addr)
     return addr_matches_mac(addr, g_pending_rx_addr.addr);
 }
 
-static void disconnect_rx_expected(void)
+static bool panel_announce_desired_now(void)
 {
-    if (!g_rx_addr_valid) {
+    return g_model.view_mode == PANEL_VIEW_ONLINE &&
+           !g_standalone_session_active &&
+           g_panel_conn_id == PANEL_SLE_CONN_INVALID &&
+           g_rx_conn_id == PANEL_SLE_CONN_INVALID &&
+           !g_seek_active && !g_seek_start_pending && !g_seek_stop_pending &&
+           !g_client_connecting &&
+           !g_rx_disconnect_expected && !g_tx_disconnect_expected;
+}
+
+static void reconcile_panel_announce(uint32_t now)
+{
+    if (!g_sle_enabled || !g_announce_configured) {
         return;
     }
 
-    g_rx_disconnect_expected = true;
-    errcode_t ret = sle_disconnect_remote_device(&g_rx_addr);
-    if (ret != ERRCODE_SLE_SUCCESS) {
+    bool desired = panel_announce_desired_now();
+    bool pending = g_announce_start_pending || g_announce_stop_pending;
+    if (pending &&
+        (uint32_t)(now - g_announce_request_ms) < PANEL_SLE_ANNOUNCE_RETRY_MS) {
+        return;
+    }
+    if (!pending && g_announce_request_ms != 0U &&
+        (uint32_t)(now - g_announce_request_ms) < PANEL_SLE_ANNOUNCE_RETRY_MS) {
+        return;
+    }
+
+    if (pending) {
+        osal_printk("[PANEL_SLE_ADV] callback timeout start=%u stop=%u active=%u\r\n",
+                    (unsigned int)g_announce_start_pending,
+                    (unsigned int)g_announce_stop_pending,
+                    (unsigned int)g_announce_active);
+        /*
+         * Keep the radio state uncertain until an SDK callback confirms it.
+         * Probe toward the latest desired state at a bounded 1 s cadence.
+         */
+        g_announce_request_ms = now;
+        errcode_t ret;
+        if (desired) {
+            ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+            if (ret == ERRCODE_SLE_SUCCESS) {
+                g_announce_start_pending = true;
+                g_announce_stop_pending = false;
+            }
+        } else {
+            ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+            if (ret == ERRCODE_SLE_SUCCESS) {
+                g_announce_start_pending = false;
+                g_announce_stop_pending = true;
+            }
+        }
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            static uint32_t s_announce_probe_fail_count = 0;
+            if ((s_announce_probe_fail_count++ & 0x07U) == 0U) {
+                osal_printk("[PANEL_SLE_ADV] reconcile probe fail desired=%u ret=0x%x\r\n",
+                            (unsigned int)desired, ret);
+            }
+        }
+        return;
+    }
+
+    if (desired) {
+        if (g_announce_active || g_announce_start_pending || g_announce_stop_pending) {
+            return;
+        }
+        g_announce_start_pending = true;
+        g_announce_request_ms = now;
+        errcode_t ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret == ERRCODE_SLE_SUCCESS) {
+            osal_printk("[PANEL_SLE_ADV] start submit view=online\r\n");
+        } else {
+            g_announce_start_pending = false;
+            g_announce_request_ms = now;
+            static uint32_t s_announce_start_fail_count = 0;
+            if ((s_announce_start_fail_count++ & 0x0FU) == 0U) {
+                osal_printk("[PANEL_SLE_ADV] start fail: 0x%x\r\n", ret);
+            }
+        }
+        return;
+    }
+
+    if (g_announce_active &&
+        !g_announce_start_pending && !g_announce_stop_pending) {
+        g_announce_stop_pending = true;
+        g_announce_request_ms = now;
+        errcode_t ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret == ERRCODE_SLE_SUCCESS) {
+            osal_printk("[PANEL_SLE_ADV] stop submit view=%u\r\n",
+                        (unsigned int)g_model.view_mode);
+        } else {
+            g_announce_stop_pending = false;
+            g_announce_request_ms = now;
+            static uint32_t s_announce_stop_fail_count = 0;
+            if ((s_announce_stop_fail_count++ & 0x0FU) == 0U) {
+                osal_printk("[PANEL_SLE_ADV] stop fail: 0x%x\r\n", ret);
+            }
+        }
+    }
+}
+
+static void disconnect_rx_expected(void)
+{
+    if (g_rx_conn_id == PANEL_SLE_CONN_INVALID) {
         g_rx_disconnect_expected = false;
+        g_rx_disconnect_request_ms = 0U;
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if (g_rx_disconnect_expected &&
+        (uint32_t)(now - g_rx_disconnect_request_ms) < PANEL_SLE_DISCONNECT_RETRY_MS) {
+        return;
+    }
+    if (g_rx_disconnect_expected) {
+        osal_printk("[PANEL_SLE_CLI] rx disconnect retry conn=%u\r\n",
+                    (unsigned int)g_rx_conn_id);
+    }
+
+    sle_addr_t addr = {0};
+    if (g_rx_addr_valid) {
+        (void)memcpy_s(&addr, sizeof(addr), &g_rx_addr, sizeof(g_rx_addr));
+    } else {
+        addr.type = SLE_ADDRESS_TYPE_PUBLIC;
+        (void)memcpy_s(addr.addr, SLE_ADDR_LEN, g_receiver_mac, SLE_ADDR_LEN);
+    }
+    g_rx_disconnect_expected = true;
+    g_rx_disconnect_request_ms = now;
+    errcode_t ret = sle_disconnect_remote_device(&addr);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        /* Keep the intended handoff marked expected and retry at 1 s cadence. */
+        g_rx_disconnect_expected = true;
+        g_rx_disconnect_request_ms = now;
         osal_printk("[PANEL_SLE_CLI] rx disconnect submit fail: 0x%x\r\n", ret);
     }
 }
 
+static void disconnect_tx_for_offline(void)
+{
+    if (g_panel_conn_id == PANEL_SLE_CONN_INVALID) {
+        g_tx_disconnect_expected = false;
+        g_tx_disconnect_request_ms = 0U;
+        return;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if (g_tx_disconnect_expected &&
+        (uint32_t)(now - g_tx_disconnect_request_ms) < PANEL_SLE_DISCONNECT_RETRY_MS) {
+        return;
+    }
+    if (g_tx_disconnect_expected) {
+        osal_printk("[PANEL_SLE_MODE] offline TX disconnect retry conn=%u\r\n",
+                    (unsigned int)g_panel_conn_id);
+    }
+
+    sle_addr_t addr = {0};
+    addr.type = SLE_ADDRESS_TYPE_PUBLIC;
+    (void)memcpy_s(addr.addr, SLE_ADDR_LEN, g_tx_mac, SLE_ADDR_LEN);
+    g_tx_disconnect_expected = true;
+    g_tx_disconnect_request_ms = now;
+    errcode_t ret = sle_disconnect_remote_device(&addr);
+    if (ret == ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_MODE] offline disconnect TX conn=%u\r\n",
+                    (unsigned int)g_panel_conn_id);
+    } else {
+        /* Keep the intended handoff marked expected and retry at 1 s cadence. */
+        g_tx_disconnect_expected = true;
+        g_tx_disconnect_request_ms = now;
+        static uint32_t s_tx_disconnect_fail_count = 0;
+        if ((s_tx_disconnect_fail_count++ & 0x0FU) == 0U) {
+            osal_printk("[PANEL_SLE_MODE] offline TX disconnect fail: 0x%x\r\n", ret);
+        }
+    }
+}
+
+static bool submit_seek_stop(const char *reason)
+{
+    if (!g_seek_active) {
+        return false;
+    }
+
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    if (g_seek_stop_pending &&
+        (uint32_t)(now - g_seek_stop_request_ms) < PANEL_SLE_DISCONNECT_RETRY_MS) {
+        return true;
+    }
+
+    g_seek_stop_pending = true;
+    g_seek_stop_request_ms = now;
+    errcode_t ret = sle_stop_seek();
+    if (ret == ERRCODE_SLE_SUCCESS) {
+        g_seek_stop_fail_streak = 0U;
+        osal_printk("[PANEL_SLE_SEEK] stop submit reason=%s\r\n",
+                    (reason != NULL) ? reason : "none");
+        return true;
+    }
+
+    /* The radio state is still active/uncertain; retry stop after 1 s. */
+    g_seek_stop_fail_streak++;
+    if (g_seek_stop_fail_streak >= 3U) {
+        g_seek_stop_fail_streak = 0U;
+        g_seek_active = false;
+        g_seek_stop_pending = false;
+        g_seek_stop_request_ms = 0U;
+        g_last_seek_ms = now;
+        osal_printk("[PANEL_SLE_SEEK] normalize stopped after repeated stop failures\r\n");
+        return false;
+    }
+    g_seek_stop_pending = true;
+    g_seek_stop_request_ms = now;
+    static uint32_t s_seek_stop_fail_count = 0;
+    if ((s_seek_stop_fail_count++ & 0x0FU) == 0U) {
+        osal_printk("[PANEL_SLE_SEEK] stop fail reason=%s ret=0x%x\r\n",
+                    (reason != NULL) ? reason : "none", ret);
+    }
+    return false;
+}
+
+static void reconcile_seek_start_timeout(uint32_t now)
+{
+    if (!g_seek_start_pending ||
+        (uint32_t)(now - g_seek_start_request_ms) < PANEL_SLE_ANNOUNCE_RETRY_MS) {
+        return;
+    }
+
+    osal_printk("[PANEL_SLE_SEEK] start callback timeout, normalize with stop\r\n");
+    g_seek_start_pending = false;
+    g_seek_start_request_ms = 0U;
+    g_seek_active = true; /* Conservative until stop is confirmed or normalized. */
+    (void)submit_seek_stop("start-timeout");
+}
+
+static void reconcile_seek_stop_timeout(uint32_t now)
+{
+    if (!g_seek_stop_pending ||
+        (uint32_t)(now - g_seek_stop_request_ms) < PANEL_SLE_DISCONNECT_RETRY_MS) {
+        return;
+    }
+    if (!g_seek_active) {
+        g_seek_stop_pending = false;
+        g_seek_stop_request_ms = 0U;
+        g_seek_stop_fail_streak = 0U;
+        return;
+    }
+    (void)submit_seek_stop("stop-timeout");
+}
+
+static void reconcile_rx_connect_timeout(uint32_t now)
+{
+    if (!g_client_connecting || g_rx_connect_request_ms == 0U ||
+        (uint32_t)(now - g_rx_connect_request_ms) < PANEL_SLE_RX_CONNECT_TIMEOUT_MS) {
+        return;
+    }
+
+    osal_printk("[PANEL_SLE_CLI] rx connect callback timeout, release pending peer\r\n");
+    sle_addr_t addr = {0};
+    (void)memcpy_s(&addr, sizeof(addr), &g_pending_rx_addr, sizeof(g_pending_rx_addr));
+    g_client_connecting = false;
+    g_rx_connect_cancel_after_connect = false;
+    g_rx_connect_request_ms = 0U;
+    g_last_seek_ms = now;
+    errcode_t ret = sle_disconnect_remote_device(&addr);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[PANEL_SLE_CLI] pending rx release returned: 0x%x\r\n", ret);
+    }
+}
+
+static void stop_rx_seek_for_online(void)
+{
+    if (g_model.view_mode != PANEL_VIEW_ONLINE) {
+        return;
+    }
+
+    if (g_client_connecting) {
+        g_rx_connect_cancel_after_connect = true;
+        return;
+    }
+    if (!g_seek_active) {
+        return;
+    }
+    (void)submit_seek_stop("online");
+}
+
 static void start_seek_if_needed(void)
 {
-    if (!g_sle_enabled || !rx_control_allowed_now() ||
-        g_seek_active || g_client_connecting ||
-        (g_rx_conn_id != PANEL_SLE_CONN_INVALID && g_rx_handles_ready)) {
+    if (!g_sle_enabled || !rx_link_requested_now() ||
+        g_seek_active || g_seek_start_pending || g_seek_stop_pending ||
+        g_client_connecting ||
+        g_panel_conn_id != PANEL_SLE_CONN_INVALID ||
+        g_announce_active || g_announce_start_pending || g_announce_stop_pending ||
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
         return;
     }
 
@@ -335,8 +638,11 @@ static void start_seek_if_needed(void)
     (void)sle_set_seek_param(&param);
 
     g_last_seek_ms = now;
+    g_seek_start_pending = true;
+    g_seek_start_request_ms = now;
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
+        g_seek_start_pending = false;
         osal_printk("[PANEL_SLE_CLI] start seek fail: 0x%x\r\n", ret);
     }
 }
@@ -344,7 +650,8 @@ static void start_seek_if_needed(void)
 static void start_status_listen_if_needed(void)
 {
     if (!g_sle_enabled || g_model.view_mode != PANEL_VIEW_OFFLINE ||
-        rx_control_allowed_now() || g_seek_active || g_client_connecting ||
+        rx_link_requested_now() || g_seek_active || g_seek_start_pending ||
+        g_seek_stop_pending || g_client_connecting ||
         g_panel_conn_id != PANEL_SLE_CONN_INVALID ||
         g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
         return;
@@ -369,8 +676,11 @@ static void start_status_listen_if_needed(void)
     g_status_listen_last_ms = now;
     g_status_listen_started_ms = now;
     g_seek_for_status_listen = true;
+    g_seek_start_pending = true;
+    g_seek_start_request_ms = now;
     errcode_t ret = sle_start_seek();
     if (ret != ERRCODE_SLE_SUCCESS) {
+        g_seek_start_pending = false;
         g_seek_for_status_listen = false;
         static uint32_t s_listen_start_fail_count = 0;
         if ((s_listen_start_fail_count++ & 0x0FU) == 0U) {
@@ -395,13 +705,8 @@ static void stop_status_listen_if_expired(void)
         return;
     }
 
-    errcode_t ret = sle_stop_seek();
-    if (ret != ERRCODE_SLE_SUCCESS) {
+    if (!submit_seek_stop("listen-expired")) {
         g_seek_for_status_listen = false;
-        static uint32_t s_listen_stop_fail_count = 0;
-        if ((s_listen_stop_fail_count++ & 0x0FU) == 0U) {
-            osal_printk("[PANEL_SLE_LISTEN] stop seek fail: 0x%x\r\n", ret);
-        }
     }
 }
 
@@ -409,8 +714,7 @@ static int panel_status_listen_task(void *arg)
 {
     unused(arg);
     while (1) {
-        stop_status_listen_if_expired();
-        start_status_listen_if_needed();
+        panel_transport_sle_poll();
         osal_msleep(20);
     }
     return 0;
@@ -509,9 +813,14 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
+    /* Offline view is exclusively owned by the Screen -> RX path. */
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+        return;
+    }
+
     if (g_panel_conn_id != conn_id) {
-        g_panel_conn_id = conn_id;
-        panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "direct-write-conn");
+        /* A write may only be accepted after the fixed TX peer was admitted. */
+        return;
     }
     panel_model_set_transport_links(panel_transport_sle_tx_is_connected(),
                                     panel_transport_sle_rx_is_connected());
@@ -609,8 +918,11 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     unused(disc_reason);
 
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
-        if (g_client_connecting && addr_matches_pending_rx(addr)) {
+        if (addr_matches_mac(addr, g_receiver_mac)) {
             g_rx_conn_id = conn_id;
+            g_rx_disconnect_expected = false;
+            g_rx_disconnect_request_ms = 0U;
+            g_rx_connect_request_ms = 0U;
             panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "connected");
             g_client_connecting = false;
             if (addr != NULL) {
@@ -618,8 +930,9 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
                 g_rx_addr_valid = true;
             }
             request_fast_rx_conn_params(conn_id);
-            if (g_rx_connect_cancel_after_connect && !g_standalone_session_active) {
-                g_rx_connect_cancel_after_connect = false;
+            bool release_rx = !rx_link_requested_now();
+            g_rx_connect_cancel_after_connect = false;
+            if (release_rx) {
                 disconnect_rx_expected();
                 return;
             }
@@ -628,7 +941,24 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             info.version = 1;
             (void)ssapc_exchange_info_req(PANEL_SLE_CLIENT_ID, conn_id, &info);
         } else if (addr_matches_mac(addr, g_tx_mac)) {
+            /* A successful incoming connection consumes connectable announce. */
+            g_announce_active = false;
+            g_announce_start_pending = false;
+            g_announce_stop_pending = false;
+            g_announce_request_ms = 0U;
+            if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+                osal_printk("[PANEL_SLE_MODE] reject TX in offline conn=%u\r\n",
+                            (unsigned int)conn_id);
+                /* Track the raw link until its disconnect callback arrives. */
+                g_panel_conn_id = conn_id;
+                g_tx_disconnect_expected = false;
+                g_tx_disconnect_request_ms = 0U;
+                disconnect_tx_for_offline();
+                return;
+            }
             g_panel_conn_id = conn_id;
+            g_tx_disconnect_expected = false;
+            g_tx_disconnect_request_ms = 0U;
             panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "connected");
             if (g_client_connecting && !g_standalone_session_active) {
                 g_rx_connect_cancel_after_connect = true;
@@ -640,6 +970,10 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             osal_printk("[PANEL_SLE_SRV] tx mirror connected conn=%u\r\n",
                         (unsigned int)conn_id);
         } else {
+            g_announce_active = false;
+            g_announce_start_pending = false;
+            g_announce_stop_pending = false;
+            g_announce_request_ms = 0U;
             osal_printk("[PANEL_SLE_SRV] reject non-whitelist peer conn=%u\r\n",
                         (unsigned int)conn_id);
             if (addr != NULL) {
@@ -647,14 +981,25 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             }
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        bool tracked_disconnect = false;
+        bool expected_disconnect = false;
+        bool rx_connection_ended = false;
         if (conn_id == g_panel_conn_id) {
+            tracked_disconnect = true;
+            expected_disconnect = g_tx_disconnect_expected;
             g_panel_conn_id = PANEL_SLE_CONN_INVALID;
+            g_tx_disconnect_expected = false;
+            g_tx_disconnect_request_ms = 0U;
             panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "disconnected");
             panel_model_set_transport_links(false, panel_transport_sle_rx_is_connected());
         }
         if (conn_id == g_rx_conn_id) {
+            tracked_disconnect = true;
+            rx_connection_ended = true;
             bool expected = g_rx_disconnect_expected;
+            expected_disconnect = expected_disconnect || expected;
             g_rx_disconnect_expected = false;
+            g_rx_disconnect_request_ms = 0U;
             g_rx_conn_id = PANEL_SLE_CONN_INVALID;
             panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "disconnected");
             g_rx_handles_ready = false;
@@ -665,13 +1010,14 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             g_rx_addr_valid = false;
             osal_printk("[PANEL_SLE_CLI] rx disconnected\r\n");
             panel_model_set_transport_links(panel_transport_sle_tx_is_connected(), false);
-            if (expected) {
-                start_seek_if_needed();
-                return;
-            }
         }
-        g_client_connecting = false;
-        if (!panel_transport_sle_tx_is_connected() && !panel_transport_sle_rx_is_connected()) {
+        if (rx_connection_ended ||
+            (g_client_connecting && addr_matches_pending_rx(addr))) {
+            g_client_connecting = false;
+            g_rx_connect_request_ms = 0U;
+        }
+        if (tracked_disconnect && !expected_disconnect &&
+            !panel_transport_sle_tx_is_connected() && !panel_transport_sle_rx_is_connected()) {
             panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
                                                0, g_model.seq + 1U, 0, 0, 0,
                                                0, 0, 0, 0, 1, 0U);
@@ -708,22 +1054,49 @@ static void sle_conn_register_cbks(void)
 static void sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
 {
     unused(announce_id);
-    unused(status);
+    g_announce_start_pending = false;
+    if (!g_announce_stop_pending) {
+        g_announce_request_ms = 0U;
+    }
+    g_announce_active = (status == ERRCODE_SLE_SUCCESS);
+    osal_printk("[PANEL_SLE_ADV] enabled status=0x%x view=%u\r\n",
+                status, (unsigned int)g_model.view_mode);
 }
 
 static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
 {
     unused(announce_id);
-    unused(status);
+    g_announce_stop_pending = false;
+    if (!g_announce_start_pending) {
+        g_announce_request_ms = 0U;
+    }
+    if (status == ERRCODE_SLE_SUCCESS) {
+        g_announce_active = false;
+    }
+    osal_printk("[PANEL_SLE_ADV] disabled status=0x%x view=%u\r\n",
+                status, (unsigned int)g_model.view_mode);
 }
 
 static void sle_announce_terminal_cbk(uint32_t announce_id)
 {
     unused(announce_id);
+    if (g_announce_start_pending && g_panel_conn_id == PANEL_SLE_CONN_INVALID) {
+        osal_printk("[PANEL_SLE_ADV] ignore stale terminal during restart\r\n");
+        return;
+    }
+    g_announce_active = false;
+    g_announce_start_pending = false;
+    g_announce_stop_pending = false;
+    g_announce_request_ms = 0U;
+    osal_printk("[PANEL_SLE_ADV] terminal view=%u tx=%u\r\n",
+                (unsigned int)g_model.view_mode,
+                (unsigned int)(g_panel_conn_id != PANEL_SLE_CONN_INVALID));
 }
 
 static void sle_seek_enable_cbk(errcode_t status)
 {
+    g_seek_start_pending = false;
+    g_seek_start_request_ms = 0U;
     g_seek_active = (status == ERRCODE_SLE_SUCCESS);
 }
 
@@ -748,8 +1121,7 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
                             (unsigned int)status.total_size);
             }
             if (g_seek_for_status_listen && !rx_control_allowed_now()) {
-                errcode_t ret = sle_stop_seek();
-                if (ret != ERRCODE_SLE_SUCCESS) {
+                if (!submit_seek_stop("status-received")) {
                     g_seek_for_status_listen = false;
                 }
                 return;
@@ -769,17 +1141,15 @@ static void sle_seek_result_cbk(sle_seek_result_info_t *seek_result)
     }
 
     if (g_client_connecting || g_rx_conn_id != PANEL_SLE_CONN_INVALID ||
-        !rx_control_allowed_now() || !matches_rx) {
+        !rx_link_requested_now() || !matches_rx) {
         return;
     }
 
     (void)memcpy_s(&g_pending_rx_addr, sizeof(g_pending_rx_addr),
                    &seek_result->addr, sizeof(seek_result->addr));
     g_client_connecting = true;
-    errcode_t ret = sle_stop_seek();
-    if (ret != ERRCODE_SLE_SUCCESS) {
+    if (!submit_seek_stop("rx-found")) {
         g_client_connecting = false;
-        osal_printk("[PANEL_SLE_CLI] stop seek fail: 0x%x\r\n", ret);
     }
 }
 
@@ -788,20 +1158,36 @@ static void sle_seek_disable_cbk(errcode_t status)
     bool was_status_listen = g_seek_for_status_listen;
     g_seek_for_status_listen = false;
     g_seek_active = false;
+    g_seek_stop_pending = false;
+    g_seek_stop_request_ms = 0U;
+    g_seek_stop_fail_streak = 0U;
     if (was_status_listen && !g_client_connecting) {
         return;
     }
     if (status != ERRCODE_SLE_SUCCESS || !g_client_connecting) {
         g_client_connecting = false;
         g_rx_connect_cancel_after_connect = false;
+        g_rx_connect_request_ms = 0U;
         start_seek_if_needed();
         return;
     }
 
+    /* The mode may have changed while the asynchronous seek stop completed. */
+    if (!rx_link_requested_now()) {
+        g_client_connecting = false;
+        g_rx_connect_cancel_after_connect = false;
+        g_rx_connect_request_ms = 0U;
+        memset(&g_pending_rx_addr, 0, sizeof(g_pending_rx_addr));
+        return;
+    }
+
+    g_rx_connect_cancel_after_connect = false;
+    g_rx_connect_request_ms = (uint32_t)uapi_systick_get_ms();
     errcode_t ret = sle_connect_remote_device(&g_pending_rx_addr);
     if (ret != ERRCODE_SLE_SUCCESS) {
         g_client_connecting = false;
         g_rx_connect_cancel_after_connect = false;
+        g_rx_connect_request_ms = 0U;
         osal_printk("[PANEL_SLE_CLI] connect submit fail: 0x%x\r\n", ret);
         start_seek_if_needed();
     }
@@ -864,11 +1250,8 @@ static void sle_enable_cbk(errcode_t status)
         return;
     }
 
-    ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
-    if (ret != ERRCODE_SLE_SUCCESS) {
-        osal_printk("[PANEL_SLE_SRV] start announce fail: 0x%x\r\n", ret);
-        return;
-    }
+    g_announce_configured = true;
+    reconcile_panel_announce((uint32_t)uapi_systick_get_ms());
 
     osal_printk("[PANEL_SLE_CLI] rx client gated until standalone session\r\n");
     start_status_listen_task_once();
@@ -965,7 +1348,8 @@ static void handle_rx_response_packet(const uint8_t *data, uint16_t len)
         return;
     }
 
-    if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t)) {
+    if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t) &&
+        g_model.view_mode == PANEL_VIEW_OFFLINE) {
         status_resp_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
         apply_status_resp_as(&st, PANEL_OWNER_SCREEN, PANEL_MODE_OFFLINE);
@@ -1022,13 +1406,29 @@ errcode_t panel_transport_sle_start(void)
     g_rx_resp_handle = 0;
     g_sle_enabled = false;
     g_seek_active = false;
+    g_seek_start_pending = false;
+    g_seek_stop_pending = false;
     g_client_connecting = false;
     g_seek_for_status_listen = false;
     g_rx_handles_ready = false;
+    memset(&g_pending_rx_addr, 0, sizeof(g_pending_rx_addr));
     memset(&g_rx_addr, 0, sizeof(g_rx_addr));
     g_rx_addr_valid = false;
     g_rx_disconnect_expected = false;
+    g_tx_disconnect_expected = false;
     g_rx_connect_cancel_after_connect = false;
+    g_announce_configured = false;
+    g_announce_active = false;
+    g_announce_start_pending = false;
+    g_announce_stop_pending = false;
+    g_announce_request_ms = 0U;
+    g_rx_disconnect_request_ms = 0U;
+    g_tx_disconnect_request_ms = 0U;
+    g_seek_start_request_ms = 0U;
+    g_seek_stop_request_ms = 0U;
+    g_rx_connect_request_ms = 0U;
+    g_seek_stop_fail_streak = 0U;
+    g_transport_view_mode = PANEL_VIEW_COUNT;
     g_last_seek_ms = 0;
     g_status_listen_last_ms = 0;
     g_status_listen_started_ms = 0;
@@ -1057,6 +1457,32 @@ errcode_t panel_transport_sle_start(void)
 
 void panel_transport_sle_poll(void)
 {
+    uint32_t now = (uint32_t)uapi_systick_get_ms();
+    reconcile_seek_start_timeout(now);
+    reconcile_seek_stop_timeout(now);
+    reconcile_rx_connect_timeout(now);
+    if (g_transport_view_mode != g_model.view_mode) {
+        osal_printk("[PANEL_SLE_MODE] transition %u -> %u session=%u tx=%u rx=%u\r\n",
+                    (unsigned int)g_transport_view_mode,
+                    (unsigned int)g_model.view_mode,
+                    (unsigned int)g_standalone_session_active,
+                    (unsigned int)panel_transport_sle_tx_is_connected(),
+                    (unsigned int)panel_transport_sle_rx_is_connected());
+        g_transport_view_mode = g_model.view_mode;
+        g_last_seek_ms = 0U;
+    }
+
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+        disconnect_tx_for_offline();
+    } else {
+        stop_rx_seek_for_online();
+    }
+    if (!rx_link_requested_now() &&
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
+        disconnect_rx_expected();
+    }
+
+    reconcile_panel_announce(now);
     stop_status_listen_if_expired();
     start_seek_if_needed();
     start_status_listen_if_needed();
@@ -1092,7 +1518,9 @@ void panel_transport_sle_set_standalone_session_active(bool active)
             g_rx_connect_cancel_after_connect = true;
         }
     }
-    if (!active && was_active && g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
+    if (!active && was_active &&
+        !rx_link_requested_now() &&
+        g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
         disconnect_rx_expected();
     }
     start_seek_if_needed();

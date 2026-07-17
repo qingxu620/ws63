@@ -31,6 +31,8 @@ static uint32_t g_rendered_seq = UINT32_MAX;
 static int8_t g_rendered_selected_index = INT8_MIN;
 static bool g_rendered_busy = false;
 static bool g_rendered_tx_present = false;
+static bool g_rendered_rx_ready = false;
+static bool g_rendered_worker_ready = false;
 
 static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
 {
@@ -101,6 +103,14 @@ static void start_btn_cb(lv_event_t *e)
     }
     if (!panel_transport_sle_can_control_rx()) {
         osal_printk("[FILE_PAGE] start rejected: tx present display-only\r\n");
+        return;
+    }
+    if (!panel_transport_sle_rx_is_connected()) {
+        osal_printk("[FILE_PAGE] start rejected: RX not ready\r\n");
+        return;
+    }
+    if (!panel_offline_job_is_ready()) {
+        osal_printk("[FILE_PAGE] start rejected: offline worker not ready\r\n");
         return;
     }
 
@@ -213,6 +223,8 @@ void page_file_browser_create(lv_obj_t *parent)
     g_rendered_selected_index = INT8_MIN;
     g_rendered_busy = false;
     g_rendered_tx_present = false;
+    g_rendered_rx_ready = false;
+    g_rendered_worker_ready = false;
 
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
@@ -331,11 +343,15 @@ void page_file_browser_update(void)
     char buf[96];
     bool busy = panel_offline_job_is_busy();
     bool tx_present = panel_transport_sle_tx_is_connected();
+    bool rx_ready = panel_transport_sle_rx_is_connected();
+    bool worker_ready = panel_offline_job_is_ready();
 
     if (g_rendered_seq == mgr->seq &&
         g_rendered_selected_index == mgr->selected_index &&
         g_rendered_busy == busy &&
-        g_rendered_tx_present == tx_present) {
+        g_rendered_tx_present == tx_present &&
+        g_rendered_rx_ready == rx_ready &&
+        g_rendered_worker_ready == worker_ready) {
         return;
     }
 
@@ -350,15 +366,31 @@ void page_file_browser_update(void)
 
     const panel_file_entry_t *selected = panel_file_manager_get_selected();
     bool has_selection = selected != NULL && !busy && !tx_present;
+    bool can_start = has_selection && rx_ready && worker_ready;
     if (selected != NULL) {
-        snprintf(buf, sizeof(buf), busy ? "正在发送：%s" : "已选择：%s", selected->name);
+        if (busy) {
+            snprintf(buf, sizeof(buf), "正在发送：%s", selected->name);
+        } else if (!rx_ready) {
+            snprintf(buf, sizeof(buf), "已选择：%s | 等待RX连接", selected->name);
+        } else if (!worker_ready) {
+            snprintf(buf, sizeof(buf), "已选择：%s | 任务未就绪", selected->name);
+        } else {
+            snprintf(buf, sizeof(buf), "已选择：%s", selected->name);
+        }
         lv_label_set_text(g_lbl_selected, buf);
     } else {
         lv_label_set_text(g_lbl_selected, "未选择文件");
     }
 
-    lv_obj_set_style_bg_opa(g_btn_start, has_selection ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_text_opa(g_lbl_start, has_selection ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(g_btn_start, can_start ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(g_lbl_start, can_start ? LV_OPA_COVER : LV_OPA_50, 0);
+    if (can_start) {
+        lv_obj_add_flag(g_btn_start, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(g_lbl_start, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_remove_flag(g_btn_start, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(g_lbl_start, LV_OBJ_FLAG_CLICKABLE);
+    }
     lv_obj_set_style_bg_opa(g_btn_monitor, has_selection ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_monitor, has_selection ? LV_OPA_COVER : LV_OPA_50, 0);
 
@@ -401,4 +433,6 @@ void page_file_browser_update(void)
     g_rendered_selected_index = mgr->selected_index;
     g_rendered_busy = busy;
     g_rendered_tx_present = tx_present;
+    g_rendered_rx_ready = rx_ready;
+    g_rendered_worker_ready = worker_ready;
 }

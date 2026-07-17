@@ -23,6 +23,7 @@
 
 /* Status bar */
 static lv_obj_t *g_title_dot;
+static lv_obj_t *g_lbl_title;
 static lv_obj_t *g_lbl_rx;
 static lv_obj_t *g_lbl_sle;
 
@@ -109,9 +110,10 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(g_title_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(g_title_dot, LV_RADIUS_CIRCLE, 0);
 
-    lv_obj_t *title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
-    lv_label_set_text(title, "WS63 激光主控");
-    lv_obj_set_style_text_color(title, COLOR_LASER_BLUE, 0);
+    g_lbl_title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
+    lv_label_set_text(g_lbl_title, "WS63 激光主控");
+    lv_obj_set_style_text_color(g_lbl_title,
+        g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
 
     lv_obj_t *spacer = lv_obj_create(bar);
     lv_obj_set_size(spacer, 1, 1);
@@ -564,6 +566,11 @@ static void apply_state(void)
     }
 
     start_en = perms.can_start && g_model.state != SYS_STATE_PAUSED;
+    if (g_model.view_mode == PANEL_VIEW_OFFLINE && g_model.state == SYS_STATE_READY) {
+        start_en = start_en && panel_file_manager_get_selected() != NULL &&
+            panel_offline_job_is_ready() && panel_transport_sle_rx_is_connected() &&
+            panel_transport_sle_can_control_rx();
+    }
     pause_en = perms.can_stop;
     resume_en = perms.can_start && g_model.state == SYS_STATE_PAUSED;
     force_stop_en = perms.can_abort;
@@ -579,6 +586,10 @@ static void apply_state(void)
 
     if (g_title_dot != NULL) {
         lv_obj_set_style_bg_color(g_title_dot,
+            g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
+    }
+    if (g_lbl_title != NULL) {
+        lv_obj_set_style_text_color(g_lbl_title,
             g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
     }
 
@@ -606,6 +617,13 @@ static void apply_state(void)
 
     lv_obj_set_style_bg_opa(g_btn_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_start, start_en ? LV_OPA_COVER : LV_OPA_50, 0);
+    if (start_en) {
+        lv_obj_add_flag(g_btn_start, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(g_lbl_start, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_remove_flag(g_btn_start, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(g_lbl_start, LV_OBJ_FLAG_CLICKABLE);
+    }
     lv_obj_set_style_bg_opa(g_btn_pause, pause_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_text_opa(g_lbl_pause, pause_en ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_set_style_bg_opa(g_btn_resume, resume_en ? LV_OPA_COVER : LV_OPA_50, 0);

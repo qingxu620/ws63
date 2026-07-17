@@ -15,24 +15,36 @@
 static volatile bool g_route_started = false;
 static volatile bool g_server_ready = false;
 static volatile bool g_server_failed = false;
+static volatile bool g_server_initialized_once = false;
+
+static errcode_t sle_job_route_activate_server(const char *reason)
+{
+    bool reused = g_server_initialized_once;
+    errcode_t ret = sle_job_route_server_init();
+    if (ret != ERRCODE_SUCC) {
+        g_server_failed = true;
+        g_server_ready = false;
+        osal_printk("[SLE_JOB_ROUTE] server activate failed reason=%s ret=0x%x\r\n",
+                    (reason != NULL) ? reason : "unspecified", ret);
+        sle_job_manager_safe_stop("sle-init-fail");
+        return ret;
+    }
+
+    g_server_initialized_once = true;
+    g_server_ready = true;
+    g_server_failed = false;
+    osal_printk("[SLE_JOB_ROUTE] server ready reason=%s reused=%u\r\n",
+                (reason != NULL) ? reason : "unspecified",
+                reused ? 1U : 0U);
+    return ERRCODE_SUCC;
+}
 
 static int sle_job_route_init_task(void *arg)
 {
     unused(arg);
 
     osal_msleep(500);
-
-    errcode_t ret = sle_job_route_server_init();
-    if (ret != ERRCODE_SUCC) {
-        g_server_failed = true;
-        g_server_ready = false;
-        sle_job_manager_safe_stop("sle-init-fail");
-        return -1;
-    }
-
-    g_server_ready = true;
-    g_server_failed = false;
-    return 0;
+    return (sle_job_route_activate_server("initial") == ERRCODE_SUCC) ? 0 : -1;
 }
 
 errcode_t sle_job_route_start(void)
@@ -57,6 +69,22 @@ errcode_t sle_job_route_start(void)
         osal_printk("[SLE_JOB_ROUTE] motion task failed: 0x%x\r\n", ret);
         sle_job_manager_safe_stop("motion-task-fail");
         return ret;
+    }
+
+    /*
+     * The SLE server/service is intentionally configured only once.  After a
+     * WiFi -> SLE route switch, server_init() only re-enables the persistent
+     * RX work queue and resumes advertising, so do that synchronously instead
+     * of allocating another one-shot 16 KB init task while WiFi tasks are
+     * still unwinding.
+     */
+    if (g_server_initialized_once) {
+        ret = sle_job_route_activate_server("resume");
+        if (ret != ERRCODE_SUCC) {
+            return ret;
+        }
+        g_route_started = true;
+        return ERRCODE_SUCC;
     }
 
     osal_kthread_lock();

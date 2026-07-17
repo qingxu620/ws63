@@ -53,7 +53,6 @@
 #define SLE_JOB_ROUTE_MAX_CONNECTIONS 4U
 #define SLE_JOB_ADV_DATA_LEN_MAX 251U
 #define SLE_JOB_ADV_TX_POWER 20U
-#define SLE_JOB_CONNECTED_ANNOUNCE_ENABLE 1
 #define SLE_JOB_RX_WORK_QUEUE_SIZE 8U
 #define SLE_JOB_RX_CB_SLOW_MS 50U
 #define SLE_JOB_RX_WORK_SLOW_MS 50U
@@ -82,9 +81,9 @@ typedef struct {
     uint16_t data_len;
 } sle_job_rx_cb_diag_t;
 
-static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x01};
-static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x03};
-static const uint8_t g_screen_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x00, 0x02};
+static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x01};
+static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
+static const uint8_t g_screen_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
 static volatile bool g_conn_table_ready = false;
@@ -97,7 +96,7 @@ static sle_job_route_disconnect_cb_t g_disconnect_cb = NULL;
 static volatile bool g_server_stopping = false;
 static volatile bool g_adv_data_ready = false;
 static volatile bool g_adv_enabled = false;
-static volatile bool g_adv_restart_pending = false;
+static volatile bool g_adv_desired = false;
 static volatile bool g_server_configured = false;
 static uint8_t g_scan_rsp_data[SLE_JOB_ADV_DATA_LEN_MAX];
 static uint16_t g_scan_rsp_data_len = 0;
@@ -813,23 +812,22 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             }
             return;
         }
+        if (!g_adv_desired || g_server_stopping) {
+            osal_printk("[job_rx] reject fixed %s peer while admission closed conn_id=%u\r\n",
+                        is_tx ? "TX" : "Screen", (unsigned int)conn_id);
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
+            return;
+        }
         osal_printk("[job_rx] accept fixed %s peer conn_id=%u\r\n",
                     is_tx ? "TX" : "Screen", (unsigned int)conn_id);
         conn_table_add(conn_id);
         tune_job_link_after_connect(conn_id);
-#if SLE_JOB_CONNECTED_ANNOUNCE_ENABLE
-        errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
-        unused(adv_ret);
-#else
-        if (g_adv_enabled) {
-            errcode_t adv_ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
-            if (adv_ret == ERRCODE_SLE_SUCCESS) {
-                osal_printk("[job_rx] connected stop announce conn_id=%u\r\n", conn_id);
-            } else {
-                osal_printk("[job_rx] connected stop announce fail: 0x%x\r\n", adv_ret);
-            }
+        if (g_adv_desired && !g_server_stopping) {
+            errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+            unused(adv_ret);
         }
-#endif
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         bool was_owner = (conn_id == g_owner_conn_id);
         (void)conn_table_remove(conn_id);
@@ -844,7 +842,7 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             osal_printk("[job_rx] owner disconnected, force safe stop\r\n");
             g_disconnect_cb();
         }
-        if (conn_table_count() == 0U) {
+        if (conn_table_count() == 0U && g_adv_desired) {
             sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
         }
     }
@@ -994,6 +992,12 @@ static void sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
         return;
     }
     g_adv_enabled = true;
+    if (!g_adv_desired || g_server_stopping) {
+        errcode_t ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[job_rx] stop undesired announce fail ret=0x%x\r\n", ret);
+        }
+    }
 }
 
 static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
@@ -1004,8 +1008,7 @@ static void sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
         return;
     }
     g_adv_enabled = false;
-    if (g_adv_restart_pending && !g_server_stopping) {
-        g_adv_restart_pending = false;
+    if (g_adv_desired && !g_server_stopping) {
         errcode_t ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
         if (ret != ERRCODE_SLE_SUCCESS) {
             osal_printk("[PANEL_STATUS_ADV] restart fail ret=0x%x\r\n", ret);
@@ -1075,13 +1078,15 @@ static void sle_enable_cbk(errcode_t status)
         return;
     }
     g_adv_data_ready = true;
-
-    ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
-    if (ret != ERRCODE_SLE_SUCCESS) {
-        osal_printk("[job_rx] start announce fail: 0x%x\r\n", ret);
-        return;
-    }
     g_server_configured = true;
+
+    if (g_adv_desired && !g_server_stopping) {
+        ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[job_rx] start announce fail: 0x%x\r\n", ret);
+            return;
+        }
+    }
 }
 
 static void sle_announce_register_cbks(void)
@@ -1098,6 +1103,7 @@ errcode_t sle_job_route_server_init(void)
 {
     conn_table_reset();
     g_server_stopping = false;
+    g_adv_desired = true;
     if (rx_work_queue_start() != ERRCODE_SUCC) {
         return ERRCODE_FAIL;
     }
@@ -1124,6 +1130,7 @@ errcode_t sle_job_route_server_init(void)
 errcode_t sle_job_route_server_stop(void)
 {
     g_server_stopping = true;
+    g_adv_desired = false;
     rx_work_queue_stop();
     if (conn_table_count() > 0U) {
         errcode_t disc_ret = sle_disconnect_all_remote_device();
@@ -1137,8 +1144,47 @@ errcode_t sle_job_route_server_stop(void)
         osal_printk("[job_rx] stop announce fail: 0x%x\r\n", adv_ret);
     }
     g_adv_enabled = false;
-    g_adv_restart_pending = false;
     return ERRCODE_SLE_SUCCESS;
+}
+
+errcode_t sle_job_route_server_set_discoverable(bool enabled, const char *reason)
+{
+    bool changed = (g_adv_desired != enabled);
+    g_adv_desired = enabled;
+
+    if (changed) {
+        osal_printk("[job_rx_adv] desired=%u active=%u reason=%s\r\n",
+                    enabled ? 1U : 0U, g_adv_enabled ? 1U : 0U,
+                    (reason != NULL) ? reason : "unspecified");
+    }
+    if (!g_server_configured || !g_adv_data_ready) {
+        return ERRCODE_SLE_SUCCESS;
+    }
+    if (g_server_stopping) {
+        return enabled ? ERRCODE_SLE_FAIL : ERRCODE_SLE_SUCCESS;
+    }
+
+    if (enabled) {
+        if (g_adv_enabled) {
+            return ERRCODE_SLE_SUCCESS;
+        }
+        errcode_t ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+        if (ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[job_rx_adv] start fail reason=%s ret=0x%x\r\n",
+                        (reason != NULL) ? reason : "unspecified", ret);
+        }
+        return ret;
+    }
+
+    if (!g_adv_enabled) {
+        return ERRCODE_SLE_SUCCESS;
+    }
+    errcode_t ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[job_rx_adv] stop fail reason=%s ret=0x%x\r\n",
+                    (reason != NULL) ? reason : "unspecified", ret);
+    }
+    return ret;
 }
 
 bool sle_job_route_server_is_connected(void)
@@ -1249,11 +1295,9 @@ errcode_t sle_job_route_server_update_panel_status_adv(const sle_job_panel_statu
         }
         return ret;
     }
-    if (g_adv_enabled) {
-        g_adv_restart_pending = true;
+    if (g_adv_enabled && g_adv_desired) {
         ret = sle_stop_announce(SLE_ADV_HANDLE_DEFAULT);
         if (ret != ERRCODE_SLE_SUCCESS) {
-            g_adv_restart_pending = false;
             static uint32_t s_adv_restart_fail_count = 0;
             if ((s_adv_restart_fail_count++ & 0x0FU) == 0U) {
                 osal_printk("[PANEL_STATUS_ADV] stop-for-restart fail ret=0x%x\r\n", ret);

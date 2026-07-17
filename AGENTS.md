@@ -38,9 +38,9 @@ This project is used in a competition environment. The active TX, RX, and Screen
 Current fixed board identities:
 
 ```text
-RX board     SLE MAC: 20:06:09:27:00:01
-Screen board SLE MAC: 20:06:09:27:00:02
-TX board     SLE MAC: 20:06:09:27:00:03
+RX board     SLE MAC: 20:06:09:27:12:01
+Screen board SLE MAC: 20:06:09:27:12:02
+TX board     SLE MAC: 20:06:09:27:12:03
 ```
 
 Rules:

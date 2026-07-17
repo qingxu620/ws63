@@ -34,6 +34,10 @@ unsigned long legacy_wifi_motion_executor_missed_sample_count(void);
 unsigned long legacy_wifi_motion_executor_motion_segment_count(void);
 unsigned long legacy_wifi_motion_executor_short_segment_count(void);
 unsigned long legacy_wifi_motion_executor_max_sample_late_us(void);
+unsigned long legacy_wifi_motion_executor_dac_skip_count(void);
+unsigned long legacy_wifi_motion_executor_timer_wait_count(void);
+unsigned long legacy_wifi_motion_executor_timer_fail_count(void);
+unsigned long legacy_wifi_motion_executor_timer_wake_late_max_us(void);
 
 #ifdef __cplusplus
 }

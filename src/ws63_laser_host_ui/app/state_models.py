@@ -29,8 +29,12 @@ RX_STATE_NAMES = {
 @dataclass
 class AppState:
     mode: ConnectionMode = ConnectionMode.SLE_VIA_TX
+    mode_target: ConnectionMode = ConnectionMode.SLE_VIA_TX
+    mode_transition: str = "UNKNOWN"
     tx_state: LinkState = LinkState.DISCONNECTED
     rx_state: LinkState = LinkState.DISCONNECTED
+    sle_rx_state: LinkState = LinkState.DISCONNECTED
+    screen_state: LinkState = LinkState.DISCONNECTED
     rx_state_code: int = -1
     prev_rx_state_code: int = -1
     rx_job_id: int = 0
@@ -56,7 +60,11 @@ class AppState:
     def as_labels(self) -> dict[str, str]:
         return {
             "mode": self.mode.value,
+            "mode_target": self.mode_target.value,
+            "mode_transition": self.mode_transition,
             "tx": self.tx_state.value,
             "rx": self.rx_state.value,
+            "sle_rx": self.sle_rx_state.value,
+            "screen": self.screen_state.value,
             "focus": "ON" if self.focus_active else "OFF",
         }

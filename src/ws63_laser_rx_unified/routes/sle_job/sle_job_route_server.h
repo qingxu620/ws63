@@ -37,6 +37,7 @@ typedef struct {
 
 errcode_t sle_job_route_server_init(void);
 errcode_t sle_job_route_server_stop(void);
+errcode_t sle_job_route_server_set_discoverable(bool enabled, const char *reason);
 bool sle_job_route_server_is_connected(void);
 errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len);
 errcode_t sle_job_route_server_broadcast_packet(const void *data, uint16_t len);

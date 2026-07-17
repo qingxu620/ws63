@@ -7,8 +7,11 @@
 
 #include "soc_osal.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+
+#define PANEL_FILE_LINE_SCAN_CHUNK 512U
 
 static panel_file_manager_t g_file_mgr;
 static bool g_file_mgr_initialized;
@@ -128,6 +131,82 @@ bool panel_file_manager_select(uint8_t index)
 
     g_file_mgr.selected_index = (int8_t)index;
     g_file_mgr.seq++;
+    return true;
+}
+
+bool panel_file_manager_ensure_line_count(uint8_t index, uint32_t *line_count)
+{
+    if (line_count != NULL) {
+        *line_count = 0U;
+    }
+    if (index >= g_file_mgr.count) {
+        set_error("文件索引无效");
+        return false;
+    }
+
+    panel_file_entry_t *entry = &g_file_mgr.entries[index];
+    if (!entry->selectable || entry->size_bytes == 0U) {
+        set_error("文件大小无效");
+        return false;
+    }
+    if (entry->line_count > 0U) {
+        if (line_count != NULL) {
+            *line_count = entry->line_count;
+        }
+        return true;
+    }
+
+    uint8_t buf[PANEL_FILE_LINE_SCAN_CHUNK];
+    uint32_t offset = 0U;
+    uint32_t count = 0U;
+    bool line_has_code = false;
+    bool in_semicolon_comment = false;
+
+    while (offset < entry->size_bytes) {
+        size_t bytes_read = 0U;
+        bool eof = false;
+        if (!panel_file_manager_read_chunk(index, offset, buf, sizeof(buf),
+                                           &bytes_read, &eof) || bytes_read == 0U) {
+            set_error("统计G-code行数失败");
+            return false;
+        }
+
+        for (size_t i = 0U; i < bytes_read; i++) {
+            uint8_t ch = buf[i];
+            if (ch == '\r' || ch == '\n') {
+                if (line_has_code) {
+                    count++;
+                }
+                line_has_code = false;
+                in_semicolon_comment = false;
+                continue;
+            }
+            if (in_semicolon_comment) {
+                continue;
+            }
+            if (ch == ';') {
+                in_semicolon_comment = true;
+                continue;
+            }
+            if (!isspace((int)ch)) {
+                line_has_code = true;
+            }
+        }
+
+        offset += (uint32_t)bytes_read;
+        if (eof) {
+            break;
+        }
+    }
+
+    if (line_has_code) {
+        count++;
+    }
+    entry->line_count = count;
+    g_file_mgr.seq++;
+    if (line_count != NULL) {
+        *line_count = count;
+    }
     return true;
 }
 

@@ -997,6 +997,9 @@ static int job_exec_task(void *arg)
         reset_auto_exec_policy();
     }
     g_exec_active = false;
+    if (g_state == SLE_JOB_STATE_IDLE) {
+        (void)sle_job_route_server_set_discoverable(true, "job_done");
+    }
     return 0;
 }
 
@@ -1303,6 +1306,7 @@ static void handle_job_begin(const sle_job_packet_view_t *pkt)
         g_data_cum_ack_ms = (uint32_t)uapi_systick_get_ms();
         g_data_cum_ack_count = 0;
         seq_commit(pkt->seq);
+        (void)sle_job_route_server_set_discoverable(false, "job_active");
         osal_printk("[JOB_BEGIN] accepted job=%u total=%u lines=%u auto_exec=%u preroll=%u "
                     "generation=%u\r\n",
                      (unsigned int)job_id, (unsigned int)total_size,
@@ -1876,6 +1880,7 @@ static bool handle_control_fast_path(const sle_job_packet_view_t *pkt)
             g_state = SLE_JOB_STATE_IDLE;
             seq_commit(pkt->seq);
             send_ack(pkt->type, pkt->seq, SLE_JOB_STATUS_OK);
+            (void)sle_job_route_server_set_discoverable(true, "job_abort");
             return true;
         case SLE_JOB_PKT_FOCUS_CTRL:
             osal_printk("[JOB_CTRL_FAST] type=FOCUS_CTRL seq=%u state=%s\r\n",
@@ -1982,6 +1987,7 @@ void sle_job_manager_on_disconnect(void)
     g_last_data_rx_ms = 0;
     g_exec_stream_cache_target_watermark = 0;
     reset_auto_exec_policy();
+    (void)sle_job_route_server_set_discoverable(true, "owner_disconnect");
 }
 
 bool sle_job_manager_is_idle(void)

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QGroupBox, QScrollArea, QTab
 
 from app.config_store import HostConfig
 from app.state_models import AppState
-from app.state_models import LinkState
+from app.state_models import ConnectionMode, LinkState
 from transports.sle_tx_transport import JOB_MAX_SIZE, JOB_PREROLL_BYTES
 from ui.main_window import MainWindow
 from ui.pages.connection_page import ConnectionPage
@@ -75,6 +75,101 @@ class UiContractTests(unittest.TestCase):
         ).y()
         self.assertLessEqual(route_bottom, window.page_job.height())
         self.assertIsNone(window.page_job.findChild(QScrollArea, "pageScroll"))
+
+    def test_job_page_exposes_exclusive_sle_wifi_mode_options(self) -> None:
+        page = JobPage()
+        requested: list[str] = []
+        page.mode_requested.connect(requested.append)
+
+        self.assertTrue(page.btn_sle.isChecked())
+        page.btn_wifi.click()
+        self.assertEqual(requested[-1], "WIFI")
+        self.assertTrue(page.btn_wifi.isChecked())
+        self.assertFalse(page.btn_sle.isChecked())
+
+        page.btn_sle.click()
+        self.assertEqual(requested[-1], "SLE")
+        self.assertTrue(page.btn_sle.isChecked())
+        self.assertFalse(page.btn_wifi.isChecked())
+
+    def test_mode_options_send_explicit_mode_commands_through_main_window(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        workers: list[object] = []
+        commands: list[tuple[str, str, float]] = []
+        window.client.is_open = lambda: True
+        window._run_job_worker = lambda fn, *args: workers.append(fn)
+        window.client.send_control = (
+            lambda command, expect, timeout: commands.append((command, expect, timeout))
+        )
+
+        window._on_mode_selected("WIFI")
+        workers.pop()()
+        window._on_mode_selected("SLE")
+        workers.pop()()
+
+        self.assertEqual(
+            commands,
+            [
+                ("@MODE WIFI", "@OK mode_request target=WIFI", 8.0),
+                ("@MODE SLE", "@OK mode_request target=SLE", 8.0),
+            ],
+        )
+
+    def test_sle_active_event_confirms_mode_and_defers_status_while_busy(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        busy = [True]
+        status_requests: list[bool] = []
+        window.client.is_open = lambda: True
+        window.worker.is_busy = lambda: busy[0]
+        window._on_status = lambda: status_requests.append(True)
+
+        window._process_protocol_message("@LINK peer=RX state=CONNECTED")
+        window._process_protocol_message("@LINK peer=SCREEN state=CONNECTING")
+        window._process_protocol_message(
+            "@MODE active=SLE rx=ready screen=connecting"
+        )
+
+        self.assertEqual(window.state.mode, ConnectionMode.SLE_VIA_TX)
+        self.assertEqual(window.state.mode_transition, "ACTIVE")
+        self.assertEqual(window.state.sle_rx_state, LinkState.CONNECTED)
+        self.assertEqual(window.state.screen_state, LinkState.CONNECTING)
+        self.assertTrue(window.page_job.btn_sle.isChecked())
+        self.assertTrue(window._mode_status_sync_pending)
+        self.assertFalse(status_requests)
+
+        busy[0] = False
+        window._try_mode_status_sync()
+
+        self.assertFalse(window._mode_status_sync_pending)
+        self.assertEqual(status_requests, [True])
+
+    def test_wifi_mode_event_remains_pending_until_external_verification(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+
+        window._process_protocol_message(
+            "@MODE target=WIFI state=PENDING reason=external_verify"
+        )
+
+        self.assertEqual(window.state.mode, ConnectionMode.SLE_VIA_TX)
+        self.assertEqual(window.state.mode_target, ConnectionMode.WIFI_TCP)
+        self.assertEqual(window.state.mode_transition, "PENDING")
+        self.assertTrue(window.page_job.btn_wifi.isChecked())
+        self.assertFalse(window.page_job.btn_upload_exec.isEnabled())
+        self.assertFalse(window.page_job.btn_focus.isEnabled())
+        self.assertIn("外部验证", window.page_job.lbl_mode_status.text())
+
+        window._process_protocol_message(
+            "@MODE target=WIFI state=FAILED reason=rx_busy"
+        )
+        self.assertEqual(window.state.mode_transition, "FAILED")
+        self.assertIn("rx_busy", window.page_job.lbl_mode_status.text())
+
+        window._process_protocol_message("@MODE active=SLE rx=ready screen=ready")
+        self.assertTrue(window.page_job.btn_upload_exec.isEnabled())
+        self.assertTrue(window.page_job.btn_focus.isEnabled())
 
     def test_gcode_page_contains_ai_and_editor_tabs(self) -> None:
         page = GcodePage()
@@ -651,6 +746,53 @@ class UiContractTests(unittest.TestCase):
         self.assertFalse(window.state.execution_complete)
         self.assertTrue(window.state.termination_requested)
         self.assertEqual(window.page_job.lbl_task.text(), "已取消并清空")
+
+    def test_cancelled_task_is_held_then_reset_to_idle(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_state_code = 3
+        window.state.rx_job_id = 7
+        window.state.rx_received = 23100
+        window.state.rx_job_total = 74856
+        window.state.rx_completed_lines = 281
+        window.state.rx_total_lines = 4299
+        window.state.execution_expected = True
+
+        window._on_task_status("已取消并清空", -1)
+
+        self.assertTrue(window._cancelled_task_timer.isActive())
+        self.assertEqual(window.page_job.lbl_state.text(), "已取消")
+        self.assertEqual(window.state.rx_state_code, 5)
+
+        window._return_cancelled_task_to_idle()
+
+        self.assertFalse(window._cancelled_task_timer.isActive())
+        self.assertEqual(window.state.rx_state_code, 0)
+        self.assertEqual(window.state.rx_job_id, 0)
+        self.assertEqual(window.state.rx_received, 0)
+        self.assertEqual(window.state.rx_job_total, 0)
+        self.assertEqual(window.page_job.lbl_state.text(), "空闲")
+        self.assertEqual(window.page_job.lbl_task.text(), "空闲")
+        self.assertFalse(window.state.execution_complete)
+        self.assertFalse(window.state.termination_requested)
+
+    def test_post_cancel_executing_status_cannot_restore_spinner(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.state.rx_state_code = 3
+        window.state.rx_job_id = 7
+        window.state.execution_expected = True
+        window._on_task_status("已取消并清空", -1)
+        window._return_cancelled_task_to_idle()
+
+        window._parse_rx_line(
+            "@STATUS state=3 status=0 job=7 rx=23100 total=74856 "
+            "free=85529 lines=281 completed=281 total_lines=4299"
+        )
+
+        self.assertEqual(window.state.rx_state_code, 0)
+        self.assertFalse(window.state.execution_expected)
+        self.assertFalse(window.page_job.arc._spinning)
 
     def test_late_poll_error_after_abort_is_suppressed(self) -> None:
         window = MainWindow()

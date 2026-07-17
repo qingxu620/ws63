@@ -21,3 +21,14 @@ uint16_t panel_job_proto_next_seq(void)
 
     return seq;
 }
+
+uint16_t panel_job_proto_peek_seq(void)
+{
+    uint16_t seq;
+
+    uint32_t lock = osal_irq_lock();
+    seq = g_panel_tx_seq;
+    osal_irq_restore(lock);
+
+    return seq;
+}
