@@ -143,8 +143,8 @@ class ImageGcodeTests(unittest.TestCase):
         self.assertIn("S1000", gcode)
         self.assertNotIn("M3", gcode)
         self.assertNotIn("M30", gcode)
-        self.assertIn("G0 X0.000 Y25.000", gcode)
-        self.assertIn("G1 X50.000 Y25.000", gcode)
+        self.assertIn("G0 X0.000 Y0.000", gcode)
+        self.assertIn("G1 X50.000 Y0.000", gcode)
         self.assertTrue(gcode.endswith("S0\nM5\n"))
 
     def test_raster_mask_to_gcode_emits_scaled_segments(self) -> None:
@@ -159,10 +159,10 @@ class ImageGcodeTests(unittest.TestCase):
             speed_mm_min=3000,
         )
 
-        self.assertIn("G0 X0.000 Y25.000", gcode)
-        self.assertIn("G1 X50.000 Y25.000", gcode)
-        self.assertIn("G0 X75.000 Y0.000", gcode)
-        self.assertIn("G1 X25.000 Y0.000", gcode)
+        self.assertIn("G0 X0.000 Y0.000", gcode)
+        self.assertIn("G1 X50.000 Y0.000", gcode)
+        self.assertIn("G0 X75.000 Y25.000", gcode)
+        self.assertIn("G1 X25.000 Y25.000", gcode)
         self.assertTrue(gcode.endswith("S0\nM5\n"))
 
     def test_raster_rows_to_gcode_rejects_ragged_rows(self) -> None:
@@ -192,21 +192,6 @@ class ImageGcodeTests(unittest.TestCase):
         self.assertIn("S420", vector)
         self.assertNotIn("S1000", raster)
         self.assertNotIn("S1000", vector)
-
-    def test_vector_gcode_converts_top_left_image_y_to_machine_y(self) -> None:
-        gcode = vector_contours_to_gcode(
-            [[(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]],
-            image_width=2,
-            image_height=2,
-            width_mm=20.0,
-            speed_mm_min=3000,
-            height_mm=20.0,
-            optimize_paths=False,
-        )
-
-        self.assertIn("G0 X0.000 Y20.000", gcode)
-        self.assertIn("G1 X10.000 Y20.000", gcode)
-        self.assertIn("G1 X10.000 Y10.000", gcode)
 
     def test_raster_rows_fit_inside_square_work_area(self) -> None:
         rows = [[0, 0] for _ in range(8)]

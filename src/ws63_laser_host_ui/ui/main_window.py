@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from app.config_store import ConfigStore, HostConfig
 from app.event_bus import EventBus
 from app.gcode_validator import prepare_gcode_for_upload, format_diagnostic
-from app.image_crop import auto_crop_white_background
+from app.paths import session_log_dir
 from app.state_models import AppState, ConnectionMode, LinkState
 from transports.sle_tx_transport import (
     SleJobSerialClient, SerialLogMonitor, UploadInterrupted, available_ports, crc16_ccitt,
@@ -806,7 +806,7 @@ class MainWindow(QMainWindow):
         if self._log_path:
             return
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._log_path = Path(__file__).resolve().parent.parent / "logs" / f"session_{stamp}.log"
+        self._log_path = session_log_dir() / f"session_{stamp}.log"
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_file = self._log_path.open("a", encoding="utf-8")
         self._enqueue_log("host", f"日志文件: {self._log_path}")
@@ -848,40 +848,8 @@ class MainWindow(QMainWindow):
         if image.isNull():
             self._on_ai_image_error(f"生成图片已保存但无法预览: {path}")
             return
-        try:
-            crop_result = auto_crop_white_background(image)
-        except (RuntimeError, ValueError) as exc:
-            self._enqueue_log("warning", f"AI 图片自动去白边失败，保留原图: {exc}")
-            crop_result = None
-
-        image_for_host = image
-        image_path_for_host = path
-        crop_status = "未检测到需要去除的大面积白边"
-        if crop_result is not None and crop_result.cropped:
-            cropped_path = Path(path).with_name(
-                f"{Path(path).stem}_autocrop.png"
-            )
-            if crop_result.image.save(str(cropped_path), "PNG"):
-                image_for_host = crop_result.image
-                image_path_for_host = str(cropped_path)
-                crop_status = (
-                    f"已自动去白边 {image.width()}×{image.height()} → "
-                    f"{image_for_host.width()}×{image_for_host.height()}"
-                )
-                self._enqueue_log(
-                    "host",
-                    f"AI 图片已自动去白边: {path} -> {cropped_path}",
-                )
-            else:
-                self._enqueue_log(
-                    "warning",
-                    f"AI 图片去白边结果无法保存，保留原图: {cropped_path}",
-                )
-
-        self.page_gcode.set_image(image_path_for_host, image_for_host)
-        self.page_gcode.image_status.setText(
-            f"豆包生图完成，已保存: {image_path_for_host}；{crop_status}"
-        )
+        self.page_gcode.set_image(path, image)
+        self.page_gcode.image_status.setText(f"豆包生图完成，已保存: {path}")
 
     def _on_ai_image_error(self, message: str) -> None:
         self.page_gcode.image_status.setText(message)

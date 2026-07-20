@@ -149,6 +149,52 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Build the Windows directory edition
+
+Run on Windows 11:
+
+```cmd
+build_windows.bat
+```
+
+The script installs the build-only requirements, regenerates the multi-size
+Windows icon, creates the PyInstaller one-folder bundle, and runs a packaged UI
+startup plus serial-port enumeration self-test. The distributable folder is:
+
+```text
+dist\WS63_Laser_Host\
+├── WS63_Laser_Host.exe
+└── internal\
+```
+
+Distribute the complete `WS63_Laser_Host` folder. To also create a shortcut for
+the locally built copy:
+
+```cmd
+build_windows.bat -CreateDesktopShortcut
+```
+
+Build requirements can be preinstalled and installation skipped:
+
+```cmd
+python -m pip install -r requirements-build.txt
+build_windows.bat -SkipInstall
+```
+
+Writable application data is stored outside the program directory:
+
+```text
+%LOCALAPPDATA%\fbb_ws63\WS63 Laser Host\
+├── config\host_ui_config.json
+├── logs\
+└── generated_images\
+```
+
+Set `WS63_LASER_HOST_DATA_DIR` to override this root for tests or portable
+development environments. When the updated source tree is run, an existing
+source-relative configuration is migrated here automatically; a fresh packaged
+copy starts with the built-in defaults until settings are saved.
+
 ## Sync to Win11
 
 ```bash

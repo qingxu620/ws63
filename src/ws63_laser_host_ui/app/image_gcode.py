@@ -609,15 +609,12 @@ def vector_contours_to_gcode(
 
     for contour in ordered:
         start_x = x_offset_mm + contour[0][0] * step
-        start_y = y_offset_mm + (image_height - contour[0][1]) * step
+        start_y = y_offset_mm + contour[0][1] * step
         emit_power(0)
         lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f}")
         emit_power(mark_power)
         for x, y in contour[1:]:
-            lines.append(
-                f"G1 X{x_offset_mm + x * step:.3f} "
-                f"Y{y_offset_mm + (image_height - y) * step:.3f}"
-            )
+            lines.append(f"G1 X{x_offset_mm + x * step:.3f} Y{y_offset_mm + y * step:.3f}")
         emit_power(0)
     lines.append("M5")
     return "\n".join(lines) + "\n"
@@ -666,7 +663,7 @@ def _raster_runs_to_gcode(
                 x0, x1 = (end + 1) * x_step, start * x_step
             x0 += x_offset_mm
             x1 += x_offset_mm
-            y_mm = y_offset_mm + (image_height - 1 - y) * y_step
+            y_mm = y_offset_mm + y * y_step
             emit_power(0)
             lines.append(f"G0 X{x0:.3f} Y{y_mm:.3f}")
             emit_power(mark_power)

@@ -44,6 +44,7 @@ from app.image_gcode import (
     trace_vector_contours_from_mask,
     vector_contours_to_gcode,
 )
+from app.paths import generated_images_dir
 
 
 RX_JOB_MAX_BYTES = 100 * 1024
@@ -185,7 +186,7 @@ class GcodePage(QWidget):
         output_row.setSpacing(8)
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setObjectName("doubaoOutputDir")
-        default_output_dir = Path(__file__).resolve().parents[2] / "generated_images"
+        default_output_dir = generated_images_dir()
         self.output_dir_edit.setText(str(default_output_dir))
         self.output_dir_edit.setPlaceholderText("生成图片保存目录")
         output_row.addWidget(self.output_dir_edit, 1)

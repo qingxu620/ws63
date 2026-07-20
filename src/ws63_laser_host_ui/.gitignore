@@ -6,4 +6,7 @@ config/
 logs/
 .pytest_cache/
 .coverage
-
+generated_images/
+dist/
+build/*
+!build/windows_version_info.txt

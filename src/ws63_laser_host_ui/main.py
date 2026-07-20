@@ -12,10 +12,13 @@ Protocol chain:
 """
 from __future__ import annotations
 
+import ctypes
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from app.paths import application_icon_path
 from ui.main_window import MainWindow
 
 
@@ -241,9 +244,26 @@ def _apply_global_style(app: QApplication) -> None:
 
 
 def main() -> int:
+    if "--self-test" in sys.argv:
+        from app.self_test import run_self_test
+
+        return run_self_test(sys.argv[1:])
+
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "fbb_ws63.WS63LaserHost"
+            )
+        except (AttributeError, OSError):
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("WS63 Laser Host")
+    app.setApplicationDisplayName("WS63 Laser Host")
     app.setOrganizationName("fbb_ws63")
+    icon_path = application_icon_path()
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     _apply_global_style(app)
 
     window = MainWindow()
