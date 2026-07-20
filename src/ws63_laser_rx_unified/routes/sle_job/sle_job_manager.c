@@ -37,7 +37,6 @@
 #define SLE_JOB_PANEL_STATUS_BROADCAST_ENABLE 0
 #define SLE_JOB_SEND_SLOW_MS 50U
 #define SLE_JOB_EXEC_START_ACK_GRACE_MS 200U
-#define SLE_JOB_FAST_ACK_LOG_EVERY 32U
 
 static volatile sle_job_state_t g_state = SLE_JOB_STATE_IDLE;
 static volatile bool g_abort_requested = false;
@@ -530,12 +529,10 @@ static bool maybe_send_data_progress_ack(uint16_t seq, bool fast_active, bool fo
         if (fast_active) {
             g_data_cum_ack_count++;
             uint32_t delta = (rx_offset >= old_ack_offset) ? (rx_offset - old_ack_offset) : 0U;
-            bool final_ack = total_size > 0U && rx_offset >= total_size;
-            bool log_due = final_ack || ack_ms >= SLE_JOB_SEND_SLOW_MS ||
-                            (SLE_JOB_FAST_ACK_LOG_EVERY > 0U &&
-                             (g_data_cum_ack_count % SLE_JOB_FAST_ACK_LOG_EVERY) == 0U);
+            bool log_due = ack_ret != ERRCODE_SLE_SUCCESS ||
+                           ack_ms >= SLE_JOB_SEND_SLOW_MS;
             if (log_due) {
-                osal_printk("[RX_DATA_FAST_ACK] count=%u t=%u seq=%u st=%u off=%u old_off=%u "
+                osal_printk("[RX_DATA_ACK_ABNORMAL] count=%u t=%u seq=%u st=%u off=%u old_off=%u "
                             "delta=%u age_ms=%u ack_ms=%u force=%u free=%u state=%s\r\n",
                             (unsigned int)g_data_cum_ack_count,
                             (unsigned int)uapi_systick_get_ms(),
@@ -1896,6 +1893,15 @@ void sle_job_manager_on_packet(uint16_t conn_id, const uint8_t *data, uint16_t l
 {
     unused(conn_id);
     sle_job_packet_view_t pkt;
+    /*
+     * SSAP notification subscription writes a two-byte CCCD value through
+     * the same server write callback. It is not a job packet and must not
+     * consume a sequence or generate a protocol NACK.
+     */
+    if (len < SLE_JOB_PACKET_HEADER_LEN) {
+        osal_printk("[JOB_RX] ignore short non-job write len=%u\r\n", (unsigned int)len);
+        return;
+    }
     if (!sle_job_packet_decode(data, len, &pkt)) {
         osal_printk("[JOB_RX] bad packet len=%u\r\n", len);
         send_ack(0, g_expected_seq, SLE_JOB_STATUS_BAD_CRC);

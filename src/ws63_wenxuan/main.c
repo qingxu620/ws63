@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief Integrated RX route-based R5D coexist experiment entry.
+ * @brief Wenxuan phone-enabled unified RX entry.
  */
 #include "app_init.h"
 #include "boot_policy.h"
@@ -9,7 +9,7 @@
 #include "route_manager.h"
 #include "soc_osal.h"
 
-#define RX_UNIFIED_FIRMWARE_PACKAGE "ws63-liteos-app_rx_unified_all.fwpkg"
+#define RX_WENXUAN_FIRMWARE_PACKAGE "ws63-liteos-app_wenxuan_all.fwpkg"
 #define RX_PHONE_INTEGRATION_VERSION "phone-rx-v7-20260719"
 
 #if defined(CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE)
@@ -18,15 +18,15 @@
 #define RX_PHONE_ADMISSION "0"
 #endif
 
-static void laser_rx_unified_entry(void)
+static void laser_rx_wenxuan_entry(void)
 {
-    osal_printk("[FW_ID] board=RX firmware=%s app=ws63_laser_rx_unified role=unified-rx phase=R5D "
+    osal_printk("[FW_ID] board=RX firmware=%s app=ws63_wenxuan role=wenxuan-rx phase=R5D "
                 "routes=sle_job,wifi,uart phone_integration=%s phone_admission=%s "
                 "ssap_write_rsp=conditional notify_desc=client_config cccd_write=1 "
                 "cccd_route=filtered phone_max=1 phone_data_len=512 phone_phy_mcs_tune=0 "
                 "fixed_link_tune=1 "
                 "phone_adv_restart=0\r\n",
-                RX_UNIFIED_FIRMWARE_PACKAGE,
+                RX_WENXUAN_FIRMWARE_PACKAGE,
                 RX_PHONE_INTEGRATION_VERSION,
                 RX_PHONE_ADMISSION);
 
@@ -59,4 +59,4 @@ static void laser_rx_unified_entry(void)
 #endif
 }
 
-app_run(laser_rx_unified_entry);
+app_run(laser_rx_wenxuan_entry);

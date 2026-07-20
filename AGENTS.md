@@ -170,8 +170,15 @@ Current implementation snapshot from `src/ws63_laser_sle_tx/common/config.h`:
 - UART command baud: `115200`
 - SLE data chunk: `300B`
 - SLE MTU: `512`
-- RX connection interval selector: `0x10` (`JOB_SLE_CONN_INTERVAL_20MS`) in current config
-- Panel connection interval selector: `0x20`
+- SLE logical-link interval unit: `125 us` for `sle_update_connect_param()` and
+  the matching connection selectors; do not apply BLE's `1.25 ms` unit.
+- RX connection interval selector: `0x10` (`2 ms`) in current config.
+- Panel connection interval selector: `0x20` (`4 ms`) in current config.
+- Screen offline-to-RX selector: `0x14` (`2.5 ms`).
+- The SDK contains conflicting historical comments (`0.25 ms` and `1.25 ms`);
+  use the WS63 `AT+SLECONNPARUPD` definition and active SLE throughput sample,
+  both of which define the interval unit as `125 us`. Treat callback logs as
+  the authority for the negotiated runtime interval.
 - Retry max: `3`
 - Normal control ACK timeout: `2000 ms`; `EXEC_START` ACK timeout: `15000 ms`
 - DATA transfer uses a small TX-side cumulative-offset window (`JOB_TX_DATA_WINDOW_PACKETS`, currently 3 packets) with hybrid SLE writes: `write_cmd` for DATA by default and `write_req` when forced for backpressure/confirmation. Host `@ACK type=2 offset=...` means TX accepted the chunk into the SLE DATA window; preroll and `JOB_END` must still drain until RX cumulative `received_size` reaches the boundary.
@@ -274,7 +281,16 @@ Current project convention:
 Consequences:
 
 - RX SLE priority 2 and TX SLE priority 3 can preempt executor priority 4.
-- `osal_yield()` in a lower-priority task does not starve higher-priority SLE work.
+- In this WS63 LiteOS SDK, `src/kernel/osal/src/liteos/osal_task.c` implements
+  `osal_yield()` as an empty function. It does not call `LOS_TaskYield()`, block
+  the current task, or trigger a reschedule. Do not use it or describe it as a
+  way to release the CPU.
+- Use a semaphore, event, queue, notification, OS sleep, or hardware-timer wait
+  when a product task must genuinely block and let other work run. Task
+  priorities and normal LiteOS preemption remain responsible for higher-priority
+  work interrupting a lower-priority task.
+- Do not edit the SDK OSAL implementation merely to change this behavior; keep
+  product scheduling explicit in active project code.
 - Use existing LiteOS/OSAL event, semaphore, queue, or notification primitives for synchronization.
 - Do not introduce FreeRTOS-only APIs unless the SDK explicitly provides compatibility.
 - Never increase a numeric priority thinking it makes the task higher priority.

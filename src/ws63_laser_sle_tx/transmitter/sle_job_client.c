@@ -402,7 +402,10 @@ static void connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
         g_connecting = false;
         g_pending_role = SLE_LINK_ROLE_NONE;
 
-        /* Keep RX fast, but keep the panel mirror low duty so it cannot compete with job DATA. Unit is 1.25ms. */
+        /*
+         * WS63 SLE logical-link intervals use 125 us units. Keep RX at 2 ms,
+         * but keep the panel mirror at 4 ms so it cannot compete with job DATA.
+         */
         uint16_t interval_units = (role == SLE_LINK_ROLE_PANEL) ?
                                   JOB_SLE_PANEL_CONN_INTERVAL_UNITS :
                                   JOB_SLE_CONN_INTERVAL_UNITS;
@@ -936,14 +939,6 @@ errcode_t sle_job_client_mirror_panel_packet(const void *data, uint16_t len)
                     (unsigned int)pkt_type, (unsigned int)len,
                     (unsigned int)call_ms, (unsigned int)g_panel_conn_id,
                     (unsigned int)g_panel_status_handle);
-    } else if (pkt_type == PKT_PANEL_STATUS) {
-        static uint32_t s_panel_mirror_ok_count = 0;
-        if ((s_panel_mirror_ok_count++ & 0x1FU) == 0U) {
-            osal_printk("[TX_PANEL_MIRROR] type=0x%02x len=%u conn=%u handle=0x%x\r\n",
-                        (unsigned int)pkt_type, (unsigned int)len,
-                        (unsigned int)g_panel_conn_id,
-                        (unsigned int)g_panel_status_handle);
-        }
     }
     return ret;
 }

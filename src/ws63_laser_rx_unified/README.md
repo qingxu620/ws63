@@ -20,6 +20,55 @@ The new mainline is route-based integration:
 Do not force these routes to share a Grbl stream parser or the SLE job
 packet/cache state machine.
 
+## SLE logical-link interval units
+
+For the WS63 `sle_update_connect_param()` path used by the active TX, unified
+RX, and Screen firmware, one logical-link interval unit is 125 us. This matches
+the SDK's `AT+SLECONNPARUPD` documentation and active SLE throughput sample.
+Do not convert these selectors with the BLE 1.25 ms unit.
+
+Current requested selectors are:
+
+- TX to RX: `0x10`, or 2 ms.
+- Screen offline to RX: `0x14`, or 2.5 ms.
+- TX to Screen status mirror: `0x20`, or 4 ms.
+- RX and Screen announce interval: `0xC8`, or 25 ms.
+- Connection supervision timeout: `0x1F4` in 10 ms units, or 5 seconds.
+
+These are requested parameters. The connection-parameter callback and PHY/MCS
+callbacks remain authoritative for the values accepted at runtime. Historical
+SDK comments that describe the same interval fields as 0.25 ms or 1.25 ms are
+inconsistent with the WS63 command documentation and throughput sample.
+
+## LiteOS scheduling note
+
+In the WS63 LiteOS SDK used by this project, `osal_yield()` is an empty OSAL
+compatibility function. It does not call `LOS_TaskYield()`, block the current
+task, or cause a reschedule. Active product code must not use it as a CPU-yield
+or fairness mechanism. Use explicit semaphores, events, queues, notifications,
+OS sleeps, or hardware-timer waits when a task must genuinely block. Normal
+LiteOS priority preemption still allows a ready higher-priority task to preempt
+a lower-priority task.
+
+## Phone control handoff
+
+The verified HarmonyOS phone client connects directly to the RX SLE Job server
+using the same SSAP service and packet protocol as the Host/TX path. The
+phone-enabled unified RX build sets `CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE=y`.
+It admits one non-fixed phone peer while retaining the fixed TX and Screen MAC
+checks and the single-writer owner rule.
+
+Phone CCCD writes are handled as SSAP control traffic and cannot claim JOB
+ownership or enter the packet decoder. Phone links negotiate a 512-byte data
+length but keep the default PHY/MCS parameters; fixed TX/Screen links retain
+their existing throughput tuning. Disconnecting the owner invokes the existing
+safe-stop callback.
+
+When phone admission is enabled, a connected peer that is neither the fixed TX
+nor the fixed Screen MAC is classified as the phone; this is not cryptographic
+peer authentication. Only one such phone connection is admitted, and the first
+admitted data-characteristic writer becomes the job owner.
+
 ## R0/R1 Scope
 
 R1 only creates the route-manager skeleton. It does not start any real route.

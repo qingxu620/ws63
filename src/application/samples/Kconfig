@@ -136,6 +136,34 @@ if LASER_RX_UNIFIED
 source "ws63_laser_rx_unified/Kconfig"
 endif
 
+config LASER_RX_WENXUAN
+    bool
+    prompt "WS63 RX 文轩手机接入变体"
+    default n
+    depends on SAMPLE_ENABLE
+    select SPI_SUPPORT_MASTER
+    help
+        用途：保留已验证 HarmonyOS 手机接入版本作为临时回滚变体。
+        手机能力已经合入统一 RX 主线；该变体与统一 RX 产品固件互斥，
+        RX 仍是运动、任务和激光状态的唯一真源。
+
+if LASER_RX_WENXUAN
+source "ws63_wenxuan/Kconfig"
+endif
+
+config LASER_RX_SLE_JOB_ALLOW_PHONE
+    bool
+    prompt "Allow a phone SLE peer"
+    default n
+    depends on SAMPLE_ENABLE && (LASER_RX_UNIFIED || LASER_RX_WENXUAN)
+    depends on LASER_RX_TRANSPORT_SLE_JOB
+    help
+        Allow a non-fixed SLE peer (the verified HarmonyOS phone client) to
+        connect to the SLE job server. The first admitted peer data write
+        becomes the single control owner; TX, Screen, and Phone do not gain
+        concurrent control. Keep disabled for the fixed-board production
+        baseline unless phone control is required.
+
 comment "WS63 LVGL 模块：LVGL v9.3.0 + MSP3223 target"
 
 config ENABLE_LVGL_SAMPLE

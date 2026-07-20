@@ -1,0 +1,65 @@
+#===============================================================================
+# @brief WS63 unified laser RX configuration
+#===============================================================================
+
+menu "WS63 Laser RX Wenxuan Options"
+    depends on LASER_RX_WENXUAN
+
+config LASER_RX_TRANSPORT_UART
+    bool "Enable legacy USART route option"
+    default n
+    help
+        R2A compiles the prefixed legacy USART route copied from
+        ws63_laser_single, but the integrated main entry does not start the
+        UART RX task yet.
+
+config LASER_RX_UART_BAUD
+    int "Legacy USART route baud rate"
+    default 115200
+    depends on LASER_RX_TRANSPORT_UART
+    help
+        UART baud rate for the direct PC-to-RX command stream. Keep 115200 for
+        the demo-safe baseline unless explicitly testing a rebuilt firmware.
+
+config LASER_RX_UART_STATUS_PERIODIC
+    bool "Enable periodic status reports for legacy USART route"
+    default n
+    depends on LASER_RX_TRANSPORT_UART
+    help
+        Keep disabled for LaserGRBL by default; LaserGRBL normally polls with '?'.
+
+config LASER_RX_TRANSPORT_WIFI
+    bool "Enable legacy WiFi route option"
+    default n
+    help
+        R3A compiles the prefixed legacy WiFi route copied from
+        ws63_laser_wifi, but the integrated main entry does not start SoftAP,
+        the TCP server, or a WiFi task yet.
+
+config LASER_RX_TRANSPORT_SLE_JOB
+    bool "Enable SLE job route option"
+    default n
+    help
+        R4B starts the route-local SLE receiver, packet/cache state machine,
+        G-code processor, motion executor, and SLE server as the default active
+        route. Legacy UART/WiFi routes remain compiled but inactive.
+
+config LASER_RX_SLE_JOB_CACHE_SIZE
+    int "Integrated SLE job cache size"
+    default 102400
+    range 102400 102400
+    depends on LASER_RX_TRANSPORT_SLE_JOB
+    help
+        Keep the product SLE RX cache at 100KiB. Larger Host jobs must be
+        streamed with upload-and-execute or rejected before upload so RX cannot
+        overflow the task cache.
+
+config LASER_RX_WORK_AREA_X_MM
+    int "Work area X in mm"
+    default 99
+
+config LASER_RX_WORK_AREA_Y_MM
+    int "Work area Y in mm"
+    default 99
+
+endmenu

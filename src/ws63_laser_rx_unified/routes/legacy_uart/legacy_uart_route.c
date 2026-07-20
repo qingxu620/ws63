@@ -249,7 +249,7 @@ static bool handle_dollar_command(const char *line)
         uart_send_str(buf);
     } else if (strcmp(line, "$D") == 0) {
         snprintf(buf, sizeof(buf),
-                 "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu]\r\nok\r\n",
+                 "[MSG:motion busy=%d queue=%u abort=%d worker=%d enq=%lu exe=%lu x=%.3f y=%.3f laser=%d power=%u pwm=%d pclk=%lu period=%lu high=%lu low=%lu req=%u eff=%u late_max=%lu late_cnt=%lu slip=%lu seg=%lu short=%lu timer_wait=%lu timer_fail=%lu timer_late_max=%lu]\r\nok\r\n",
                  legacy_uart_motion_executor_is_busy() ? 1 : 0, (unsigned int)legacy_uart_motion_executor_queue_depth(),
                  legacy_uart_motion_executor_abort_requested() ? 1 : 0, legacy_uart_motion_executor_worker_started() ? 1 : 0,
                  legacy_uart_motion_executor_enqueued_count(), legacy_uart_motion_executor_executed_count(),
@@ -260,7 +260,10 @@ static bool handle_dollar_command(const char *line)
                  (unsigned int)laser_pwm_last_requested_power(), (unsigned int)laser_pwm_last_effective_power(),
                  legacy_uart_motion_executor_max_sample_late_us(), legacy_uart_motion_executor_late_sample_count(),
                  legacy_uart_motion_executor_missed_sample_count(), legacy_uart_motion_executor_motion_segment_count(),
-                 legacy_uart_motion_executor_short_segment_count());
+                 legacy_uart_motion_executor_short_segment_count(),
+                 legacy_uart_motion_executor_timer_wait_count(),
+                 legacy_uart_motion_executor_timer_fail_count(),
+                 legacy_uart_motion_executor_timer_wake_late_max_us());
         uart_send_str(buf);
     } else if (strcmp(line, "$H") == 0) {
         wait_motion_idle(LEGACY_UART_MOTION_END_DRAIN_TIMEOUT_MS);

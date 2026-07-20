@@ -35,7 +35,6 @@
 #define PANEL_OFFLINE_DATA_DRAIN_TIMEOUT_MS 8000U
 #define PANEL_OFFLINE_USE_FULL_FILE_CRC 0
 #define PANEL_OFFLINE_READAHEAD_BYTES 8192U
-#define PANEL_OFFLINE_YIELD_PACKETS   16U
 #define PANEL_OFFLINE_PROGRESS_PACKETS 4U
 #define PANEL_OFFLINE_PREROLL_REQUEST_BYTES 4096U
 #define PANEL_OFFLINE_RX_CACHE_SIZE 102400U
@@ -760,9 +759,6 @@ static panel_offline_flow_t upload_selected_file(uint8_t index, const panel_file
                  (uint32_t)(now_ms - last_status_req_ms) >= PANEL_OFFLINE_STATUS_MS)) {
                 (void)send_packet_no_ack(PKT_STATUS_REQ, NULL, 0);
                 last_status_req_ms = now_ms;
-            }
-            if ((packet_count % PANEL_OFFLINE_YIELD_PACKETS) == 0U) {
-                osal_yield();
             }
         }
 

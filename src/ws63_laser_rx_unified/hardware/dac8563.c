@@ -130,8 +130,9 @@ errcode_t dac8563_init(void)
     spi_attr_t attr = {0};
     attr.is_slave = false;
     attr.slave_num = 1;
-    attr.bus_clk = 32000000;
-    attr.freq_mhz = 10;
+    /* Match the verified screen SPI clock setup: 80 MHz source / 2 = 40 MHz SCLK. */
+    attr.bus_clk = 80000000;
+    attr.freq_mhz = 40;
     attr.clk_polarity = 0;
     attr.clk_phase = 1;
     attr.frame_format = 0;

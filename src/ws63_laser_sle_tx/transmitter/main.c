@@ -62,10 +62,7 @@ static volatile bool g_rx_status_req_pending = false;
 static volatile bool g_rx_status_report_host = false;
 static uint32_t g_rx_status_req_ms = 0;
 static uint32_t g_rx_status_poll_ms = 0;
-static uint8_t g_data_status_progress_bucket = 0;
 static uint32_t g_data_credit_probe_last_ms = 0;
-static uint32_t g_data_credit_probe_log_last_ms = 0;
-static uint32_t g_data_credit_probe_count = 0;
 static status_resp_payload_t g_panel_rx_status;
 static volatile bool g_panel_rx_status_valid = false;
 static volatile uint16_t g_wait_ack_seq = 0;
@@ -245,10 +242,7 @@ static void clear_local_job_state(void)
     g_rx_status_report_host = false;
     g_rx_status_req_ms = 0;
     g_rx_status_poll_ms = 0;
-    g_data_status_progress_bucket = 0;
     g_data_credit_probe_last_ms = 0;
-    g_data_credit_probe_log_last_ms = 0;
-    g_data_credit_probe_count = 0;
     memset(&g_panel_rx_status, 0, sizeof(g_panel_rx_status));
     g_panel_rx_status_valid = false;
 }
@@ -674,27 +668,8 @@ static void update_async_data_progress_from_status(const status_resp_payload_t *
     g_async_data_credit = st->cache_free;
     g_async_data_credit_valid = true;
     if (st->received_size > g_async_data_ack_offset) {
-        uint32_t old_ack = g_async_data_ack_offset;
         g_async_data_ack_offset = st->received_size;
         note_async_data_ack_offset(g_async_data_ack_offset);
-        uint32_t now = (uint32_t)uapi_systick_get_ms();
-        bool final_progress = st->total_size > 0U && st->received_size >= st->total_size;
-        uint8_t progress_bucket = (st->total_size > 0U) ?
-                                  (uint8_t)(((uint64_t)st->received_size * 4U) /
-                                            st->total_size) : 0U;
-        if (final_progress || progress_bucket > g_data_status_progress_bucket) {
-            g_data_status_progress_bucket = progress_bucket;
-            osal_printk("[TX_DATA_STATUS_PROGRESS] t=%u job=%u rx=%u old_ack=%u total=%u "
-                        "free=%u state=%u lines=%u\r\n",
-                        (unsigned int)now,
-                        (unsigned int)st->job_id,
-                        (unsigned int)st->received_size,
-                        (unsigned int)old_ack,
-                        (unsigned int)st->total_size,
-                        (unsigned int)st->cache_free,
-                        (unsigned int)st->state,
-                        (unsigned int)st->executed_lines);
-        }
     }
 }
 
@@ -738,33 +713,14 @@ static bool request_rx_status_sync(const char *reason, uint16_t ref_seq,
     g_rx_status_req_ms = t_send;
     errcode_t ret = sle_job_client_send_packet(packet, packet_len);
     uint32_t send_ms = (uint32_t)uapi_systick_get_ms() - t_send;
-    uint32_t now = (uint32_t)uapi_systick_get_ms();
-    bool credit_probe = reason != NULL && strcmp(reason, "data_credit") == 0;
-    bool log_probe = true;
-    if (credit_probe) {
-        g_data_credit_probe_count++;
-        log_probe = ret != ERRCODE_SLE_SUCCESS ||
-                    g_data_credit_probe_log_last_ms == 0U ||
-                    (uint32_t)(now - g_data_credit_probe_log_last_ms) >=
-                    JOB_TX_DATA_CREDIT_PROBE_LOG_MS;
-        if (log_probe) {
-            g_data_credit_probe_log_last_ms = now;
-        }
-    }
-    if (log_probe) {
-        osal_printk("[TX_STATUS_PROBE] t=%u reason=%s count=%u status_seq=%u ref_seq=%u "
-                    "ref_off=%u ret=0x%x send_ms=%u ack_off=%u ack_seq=%u "
-                    "seq_neutral=1\r\n",
-                    (unsigned int)now,
+    if (ret != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[TX_STATUS_PROBE_SEND_FAIL] t=%u reason=%s status_seq=%u ref_seq=%u "
+                    "ref_off=%u ret=0x%x send_ms=%u\r\n",
+                    (unsigned int)uapi_systick_get_ms(),
                     (reason != NULL) ? reason : "none",
-                    (unsigned int)(credit_probe ? g_data_credit_probe_count : 0U),
                     (unsigned int)seq, (unsigned int)ref_seq,
                     (unsigned int)ref_offset, (unsigned int)ret,
-                    (unsigned int)send_ms,
-                    (unsigned int)g_async_data_ack_offset,
-                    (unsigned int)g_async_data_ack_seq);
-    }
-    if (ret != ERRCODE_SLE_SUCCESS) {
+                    (unsigned int)send_ms);
         g_rx_status_req_pending = false;
         return false;
     }

@@ -48,6 +48,7 @@ static bool g_motion_timer_ready = false;
 static uint16_t g_last_dac_x = 0;
 static uint16_t g_last_dac_y = 0;
 static bool g_last_dac_valid = false;
+static uint64_t g_g0_settle_until_us = 0;
 static uint64_t g_last_wdt_kick_us = 0;
 
 #define MOTION_LATE_WARN_US 100U
@@ -215,6 +216,20 @@ static bool delay_until_us_interruptible(uint64_t target_us)
     return false;
 }
 
+static bool wait_for_g0_settle_if_needed(void)
+{
+    uint64_t settle_until_us = g_g0_settle_until_us;
+    if (settle_until_us == 0U) {
+        return true;
+    }
+    if (!delay_until_us_interruptible(settle_until_us)) {
+        laser_force_off();
+        return false;
+    }
+    g_g0_settle_until_us = 0;
+    return true;
+}
+
 static int ceil_step_count(double value)
 {
     if (value <= 1.0) {
@@ -233,7 +248,8 @@ static void record_late_sample(uint64_t late_us)
     }
 }
 
-static void perform_move(double target_x, double target_y, double feed_rate_mm_min, bool laser_marking)
+static void perform_move(double target_x, double target_y, double feed_rate_mm_min,
+                         double spatial_step_mm, bool laser_marking)
 {
     g_motion_active = true;
     g_abort_requested = false;
@@ -265,7 +281,8 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
 
     double duration_us = (distance / feed_sec) * 1000000.0;
     g_motion_segment_count++;
-    bool short_segment = (distance <= LEGACY_WIFI_STEP_NUM || duration_us <= (double)LEGACY_WIFI_MOTION_SAMPLE_PERIOD_US);
+    bool short_segment = (distance <= spatial_step_mm ||
+                          duration_us <= (double)LEGACY_WIFI_MOTION_SAMPLE_PERIOD_US);
     if (short_segment) {
         g_short_segment_count++;
     }
@@ -274,7 +291,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     }
 
     int time_steps = ceil_step_count(duration_us / (double)LEGACY_WIFI_MOTION_SAMPLE_PERIOD_US);
-    int space_steps = ceil_step_count(distance / LEGACY_WIFI_STEP_NUM);
+    int space_steps = ceil_step_count(distance / spatial_step_mm);
     int steps = (time_steps > space_steps) ? time_steps : space_steps;
     double step_time_us = duration_us / (double)steps;
     if (step_time_us < 1.0) {
@@ -355,6 +372,7 @@ void legacy_wifi_motion_executor_init(void)
     g_last_dac_x = 0;
     g_last_dac_y = 0;
     g_last_dac_valid = false;
+    g_g0_settle_until_us = 0;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (!g_queue_ready) {
@@ -461,6 +479,7 @@ void legacy_wifi_motion_executor_flush(void)
     }
     osal_mutex_unlock(&g_queue_mutex);
     laser_force_off();
+    g_g0_settle_until_us = 0;
 }
 
 static int legacy_wifi_motion_executor_task(void *arg)
@@ -517,7 +536,11 @@ void legacy_wifi_motion_executor_execute(const legacy_wifi_motion_cmd_t *cmd)
                 break;
             }
             laser_enable(false);
-            perform_move(cmd->target_x, cmd->target_y, LEGACY_WIFI_G0_FEED_RATE, false);
+            perform_move(cmd->target_x, cmd->target_y, LEGACY_WIFI_G0_FEED_RATE,
+                         LEGACY_WIFI_G0_STEP_NUM, false);
+            if (!g_abort_requested) {
+                g_g0_settle_until_us = uapi_tcxo_get_us() + LEGACY_WIFI_G0_SETTLE_US;
+            }
             break;
         case LEGACY_WIFI_CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
@@ -529,6 +552,9 @@ void legacy_wifi_motion_executor_execute(const legacy_wifi_motion_cmd_t *cmd)
                 feed_rate = LEGACY_WIFI_MARKING_FEED_RATE_MAX;
             }
             if (laser_on) {
+                if (!wait_for_g0_settle_if_needed()) {
+                    break;
+                }
                 if (!laser_is_enabled() || laser_get_power() != cmd->laser_pwr) {
                     laser_set_power(cmd->laser_pwr);
                 }
@@ -538,13 +564,17 @@ void legacy_wifi_motion_executor_execute(const legacy_wifi_motion_cmd_t *cmd)
             } else {
                 laser_enable(false);
             }
-            perform_move(cmd->target_x, cmd->target_y, feed_rate, laser_on);
+            perform_move(cmd->target_x, cmd->target_y, feed_rate,
+                         LEGACY_WIFI_STEP_NUM, laser_on);
             if (!laser_on) {
                 laser_enable(false);
             }
             break;
         }
         case LEGACY_WIFI_CMD_LASER_ON:
+            if (!wait_for_g0_settle_if_needed()) {
+                break;
+            }
             laser_set_power(cmd->laser_pwr);
             laser_enable(cmd->laser_pwr > 0);
             update_activity();
@@ -578,6 +608,8 @@ void legacy_wifi_motion_executor_set_origin(void)
     g_current_y = 0.0;
     g_abort_requested = false;
     (void)write_current_position(true);
+    g_g0_settle_until_us = g_abort_requested ? 0U :
+                           uapi_tcxo_get_us() + LEGACY_WIFI_G0_SETTLE_US;
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
@@ -585,6 +617,7 @@ void legacy_wifi_motion_executor_set_origin(void)
 void legacy_wifi_motion_executor_request_abort(void)
 {
     g_abort_requested = true;
+    g_g0_settle_until_us = 0;
     if (g_motion_timer_ready && g_motion_timer_waiting) {
         (void)uapi_timer_stop(g_motion_timer);
         g_motion_timer_waiting = false;

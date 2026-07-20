@@ -15,6 +15,7 @@
 #   scripts/build_variant.sh tx
 #   scripts/build_variant.sh rx_unified
 #   scripts/build_variant.sh screen_panel
+#   scripts/build_variant.sh wenxuan
 #   scripts/build_variant.sh --help
 #===============================================================================
 set -euo pipefail
@@ -128,6 +129,8 @@ switch_to_tx() {
     set_config_n CONFIG_ENABLE_LVGL_SAMPLE "$tmp"
     set_config_n CONFIG_ENABLE_LVGL_PANEL "$tmp"
     set_config_n CONFIG_LASER_RX_UNIFIED "$tmp"
+    set_config_n CONFIG_LASER_RX_WENXUAN "$tmp"
+    set_config_n CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE "$tmp"
     set_config_n CONFIG_ENABLE_SD_CARD_TEST "$tmp"
 
     set_config_y CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE "$tmp"
@@ -153,9 +156,11 @@ switch_to_rx_unified() {
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER "$tmp"
 
     set_config_y CONFIG_LASER_RX_UNIFIED "$tmp"
+    set_config_n CONFIG_LASER_RX_WENXUAN "$tmp"
     set_config_y CONFIG_LASER_RX_TRANSPORT_UART "$tmp"
     set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI "$tmp"
     set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB "$tmp"
+    set_config_y CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE "$tmp"
     set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 102400 "$tmp"
     set_config_int CONFIG_LASER_RX_UART_BAUD 115200 "$tmp"
     set_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 99 "$tmp"
@@ -173,12 +178,40 @@ switch_to_screen_panel() {
     set_config_n CONFIG_ENABLE_LVGL_PANEL "$tmp"
     set_config_n CONFIG_ENABLE_SD_CARD_TEST "$tmp"
     set_config_n CONFIG_LASER_RX_UNIFIED "$tmp"
+    set_config_n CONFIG_LASER_RX_WENXUAN "$tmp"
+    set_config_n CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE "$tmp"
     set_config_n CONFIG_LASER_SLE_JOB_RECEIVER "$tmp"
     set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER "$tmp"
 
     set_config_y CONFIG_ENABLE_LVGL_PANEL "$tmp"
     set_config_y CONFIG_SPI_SUPPORT_DMA "$tmp"
     set_config_n CONFIG_SPI_SUPPORT_POLL_AND_DMA_AUTO_SWITCH "$tmp"
+}
+
+switch_to_wenxuan() {
+    local tmp="$1"
+
+    set_config_y CONFIG_SAMPLE_ENABLE "$tmp"
+    set_config_n CONFIG_ENABLE_LASER_SINGLE_SAMPLE "$tmp"
+    set_config_n CONFIG_ENABLE_LASER_WIFI_SAMPLE "$tmp"
+    set_config_n CONFIG_ENABLE_LASER_SLE_JOB_SAMPLE "$tmp"
+    set_config_n CONFIG_ENABLE_SCREEN_SAMPLE "$tmp"
+    set_config_n CONFIG_ENABLE_LVGL_SAMPLE "$tmp"
+    set_config_n CONFIG_ENABLE_LVGL_PANEL "$tmp"
+    set_config_n CONFIG_ENABLE_SD_CARD_TEST "$tmp"
+    set_config_n CONFIG_LASER_RX_UNIFIED "$tmp"
+    set_config_n CONFIG_LASER_SLE_JOB_RECEIVER "$tmp"
+    set_config_n CONFIG_LASER_SLE_JOB_TRANSMITTER "$tmp"
+
+    set_config_y CONFIG_LASER_RX_WENXUAN "$tmp"
+    set_config_y CONFIG_LASER_RX_TRANSPORT_UART "$tmp"
+    set_config_y CONFIG_LASER_RX_TRANSPORT_WIFI "$tmp"
+    set_config_y CONFIG_LASER_RX_TRANSPORT_SLE_JOB "$tmp"
+    set_config_y CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE "$tmp"
+    set_config_int CONFIG_LASER_RX_SLE_JOB_CACHE_SIZE 102400 "$tmp"
+    set_config_int CONFIG_LASER_RX_UART_BAUD 115200 "$tmp"
+    set_config_int CONFIG_LASER_RX_WORK_AREA_X_MM 99 "$tmp"
+    set_config_int CONFIG_LASER_RX_WORK_AREA_Y_MM 99 "$tmp"
 }
 
 apply_config() {
@@ -201,6 +234,7 @@ apply_config() {
         tx) switch_to_tx "$tmp_config" ;;
         rx_unified) switch_to_rx_unified "$tmp_config" ;;
         screen_panel) switch_to_screen_panel "$tmp_config" ;;
+        wenxuan) switch_to_wenxuan "$tmp_config" ;;
         *) echo "ERROR: Unknown variant: ${variant}" >&2; exit 1 ;;
     esac
 
@@ -212,27 +246,36 @@ apply_config() {
 check_variant_selected() {
     local variant="$1"
 
-    local tx_on=0 rx_on=0 screen_on=0
+    local tx_on=0 rx_on=0 screen_on=0 wenxuan_on=0 phone_on=0
     grep -q '^CONFIG_LASER_SLE_JOB_TRANSMITTER=y$' "$CONFIG" && tx_on=1
     grep -q '^CONFIG_LASER_RX_UNIFIED=y$' "$CONFIG" && rx_on=1
     grep -q '^CONFIG_ENABLE_LVGL_PANEL=y$' "$CONFIG" && screen_on=1
+    grep -q '^CONFIG_LASER_RX_WENXUAN=y$' "$CONFIG" && wenxuan_on=1
+    grep -q '^CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE=y$' "$CONFIG" && phone_on=1
 
-    local total=$((tx_on + rx_on + screen_on))
+    local total=$((tx_on + rx_on + screen_on + wenxuan_on))
     if [ "$total" -ne 1 ]; then
         echo "ERROR: Exactly one firmware variant must be selected, got ${total}" >&2
-        echo "  TX: ${tx_on}, RX: ${rx_on}, Screen: ${screen_on}" >&2
+        echo "  TX: ${tx_on}, RX: ${rx_on}, Screen: ${screen_on}, Wenxuan: ${wenxuan_on}" >&2
         exit 1
     fi
 
     case "$variant" in
         tx)
             if [ "$tx_on" -ne 1 ]; then echo "ERROR: TX config not applied" >&2; exit 1; fi
+            if [ "$phone_on" -ne 0 ]; then echo "ERROR: TX must not enable phone admission" >&2; exit 1; fi
             ;;
         rx_unified)
             if [ "$rx_on" -ne 1 ]; then echo "ERROR: RX config not applied" >&2; exit 1; fi
+            if [ "$phone_on" -ne 1 ]; then echo "ERROR: Unified RX phone admission not applied" >&2; exit 1; fi
             ;;
         screen_panel)
             if [ "$screen_on" -ne 1 ]; then echo "ERROR: Screen config not applied" >&2; exit 1; fi
+            if [ "$phone_on" -ne 0 ]; then echo "ERROR: Screen must not enable phone admission" >&2; exit 1; fi
+            ;;
+        wenxuan)
+            if [ "$wenxuan_on" -ne 1 ]; then echo "ERROR: Wenxuan config not applied" >&2; exit 1; fi
+            if [ "$phone_on" -ne 1 ]; then echo "ERROR: Wenxuan phone admission not applied" >&2; exit 1; fi
             ;;
     esac
     echo "  Verified: ${variant} selected"
@@ -319,6 +362,10 @@ archive() {
             global_dest_name="ws63-liteos-app_screen_all.fwpkg"
             obsolete_global_name="ws63-liteos-app_screen_panel_all.fwpkg"
             ;;
+        wenxuan)
+            dest_name="ws63-liteos-app_wenxuan"
+            global_dest_name="ws63-liteos-app_wenxuan_all.fwpkg"
+            ;;
     esac
 
     # Copy artifacts
@@ -400,8 +447,9 @@ Usage: $0 <variant>
 
 Variants:
   tx             Build SLE job transmitter firmware
-  rx_unified     Build unified laser receiver firmware
+  rx_unified     Build phone-enabled unified laser receiver firmware
   screen_panel   Build LVGL screen panel firmware
+  wenxuan        Build phone-enabled Wenxuan receiver firmware
 
 Options:
   --help         Show this help
@@ -423,7 +471,7 @@ main() {
     local variant="${1:-}"
     case "$variant" in
         ""|--help|-h) usage ;;
-        tx|rx_unified|screen_panel) ;;
+        tx|rx_unified|screen_panel|wenxuan) ;;
         *) echo "ERROR: Unknown variant: ${variant}"; usage ;;
     esac
 
@@ -462,15 +510,31 @@ main() {
     local mconfig="${BUILD_DIR}/output/ws63/acore/ws63-liteos-app/mconfig.h"
     if [ -f "$mconfig" ]; then
         echo "  Post-build config check:"
-        local tx_in=0 rx_in=0 screen_in=0
+        local tx_in=0 rx_in=0 screen_in=0 wenxuan_in=0 phone_in=0
         grep -q 'CONFIG_LASER_SLE_JOB_TRANSMITTER 1' "$mconfig" && tx_in=1
         grep -q 'CONFIG_LASER_RX_UNIFIED 1' "$mconfig" && rx_in=1
         grep -q 'CONFIG_ENABLE_LVGL_PANEL 1' "$mconfig" && screen_in=1
-        if [ "$((tx_in + rx_in + screen_in))" -ne 1 ]; then
-            echo "  WARNING: mconfig.h shows ${tx_in} TX + ${rx_in} RX + ${screen_in} Screen" >&2
+        grep -q 'CONFIG_LASER_RX_WENXUAN 1' "$mconfig" && wenxuan_in=1
+        grep -q 'CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE 1' "$mconfig" && phone_in=1
+        if [ "$((tx_in + rx_in + screen_in + wenxuan_in))" -ne 1 ]; then
+            echo "  WARNING: mconfig.h shows ${tx_in} TX + ${rx_in} RX + ${screen_in} Screen + ${wenxuan_in} Wenxuan" >&2
         else
             echo "  OK: mconfig.h matches ${variant}"
         fi
+        case "$variant" in
+            rx_unified|wenxuan)
+                if [ "$phone_in" -ne 1 ]; then
+                    echo "ERROR: mconfig.h is missing phone admission for ${variant}" >&2
+                    exit 1
+                fi
+                ;;
+            tx|screen_panel)
+                if [ "$phone_in" -ne 0 ]; then
+                    echo "ERROR: mconfig.h unexpectedly enables phone admission for ${variant}" >&2
+                    exit 1
+                fi
+                ;;
+        esac
     fi
 
     # Archive

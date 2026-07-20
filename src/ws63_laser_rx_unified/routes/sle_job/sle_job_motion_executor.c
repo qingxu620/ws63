@@ -84,6 +84,7 @@ static uint64_t g_last_dac_start_us = 0;
 static uint16_t g_last_dac_x = 0;
 static uint16_t g_last_dac_y = 0;
 static bool g_last_dac_valid = false;
+static uint64_t g_g0_settle_until_us = 0;
 static uint64_t g_last_wdt_kick_us = 0;
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
 static uint32_t g_last_move_slow_log_ms = 0;
@@ -328,13 +329,26 @@ static bool delay_until_us_interruptible(uint64_t target_us)
         }
         if (chunk_us > 0U) {
             uapi_tcxo_delay_us(chunk_us);
-            osal_yield();
         }
         now_us = uapi_tcxo_get_us();
     }
 
     record_wait_duration(start_us, uapi_tcxo_get_us());
     return false;
+}
+
+static bool wait_for_g0_settle_if_needed(void)
+{
+    uint64_t settle_until_us = g_g0_settle_until_us;
+    if (settle_until_us == 0U) {
+        return true;
+    }
+    if (!delay_until_us_interruptible(settle_until_us)) {
+        laser_force_off();
+        return false;
+    }
+    g_g0_settle_until_us = 0;
+    return true;
 }
 
 static int ceil_step_count(double value)
@@ -369,7 +383,8 @@ static void record_late_sample(uint64_t late_us)
     }
 }
 
-static void perform_move(double target_x, double target_y, double feed_rate_mm_min, bool laser_marking)
+static void perform_move(double target_x, double target_y, double feed_rate_mm_min,
+                         double spatial_step_mm, bool laser_marking)
 {
     uint64_t actual_start_us = uapi_tcxo_get_us();
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
@@ -405,7 +420,8 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     double duration_us = (distance / feed_sec) * 1000000.0;
     double unclamped_duration_us = duration_us;
     g_motion_segment_count++;
-    bool short_segment = (distance <= SLE_JOB_STEP_NUM || duration_us <= (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
+    bool short_segment = (distance <= spatial_step_mm ||
+                          duration_us <= (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
     if (short_segment) {
         g_short_segment_count++;
     }
@@ -417,7 +433,7 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     g_planned_motion_us += (uint64_t)(duration_us + 0.5);
 
     int time_steps = ceil_step_count(duration_us / (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
-    int space_steps = ceil_step_count(distance / SLE_JOB_STEP_NUM);
+    int space_steps = ceil_step_count(distance / spatial_step_mm);
     int steps = (time_steps > space_steps) ? time_steps : space_steps;
     double step_time_us = duration_us / (double)steps;
     if (step_time_us < 1.0) {
@@ -599,6 +615,7 @@ void sle_job_motion_executor_init(void)
     g_last_dac_x = 0;
     g_last_dac_y = 0;
     g_last_dac_valid = false;
+    g_g0_settle_until_us = 0;
     g_last_wdt_kick_us = 0;
     memset(g_motion_queue, 0, sizeof(g_motion_queue));
     if (!g_queue_ready) {
@@ -726,6 +743,7 @@ void sle_job_motion_executor_flush(void)
     }
     osal_mutex_unlock(&g_queue_mutex);
     laser_force_off();
+    g_g0_settle_until_us = 0;
 }
 
 static int sle_job_motion_executor_task(void *arg)
@@ -783,7 +801,11 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
                 break;
             }
             laser_enable(false);
-            perform_move(cmd->target_x, cmd->target_y, SLE_JOB_G0_FEED_RATE, false);
+            perform_move(cmd->target_x, cmd->target_y, SLE_JOB_G0_FEED_RATE,
+                         SLE_JOB_G0_STEP_NUM, false);
+            if (!g_abort_requested) {
+                g_g0_settle_until_us = uapi_tcxo_get_us() + SLE_JOB_G0_SETTLE_US;
+            }
             break;
         case SLE_JOB_CMD_G1_MOVE: {
             double feed_rate = cmd->feed_rate;
@@ -795,6 +817,9 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
                 feed_rate = SLE_JOB_MARKING_FEED_RATE_MAX;
             }
             if (laser_on) {
+                if (!wait_for_g0_settle_if_needed()) {
+                    break;
+                }
                 if (!laser_is_enabled() || laser_get_power() != cmd->laser_pwr) {
                     laser_set_power(cmd->laser_pwr);
                 }
@@ -804,13 +829,17 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
             } else {
                 laser_enable(false);
             }
-            perform_move(cmd->target_x, cmd->target_y, feed_rate, laser_on);
+            perform_move(cmd->target_x, cmd->target_y, feed_rate,
+                         SLE_JOB_STEP_NUM, laser_on);
             if (!laser_on) {
                 laser_enable(false);
             }
             break;
         }
         case SLE_JOB_CMD_LASER_ON:
+            if (!wait_for_g0_settle_if_needed()) {
+                break;
+            }
             laser_set_power(cmd->laser_pwr);
             laser_enable(cmd->laser_pwr > 0);
             update_activity();
@@ -850,6 +879,8 @@ void sle_job_motion_executor_set_origin(void)
     g_current_x = 0.0;
     g_current_y = 0.0;
     (void)write_current_position(true);
+    g_g0_settle_until_us = g_abort_requested ? 0U :
+                           uapi_tcxo_get_us() + SLE_JOB_G0_SETTLE_US;
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
@@ -857,6 +888,7 @@ void sle_job_motion_executor_set_origin(void)
 void sle_job_motion_executor_request_abort(void)
 {
     g_abort_requested = true;
+    g_g0_settle_until_us = 0;
     if (g_motion_timer_ready && g_motion_timer_waiting) {
         (void)uapi_timer_stop(g_motion_timer);
         g_motion_timer_waiting = false;

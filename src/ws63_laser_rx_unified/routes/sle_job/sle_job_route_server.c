@@ -85,6 +85,7 @@ static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x1
 static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
 static const uint8_t g_screen_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_phone_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
 static volatile bool g_conn_table_ready = false;
 static uint8_t g_server_id = 0;
@@ -182,6 +183,7 @@ static void conn_table_reset(void)
         g_conn_ids[i] = SLE_CONN_INVALID;
     }
     g_owner_conn_id = SLE_CONN_INVALID;
+    g_phone_conn_id = SLE_CONN_INVALID;
     g_conn_table_ready = true;
 }
 
@@ -601,10 +603,64 @@ static void sle_uuid_setu2(uint16_t u2, sle_uuid_t *out)
 static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
     ssaps_req_write_cb_t *write_cb_para, errcode_t status)
 {
-    unused(server_id);
     uint32_t t_cb = (uint32_t)uapi_systick_get_ms();
-    if (status != ERRCODE_SLE_SUCCESS || write_cb_para == NULL ||
-        write_cb_para->value == NULL || write_cb_para->length == 0) {
+    bool write_rsp_sent = false;
+    errcode_t write_rsp_ret = ERRCODE_SLE_SUCCESS;
+    if (write_cb_para == NULL) {
+        return;
+    }
+
+    /*
+     * SSAP descriptor writes (notably the phone CCCD notification enable)
+     * are request/response writes.  The stack passes them through this same
+     * callback, so acknowledge every request that asks for a response before
+     * dispatching only valid job data to the application queue.  Without this
+     * response the phone waits for the write completion and drops the SLE
+     * link after its supervision/request timeout.
+     */
+    if (write_cb_para->need_rsp) {
+        ssaps_send_rsp_t rsp = {0};
+        rsp.request_id = write_cb_para->request_id;
+        rsp.status = (uint8_t)status;
+        rsp.value_len = 0;
+        rsp.value = NULL;
+        write_rsp_sent = true;
+        write_rsp_ret = ssaps_send_response(server_id, conn_id, &rsp);
+        if (write_rsp_ret != ERRCODE_SLE_SUCCESS) {
+            osal_printk("[RX_WRITE_RSP] fail conn=%u req=%u ret=0x%x\r\n",
+                        (unsigned int)conn_id,
+                        (unsigned int)write_cb_para->request_id,
+                        (unsigned int)write_rsp_ret);
+        }
+    }
+
+    /*
+     * Notification subscription writes a two-byte client-configuration
+     * descriptor through this callback. It is SSAP control traffic, not a
+     * job packet, and must never claim the job owner or enter the job queue.
+     */
+    if (write_cb_para->handle != g_data_property_handle ||
+        write_cb_para->type != SSAP_PROPERTY_TYPE_VALUE) {
+        const char *write_tag =
+            (write_cb_para->type == SSAP_DESCRIPTOR_CLIENT_CONFIGURATION) ? "RX_CCCD" : "RX_CONTROL_WRITE";
+        osal_printk("[%s] conn=%u handle=%u data_handle=%u type=%u len=%u "
+                    "need_rsp=%u req=%u status=0x%x rsp_sent=%u rsp_ret=0x%x\r\n",
+                    write_tag,
+                    (unsigned int)conn_id,
+                    (unsigned int)write_cb_para->handle,
+                    (unsigned int)g_data_property_handle,
+                    (unsigned int)write_cb_para->type,
+                    (unsigned int)write_cb_para->length,
+                    (unsigned int)write_cb_para->need_rsp,
+                    (unsigned int)write_cb_para->request_id,
+                    (unsigned int)status,
+                    (unsigned int)write_rsp_sent,
+                    (unsigned int)write_rsp_ret);
+        return;
+    }
+
+    if (status != ERRCODE_SLE_SUCCESS || write_cb_para->value == NULL ||
+        write_cb_para->length == 0) {
         return;
     }
     if (write_cb_para->length > SLE_JOB_PACKET_MAX_SIZE) {
@@ -702,7 +758,11 @@ static errcode_t sle_job_add_resp_property(void)
     property.permissions = 0x01 | 0x02;
     sle_uuid_setu2(SLE_JOB_RESP_CHAR_UUID, &property.uuid);
     property.value = init_val;
-    property.operate_indication = SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_NOTIFY;
+    property.operate_indication =
+        SSAP_OPERATE_INDICATION_BIT_READ |
+        SSAP_OPERATE_INDICATION_BIT_WRITE_NO_RSP |
+        SSAP_OPERATE_INDICATION_BIT_NOTIFY |
+        SSAP_OPERATE_INDICATION_BIT_DESCRIPTOR_CLIENT_CONFIGURATION_WRITE;
 
     errcode_t ret = ssaps_add_property_sync(g_server_id, g_service_handle, &property, &g_resp_property_handle);
     if (ret != ERRCODE_SLE_SUCCESS) {
@@ -711,8 +771,12 @@ static errcode_t sle_job_add_resp_property(void)
 
     ssaps_desc_info_t desc = {0};
     desc.permissions = 0x01 | 0x02;
-    desc.operate_indication = SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_WRITE;
-    desc.type = SSAP_DESCRIPTOR_USER_DESCRIPTION;
+    desc.operate_indication =
+        SSAP_OPERATE_INDICATION_BIT_READ |
+        SSAP_OPERATE_INDICATION_BIT_WRITE |
+        SSAP_OPERATE_INDICATION_BIT_DESCRIPTOR_CLIENT_CONFIGURATION_WRITE;
+    /* HarmonyOS setPropertyNotification() requires a client configuration descriptor. */
+    desc.type = SSAP_DESCRIPTOR_CLIENT_CONFIGURATION;
     desc.value = ntf_value;
     desc.value_len = sizeof(ntf_value);
     return ssaps_add_descriptor_sync(g_server_id, g_service_handle, g_resp_property_handle, &desc);
@@ -745,15 +809,24 @@ static errcode_t sle_job_route_server_add(void)
     return ERRCODE_SLE_SUCCESS;
 }
 
-static void tune_job_link_after_connect(uint16_t conn_id)
+static void tune_job_data_len_after_connect(uint16_t conn_id, const char *peer)
 {
 #if SLE_JOB_LINK_DATA_LEN_ENABLE
     errcode_t ret = sle_set_data_len(conn_id, SLE_JOB_LINK_DATA_LEN_OCTETS);
-    osal_printk("[job_rx_link_tune] conn=%u data_len=%u ret=0x%x\r\n",
+    osal_printk("[job_rx_link_data_len] peer=%s conn=%u data_len=%u ret=0x%x\r\n",
+                (peer != NULL) ? peer : "unknown",
                 (unsigned int)conn_id,
                 (unsigned int)SLE_JOB_LINK_DATA_LEN_OCTETS,
                 (unsigned int)ret);
+#else
+    unused(conn_id);
+    unused(peer);
 #endif
+}
+
+static void tune_job_link_after_connect(uint16_t conn_id)
+{
+    tune_job_data_len_after_connect(conn_id, "fixed");
 
 #if SLE_JOB_LINK_HIGH_THROUGHPUT_ENABLE
     sle_set_phy_t phy_param = {
@@ -779,6 +852,12 @@ static void tune_job_link_after_connect(uint16_t conn_id)
 #if SLE_JOB_LINK_HIGH_THROUGHPUT_ENABLE
 static void sle_set_phy_cbk(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param)
 {
+    if (conn_id == g_phone_conn_id) {
+        osal_printk("[job_rx_link_phy_cb] skip Phone conn=%u status=0x%x\r\n",
+                    (unsigned int)conn_id, (unsigned int)status);
+        return;
+    }
+
     uint8_t tx_phy = (param != NULL) ? param->tx_phy : 0xFF;
     uint8_t rx_phy = (param != NULL) ? param->rx_phy : 0xFF;
     errcode_t mcs_ret = ERRCODE_SLE_FAIL;
@@ -799,38 +878,79 @@ static void sle_set_phy_cbk(uint16_t conn_id, errcode_t status, const sle_set_ph
 static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
-    unused(pair_state);
-    unused(disc_reason);
-
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         bool is_tx = addr_matches_mac(addr, g_tx_mac);
         bool is_screen = addr_matches_mac(addr, g_screen_mac);
-        if (!is_tx && !is_screen) {
+#if defined(CONFIG_LASER_RX_SLE_JOB_ALLOW_PHONE)
+        /* A phone has no fixed product MAC; null is never admitted as a phone. */
+        bool is_phone = (addr != NULL) && !is_tx && !is_screen;
+#else
+        bool is_phone = false;
+#endif
+        if (!is_tx && !is_screen && !is_phone) {
             osal_printk("[job_rx] reject non-whitelist peer conn_id=%u\r\n", (unsigned int)conn_id);
             if (addr != NULL) {
                 (void)sle_disconnect_remote_device(addr);
             }
             return;
         }
-        if (!g_adv_desired || g_server_stopping) {
-            osal_printk("[job_rx] reject fixed %s peer while admission closed conn_id=%u\r\n",
-                        is_tx ? "TX" : "Screen", (unsigned int)conn_id);
+        if (is_phone && g_phone_conn_id != SLE_CONN_INVALID && g_phone_conn_id != conn_id) {
+            osal_printk("[job_rx] reject additional Phone conn_id=%u active_phone=%u\r\n",
+                        (unsigned int)conn_id, (unsigned int)g_phone_conn_id);
             if (addr != NULL) {
                 (void)sle_disconnect_remote_device(addr);
             }
             return;
         }
-        osal_printk("[job_rx] accept fixed %s peer conn_id=%u\r\n",
-                    is_tx ? "TX" : "Screen", (unsigned int)conn_id);
+        if (!g_adv_desired || g_server_stopping) {
+            osal_printk("[job_rx] reject %s peer while admission closed conn_id=%u\r\n",
+                        is_tx ? "TX" : (is_screen ? "Screen" : "Phone"),
+                        (unsigned int)conn_id);
+            if (addr != NULL) {
+                (void)sle_disconnect_remote_device(addr);
+            }
+            return;
+        }
+        osal_printk("[job_rx] accept %s peer conn_id=%u\r\n",
+                    is_tx ? "TX" : (is_screen ? "Screen" : "Phone"),
+                    (unsigned int)conn_id);
         conn_table_add(conn_id);
-        tune_job_link_after_connect(conn_id);
-        if (g_adv_desired && !g_server_stopping) {
+        if (is_phone) {
+            g_phone_conn_id = conn_id;
+            /*
+             * The phone needs the larger data length for STATUS responses,
+             * but must not inherit the fixed-board PHY4M/MCS10 tuning.
+             */
+            tune_job_data_len_after_connect(conn_id, "Phone");
+            osal_printk("[job_rx_link_tune] skip Phone conn=%u policy=default-phy-mcs\r\n",
+                        (unsigned int)conn_id);
+        } else {
+            /* Preserve the fixed TX/Screen throughput tuning. */
+            tune_job_link_after_connect(conn_id);
+        }
+        /*
+         * SSAP advertising is stopped by the stack while a client is linked.
+         * Do not restart it during the phone discovery/notification handshake.
+         */
+        if (g_adv_desired && !g_server_stopping && !is_phone) {
             errcode_t adv_ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
             unused(adv_ret);
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         bool was_owner = (conn_id == g_owner_conn_id);
+        bool was_phone = (conn_id == g_phone_conn_id);
+        const char *disc_source = (disc_reason == SLE_DISCONNECT_BY_REMOTE) ? "remote" :
+                                  ((disc_reason == SLE_DISCONNECT_BY_LOCAL) ? "local" : "unknown");
+        osal_printk("[job_rx_disconnect] conn=%u phone=%u pair=%u reason=0x%x source=%s\r\n",
+                    (unsigned int)conn_id,
+                    (unsigned int)was_phone,
+                    (unsigned int)pair_state,
+                    (unsigned int)disc_reason,
+                    disc_source);
         (void)conn_table_remove(conn_id);
+        if (was_phone) {
+            g_phone_conn_id = SLE_CONN_INVALID;
+        }
         if (was_owner) {
             g_owner_conn_id = SLE_CONN_INVALID;
             rx_work_queue_clear();
@@ -1198,33 +1318,6 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
         return ERRCODE_SLE_FAIL;
     }
 
-    const uint8_t *bytes = (const uint8_t *)data;
-    uint8_t pkt_type = 0;
-    uint16_t pkt_seq = 0;
-    uint16_t payload_len = 0;
-    bool ack_packet = false;
-    uint8_t ack_type = 0;
-    uint8_t ack_status = 0;
-    uint16_t ack_seq = 0;
-    uint32_t ack_offset = 0;
-    uint32_t ack_credit = 0;
-    if (len >= SLE_JOB_PACKET_HEADER_LEN && rx_diag_le16(&bytes[0]) == SLE_JOB_PACKET_MAGIC) {
-        pkt_type = bytes[2];
-        pkt_seq = rx_diag_le16(&bytes[4]);
-        payload_len = rx_diag_le16(&bytes[6]);
-        if ((pkt_type == SLE_JOB_PKT_ACK || pkt_type == SLE_JOB_PKT_NACK) &&
-            payload_len == sizeof(sle_job_ack_payload_t) &&
-            len >= (uint16_t)(SLE_JOB_PACKET_HEADER_LEN + sizeof(sle_job_ack_payload_t))) {
-            const uint8_t *payload = &bytes[SLE_JOB_PACKET_HEADER_LEN];
-            ack_packet = true;
-            ack_type = payload[0];
-            ack_status = payload[1];
-            ack_seq = rx_diag_le16(&payload[2]);
-            ack_offset = rx_diag_le32(&payload[8]);
-            ack_credit = rx_diag_le32(&payload[12]);
-        }
-    }
-
     ssaps_ntf_ind_t param = {0};
     param.handle = g_resp_property_handle;
     param.type = SSAP_PROPERTY_TYPE_VALUE;
@@ -1243,19 +1336,9 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
     if (call_ms > g_rx_diag_max_notify_ms) {
         g_rx_diag_max_notify_ms = call_ms;
     }
-    if ((ack_packet && ack_status != SLE_JOB_STATUS_OK) ||
-        ret != ERRCODE_SLE_SUCCESS || call_ms >= SLE_JOB_NOTIFY_CALL_SLOW_MS) {
-        osal_printk("[RX_NOTIFY_TRACE] t=%u pkt=0x%02x pkt_seq=%u ack=%u ack_type=0x%02x "
-                    "ack_seq=%u st=%u off=%u credit=%u len=%u ret=0x%x call_ms=%u conn=%u\r\n",
+    if (ret != ERRCODE_SLE_SUCCESS || call_ms >= SLE_JOB_NOTIFY_CALL_SLOW_MS) {
+        osal_printk("[RX_NOTIFY_ABNORMAL] t=%u len=%u ret=0x%x call_ms=%u conn=%u\r\n",
                     (unsigned int)uapi_systick_get_ms(),
-                    (unsigned int)pkt_type,
-                    (unsigned int)pkt_seq,
-                    (unsigned int)(ack_packet ? 1U : 0U),
-                    (unsigned int)ack_type,
-                    (unsigned int)ack_seq,
-                    (unsigned int)ack_status,
-                    (unsigned int)ack_offset,
-                    (unsigned int)ack_credit,
                     (unsigned int)len,
                     (unsigned int)ret,
                     (unsigned int)call_ms,
