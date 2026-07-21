@@ -11,7 +11,7 @@ main.py  →  MainWindow
   ├── app/                Core layer
   │   ├── event_bus.py    Qt signal bus for log/status events
   │   ├── config_store.py JSON config persistence
-  │   ├── image_gcode.py  Bounded raster-to-G-code conversion
+  │   ├── image_gcode.py  Raster/vector image-to-G-code conversion
   │   └── state_models.py AppState, enums, RX state mapping
   ├── transports/         Protocol layer
   │   └── sle_tx_transport.py  SleJobSerialClient + SerialLogMonitor
@@ -32,11 +32,10 @@ main.py  →  MainWindow
 ## Features
 
 - **Connection**: TX command port + TX/RX debug log monitors
-- **Image/G-code Workspace**: AI-provider hook, local image preview, bounded
-  60×60 mm conversion, selectable scanline fill or closed-contour vector
-  tracing, LaserGRBL-style threshold vector extraction, vector noise
-  filtering/path simplification, original/effect preview switching, file
-  loading, manual editing, and byte-size preview
+- **Image/G-code Workspace**: AI-provider hook, local image import and integrated
+  crop/transform preview, 99×99 mm work-area validation, grayscale PWM,
+  nine dithering algorithms, continuous centerline and closed-contour tracing,
+  vector fill, manual G-code editing, and byte-size preview
 - **Job Control**: Upload, preroll execution, exec start/stop, abort
 - **Safety**: Software safe stop, job abort, manual focus laser on/off
 - **Monitor**: upload byte progress, RX state, cache credit, and link status
@@ -112,23 +111,34 @@ work without an external service.
 
 Image conversion modes:
 
-- **Scanline fill** thresholds the image and engraves horizontal dark runs. Use
-  it when filled dark regions should be raster engraved.
+- **Scanline fill** performs true 8-bit grayscale PWM over the selected S-min to
+  S-max range. It supports horizontal, vertical, and 45° paths, uni/bidirectional
+  motion, optional binary thresholding, optional G0 fast travel, and 1–50 lines/mm.
+- **1-bit dithering** provides Floyd–Steinberg, Atkinson, Burkes,
+  Jarvis–Judice–Ninke, Random, Sierra 2/3/Lite, and Stucki choices.
+- **Centerline** thins the subject and emits continuous 8-connected strokes
+  instead of horizontal raster fragments.
 - **Vector outline** traces black/white region boundaries into closed paths. The
   noise-area option removes small regions and path simplification reduces
   stair-step points. The converted preview shows these paths in red.
-- **LaserGRBL-style vector** follows LaserGRBL's practical Potrace workflow:
+- **LaserGRBL-style independent vector** follows LaserGRBL's practical workflow:
   tune brightness/contrast, clip near-white background pixels, remove small
-  spots, smooth the path, then emit the same RX-compatible outline G-code. This
-  is not a full LaserGRBL port; it keeps the existing WS63 Host output format.
+  spots, smooth the path, then emit RX-compatible G1 outline G-code. It is not
+  Potrace and does not claim Potrace-equivalent curves.
 - The image workspace keeps the main panel compact. `图像参数...` opens the
-  LaserGRBL-style import-parameter dialog for resize mode, threshold, tone
-  cleanup, spot removal, smoothing, path optimization, downsampling, and fill.
+  integrated import dialog for crop, auto trim, rotate, flip, invert, four
+  grayscale formulas, threshold, LaserGRBL-compatible tone controls, scan
+  quality/direction, spot removal, smoothing, path optimization, downsampling,
+  and fill.
   `目标参数...` opens the target/laser dialog for M3/M4, speed, S range, DPI,
   width/height, aspect lock, and XY offset.
 
 See `THIRD_PARTY_NOTICES.md` for the LaserGRBL/Potrace reference and license
 notes behind the vectorization workflow.
+
+Image conversion does not truncate or reject generated G-code by byte size.
+The firmware-cache size audit belongs only to the separate **upload only**
+operation; upload-and-execute retains its streaming/preroll behavior.
 
 The square marking-size control applies the same `0–99 mm` side length to X and
 Y. Source aspect ratio is preserved inside that square. A `0×0 mm` selection

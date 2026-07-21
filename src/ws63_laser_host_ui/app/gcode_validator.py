@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from typing import Callable
 
 # ---- Constants ----
 
@@ -67,7 +68,10 @@ def _crc16_ccitt(data: bytes, initial: int = 0xFFFF) -> int:
     return crc & 0xFFFF
 
 
-def normalize_gcode(text: str) -> str:
+def normalize_gcode(
+    text: str,
+    cancel_check: Callable[[], None] | None = None,
+) -> str:
     """Normalize G-code text for upload.
 
     Rules:
@@ -85,6 +89,8 @@ def normalize_gcode(text: str) -> str:
     output: list[str] = []
 
     for line_number, line in enumerate(lines, start=1):
+        if cancel_check is not None and line_number % 256 == 0:
+            cancel_check()
         # Remove comments after ;
         line = line.split(";", 1)[0]
 
@@ -149,7 +155,10 @@ def _canonical_command(word: str) -> str:
     return cmd
 
 
-def validate_gcode(text: str) -> list[str]:
+def validate_gcode(
+    text: str,
+    cancel_check: Callable[[], None] | None = None,
+) -> list[str]:
     """Validate G-code text. Returns list of errors (empty if valid).
 
     Checks:
@@ -174,6 +183,8 @@ def validate_gcode(text: str) -> list[str]:
         return errors
 
     for i, line in enumerate(lines, start=1):
+        if cancel_check is not None and i % 256 == 0:
+            cancel_check()
         line = line.strip()
         if not line:
             continue

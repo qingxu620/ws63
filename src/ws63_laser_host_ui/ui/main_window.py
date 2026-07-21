@@ -178,6 +178,9 @@ class MainWindow(QMainWindow):
         # G-code page
         self.page_gcode.gcode_loaded.connect(self._on_gcode_loaded)
         self.page_gcode.ai_generation_requested.connect(self._on_ai_generation_requested)
+        self.page_gcode.ai_generation_cancel_requested.connect(
+            self._on_ai_generation_cancel_requested
+        )
 
         # Job page
         self.page_job.upload_requested.connect(self._on_upload)
@@ -836,28 +839,84 @@ class MainWindow(QMainWindow):
 
         worker = DoubaoImageWorker(prompt, size, watermark, output_dir, self)
         worker.log.connect(self._enqueue_log)
-        worker.status.connect(self.page_gcode.image_status.setText)
-        worker.image_ready.connect(self._on_ai_image_ready)
-        worker.error.connect(self._on_ai_image_error)
-        worker.finished.connect(self._on_ai_image_finished)
+        worker.status.connect(
+            lambda message, current=worker: self._on_ai_image_status(
+                current,
+                message,
+            )
+        )
+        worker.image_ready.connect(
+            lambda path, current=worker: self._on_ai_image_ready(current, path)
+        )
+        worker.error.connect(
+            lambda message, current=worker: self._on_ai_image_error(
+                current,
+                message,
+            )
+        )
+        worker.cancelled.connect(
+            lambda current=worker: self._on_ai_image_cancelled(current)
+        )
+        worker.finished.connect(
+            lambda current=worker: self._on_ai_image_finished(current)
+        )
         self._doubao_worker = worker
         worker.start()
 
-    def _on_ai_image_ready(self, path: str) -> None:
+    def _on_ai_generation_cancel_requested(self) -> None:
+        worker = self._doubao_worker
+        if worker is None or not worker.isRunning():
+            self.page_gcode.update_ui_generating_state(False)
+            self.page_gcode.image_status.setText("当前没有正在进行的豆包生图任务")
+            return
+        self._enqueue_log("status", "用户请求取消豆包生图")
+        worker.cancel()
+
+    def _on_ai_image_status(
+        self,
+        worker: DoubaoImageWorker,
+        message: str,
+    ) -> None:
+        if worker is self._doubao_worker:
+            self.page_gcode.image_status.setText(message)
+
+    def _on_ai_image_ready(self, worker: DoubaoImageWorker, path: str) -> None:
+        if worker is not self._doubao_worker:
+            self._enqueue_log("status", f"忽略已放弃生图任务的晚到结果: {path}")
+            return
         image = QImage(path)
         if image.isNull():
-            self._on_ai_image_error(f"生成图片已保存但无法预览: {path}")
+            self._on_ai_image_error(worker, f"生成图片已保存但无法预览: {path}")
             return
         self.page_gcode.set_image(path, image)
         self.page_gcode.image_status.setText(f"豆包生图完成，已保存: {path}")
 
-    def _on_ai_image_error(self, message: str) -> None:
+    def _on_ai_image_error(
+        self,
+        worker: DoubaoImageWorker,
+        message: str,
+    ) -> None:
+        if worker is not self._doubao_worker:
+            return
         self.page_gcode.image_status.setText(message)
         self._enqueue_log("error", f"豆包生图失败: {message}")
 
-    def _on_ai_image_finished(self) -> None:
+    def _on_ai_image_cancelled(self, worker: DoubaoImageWorker) -> None:
+        if worker is not self._doubao_worker:
+            return
+        self.page_gcode.update_ui_generating_state(False)
+        self.page_gcode.image_status.setText(
+            "已取消豆包生图，可重新生成或导入图片"
+        )
+        self._enqueue_log("status", "豆包生图已取消")
+
+    def _on_ai_image_finished(self, worker: DoubaoImageWorker) -> None:
+        if worker is not self._doubao_worker:
+            worker.deleteLater()
+            return
         self.page_gcode.update_ui_generating_state(False)
         self._doubao_worker = None
+        worker.deleteLater()
 
     def _on_outline_scan_requested(self) -> None:
         payload = self.page_gcode.build_outline_scan_payload()
@@ -1363,10 +1422,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self._doubao_worker is not None and self._doubao_worker.isRunning():
-            self.page_gcode.image_status.setText("豆包生图仍在进行中，请等待完成后再退出")
-            self._enqueue_log("error", "豆包生图仍在进行中，拒绝退出上位机")
-            event.ignore()
-            return
+            self._enqueue_log("status", "退出上位机前取消豆包生图")
+            self._doubao_worker.cancel()
         if self.worker.is_busy():
             self._enqueue_log("error", "任务操作进行中，拒绝退出上位机")
             event.ignore()

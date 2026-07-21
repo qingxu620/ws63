@@ -3,7 +3,7 @@ from pathlib import Path
 
 project_root = Path(SPEC).resolve().parent
 icon_path = project_root / "assets" / "app_icon.ico"
-version_path = project_root / "build" / "windows_version_info.txt"
+version_path = project_root / "assets" / "windows_version_info.txt"
 
 datas = [(str(icon_path), "assets")]
 binaries = []
@@ -64,5 +64,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="WS63_Laser_Host",
+    name="智绘星闪AI打标系统",
 )

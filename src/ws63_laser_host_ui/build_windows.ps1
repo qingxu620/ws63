@@ -31,7 +31,7 @@ Invoke-Python tools\build_icon.py
 Write-Host "Building the one-folder application..."
 Invoke-Python -m PyInstaller --noconfirm --clean WS63_Laser_Host.spec
 
-$ExePath = Join-Path $ProjectRoot "dist\WS63_Laser_Host\WS63_Laser_Host.exe"
+$ExePath = Join-Path $ProjectRoot "dist\智绘星闪AI打标系统\WS63_Laser_Host.exe"
 if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
     throw "Build completed without the expected executable: $ExePath"
 }
@@ -73,13 +73,13 @@ if ($Report.status -ne "ok") {
 
 if ($CreateDesktopShortcut) {
     $Desktop = [Environment]::GetFolderPath("Desktop")
-    $ShortcutPath = Join-Path $Desktop "WS63 Laser Host.lnk"
+    $ShortcutPath = Join-Path $Desktop "智绘星闪AI打标系统.lnk"
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = $ExePath
     $Shortcut.WorkingDirectory = Split-Path -Parent $ExePath
     $Shortcut.IconLocation = "$ExePath,0"
-    $Shortcut.Description = "WS63 Laser Host"
+    $Shortcut.Description = "智绘星闪AI打标系统"
     $Shortcut.Save()
     Write-Host "Desktop shortcut: $ShortcutPath"
 }
