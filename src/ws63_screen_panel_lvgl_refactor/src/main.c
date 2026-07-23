@@ -5,6 +5,7 @@
 #include "app_init.h"
 #include "lvgl.h"
 #include "soc_osal.h"
+#include "systick.h"
 #include "timer.h"
 #include "chip_core_irq.h"
 
@@ -28,18 +29,61 @@
 #define LVGL_TASK_PRIORITY   25
 #define LVGL_HANDLER_MS      10
 #define PANEL_POWER_STABLE_MS 500
-#define PANEL_FILE_BOOT_SCAN_DELAY_TICKS (200 / LVGL_HANDLER_MS)
 #define PANEL_SLE_START_DELAY_TICKS (1000 / LVGL_HANDLER_MS)
+#define PANEL_FILE_BOOT_SCAN_DELAY_TICKS (1500 / LVGL_HANDLER_MS)
 #define PANEL_JOB_TIME_PERIOD_TICKS (1000 / LVGL_HANDLER_MS)
 #define SCREEN_FIRMWARE_PACKAGE "ws63-liteos-app_screen_all.fwpkg"
 
 static timer_handle_t g_tick_timer = NULL;
+static volatile bool g_tick_timer_active;
+static volatile errcode_t g_tick_timer_restart_error = ERRCODE_SUCC;
 
 static void lv_tick_timer_cb(uintptr_t data)
 {
     (void)data;
     lv_tick_inc(LVGL_TICK_MS);
-    uapi_timer_start(g_tick_timer, LVGL_TICK_MS * 1000, lv_tick_timer_cb, 0);
+    errcode_t ret = uapi_timer_start(g_tick_timer, LVGL_TICK_MS * 1000,
+                                     lv_tick_timer_cb, 0);
+    if (ret != ERRCODE_SUCC) {
+        /* Do not print from the timer ISR; panel_task reports the failure. */
+        g_tick_timer_restart_error = ret;
+        g_tick_timer_active = false;
+    }
+}
+
+static errcode_t lv_tick_timer_init(void)
+{
+    errcode_t ret = uapi_timer_init();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[PANEL] LVGL Timer1 init failed: 0x%x; using systick fallback\r\n", ret);
+        return ret;
+    }
+
+    ret = uapi_timer_adapter(LVGL_TIMER_INDEX, TIMER_1_IRQN, LVGL_TIMER_PRIORITY);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[PANEL] LVGL Timer1 adapter failed: 0x%x; using systick fallback\r\n", ret);
+        return ret;
+    }
+
+    ret = uapi_timer_create(LVGL_TIMER_INDEX, &g_tick_timer);
+    if (ret != ERRCODE_SUCC) {
+        g_tick_timer = NULL;
+        osal_printk("[PANEL] LVGL Timer1 create failed: 0x%x; using systick fallback\r\n", ret);
+        return ret;
+    }
+
+    g_tick_timer_restart_error = ERRCODE_SUCC;
+    g_tick_timer_active = true;
+    ret = uapi_timer_start(g_tick_timer, LVGL_TICK_MS * 1000, lv_tick_timer_cb, 0);
+    if (ret != ERRCODE_SUCC) {
+        g_tick_timer_active = false;
+        osal_printk("[PANEL] LVGL Timer1 start failed: 0x%x; using systick fallback\r\n", ret);
+        (void)uapi_timer_delete(g_tick_timer);
+        g_tick_timer = NULL;
+        return ret;
+    }
+
+    return ERRCODE_SUCC;
 }
 
 static int panel_task(void *arg)
@@ -75,11 +119,8 @@ static int panel_task(void *arg)
         osal_printk("[PANEL] touch init failed: 0x%x (continuing)\r\n", ret);
     }
 
-    /* LVGL tick timer */
-    uapi_timer_init();
-    uapi_timer_adapter(LVGL_TIMER_INDEX, TIMER_1_IRQN, LVGL_TIMER_PRIORITY);
-    uapi_timer_create(LVGL_TIMER_INDEX, &g_tick_timer);
-    uapi_timer_start(g_tick_timer, LVGL_TICK_MS * 1000, lv_tick_timer_cb, 0);
+    /* LVGL keeps running from systick if Timer1 cannot be initialized or restarted. */
+    (void)lv_tick_timer_init();
 
     /* Model + UI */
     panel_model_init();
@@ -94,6 +135,9 @@ static int panel_task(void *arg)
     }
 
     uint32_t tick_count = 0;
+    uint32_t fallback_tick_ms = (uint32_t)uapi_systick_get_ms();
+    bool fallback_tick_active = !g_tick_timer_active;
+    bool timer_restart_error_reported = false;
     bool file_scan_done = false;
     bool sle_started = false;
 
@@ -109,12 +153,37 @@ static int panel_task(void *arg)
 
         osal_msleep(LVGL_HANDLER_MS);
 
+        uint32_t now_ms = (uint32_t)uapi_systick_get_ms();
+        if (!g_tick_timer_active) {
+            if (!fallback_tick_active) {
+                /* Avoid double-counting the interval in which the HW timer failed. */
+                fallback_tick_active = true;
+            } else {
+                uint32_t elapsed_ms = now_ms - fallback_tick_ms;
+                if (elapsed_ms > 0U) {
+                    lv_tick_inc(elapsed_ms);
+                }
+            }
+            if (g_tick_timer_restart_error != ERRCODE_SUCC &&
+                !timer_restart_error_reported) {
+                osal_printk("[PANEL] LVGL Timer1 restart failed: 0x%x; switched to systick fallback\r\n",
+                            g_tick_timer_restart_error);
+                timer_restart_error_reported = true;
+            }
+        } else {
+            fallback_tick_active = false;
+        }
+        fallback_tick_ms = now_ms;
+
         tick_count++;
 
-        /* Mount SD and scan the root G-code files after the first visible UI frame. */
+        /* Queue SD work only after the first UI frame and SLE bring-up window. */
         if (!file_scan_done && tick_count >= PANEL_FILE_BOOT_SCAN_DELAY_TICKS) {
             osal_printk("[PANEL] boot SD scan trigger\r\n");
-            panel_file_manager_refresh();
+            ret = panel_file_manager_refresh();
+            if (ret != ERRCODE_SUCC) {
+                osal_printk("[PANEL] boot SD scan queue failed: 0x%x\r\n", ret);
+            }
             file_scan_done = true;
         }
 

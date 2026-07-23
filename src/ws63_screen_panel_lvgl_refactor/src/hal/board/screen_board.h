@@ -20,6 +20,8 @@ void screen_lcd_rst(bool level);
 void screen_lcd_bl(bool level);
 errcode_t screen_lcd_bl_pwm_init(uint8_t brightness_pct);
 errcode_t screen_lcd_bl_set_brightness(uint8_t brightness_pct);
+errcode_t screen_lcd_bus_begin(uint32_t timeout_ms);
+void screen_lcd_bus_end(void);
 errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len);
 
 void screen_touch_rst(bool level);

@@ -14,6 +14,14 @@
 static osal_mutex g_spi_bus_mutex;
 static bool g_spi_bus_ready;
 
+typedef enum {
+    SPI_BUS_MODE_UNKNOWN = 0,
+    SPI_BUS_MODE_LCD,
+    SPI_BUS_MODE_SD,
+} spi_bus_mode_t;
+
+static spi_bus_mode_t g_spi_bus_mode;
+
 #define SCREEN_SD_INIT_SPI_HZ 1000000U
 #define SCREEN_SD_FAST_SPI_HZ 8000000U
 
@@ -143,7 +151,9 @@ errcode_t spi_bus_enter_sd_mode(void)
     spi_bus_lcd_cs_high();
     spi_bus_sd_cs_high();
     spi_bus_set_dma(false);
-    return spi_bus_set_clk(SCREEN_SD_INIT_SPI_HZ);
+    errcode_t ret = spi_bus_set_clk(SCREEN_SD_INIT_SPI_HZ);
+    g_spi_bus_mode = (ret == ERRCODE_SUCC) ? SPI_BUS_MODE_SD : SPI_BUS_MODE_UNKNOWN;
+    return ret;
 #else
     return ERRCODE_FAIL;
 #endif
@@ -155,7 +165,9 @@ errcode_t spi_bus_enter_sd_fast(void)
     spi_bus_lcd_cs_high();
     spi_bus_sd_cs_high();
     spi_bus_set_dma(false);
-    return spi_bus_set_clk(SCREEN_SD_FAST_SPI_HZ);
+    errcode_t ret = spi_bus_set_clk(SCREEN_SD_FAST_SPI_HZ);
+    g_spi_bus_mode = (ret == ERRCODE_SUCC) ? SPI_BUS_MODE_SD : SPI_BUS_MODE_UNKNOWN;
+    return ret;
 #else
     return ERRCODE_FAIL;
 #endif
@@ -167,8 +179,16 @@ errcode_t spi_bus_restore_lcd_mode(void)
     spi_bus_sd_cs_high();
 #endif
     spi_bus_lcd_cs_high();
+    if (g_spi_bus_mode == SPI_BUS_MODE_LCD) {
+        return ERRCODE_SUCC;
+    }
     errcode_t ret = spi_bus_set_clk(SCREEN_LCD_SPI_BAUDRATE);
-    spi_bus_set_dma(true);
+    if (ret == ERRCODE_SUCC) {
+        spi_bus_set_dma(true);
+        g_spi_bus_mode = SPI_BUS_MODE_LCD;
+    } else {
+        g_spi_bus_mode = SPI_BUS_MODE_UNKNOWN;
+    }
     return ret;
 }
 

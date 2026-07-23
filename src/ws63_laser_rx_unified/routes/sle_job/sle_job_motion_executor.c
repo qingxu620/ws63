@@ -20,6 +20,10 @@ static double g_current_y = 0.0;
 static volatile bool g_command_active = false;
 static volatile bool g_motion_active = false;
 static volatile bool g_abort_requested = false;
+static volatile bool g_hold_requested = false;
+static volatile bool g_motion_held = false;
+static uint32_t g_hold_generation = 0;
+static volatile uint32_t g_held_generation = 0;
 static unsigned long g_last_activity_ms = 0;
 static sle_job_motion_cmd_t g_motion_queue[SLE_JOB_MOTION_QUEUE_SIZE];
 static volatile uint16_t g_queue_head = 0;
@@ -27,6 +31,9 @@ static volatile uint16_t g_queue_tail = 0;
 static osal_mutex g_queue_mutex;
 static osal_semaphore g_queue_sem;
 static bool g_queue_ready = false;
+static osal_semaphore g_hold_ack_sem;
+static osal_semaphore g_resume_sem;
+static bool g_hold_sems_ready = false;
 static volatile bool g_worker_started = false;
 static bool g_output_armed = false;
 static volatile unsigned long g_enqueued_count = 0;
@@ -46,6 +53,8 @@ static volatile unsigned long g_sched_relief_count = 0;
 static uint32_t g_sched_relief_samples = 0;
 static volatile unsigned long g_timer_wait_count = 0;
 static volatile unsigned long g_timer_fail_count = 0;
+static volatile unsigned long g_timer_callback_count = 0;
+static volatile unsigned long g_timer_callback_missing_count = 0;
 static volatile uint32_t g_timer_wait_max_us = 0;
 static volatile uint32_t g_timer_wake_late_max_us = 0;
 static volatile unsigned long g_short_clamped_count = 0;
@@ -72,6 +81,16 @@ static bool g_motion_timer_sem_ready = false;
 static volatile bool g_motion_timer_waiting = false;
 static bool g_motion_timer_ready = false;
 static volatile bool g_motion_timer_fault = false;
+static uint32_t g_motion_timer_generation = 0;
+static volatile uint32_t g_motion_timer_active_generation = 0;
+static volatile uint32_t g_motion_timer_callback_generation = 0;
+typedef struct {
+    bool valid;
+    uint64_t timer_target_us;
+    uint64_t wake_us;
+    uint64_t block_elapsed_us;
+} motion_timer_stats_pending_t;
+static motion_timer_stats_pending_t g_motion_timer_stats_pending;
 static volatile uint64_t g_dac_total_us = 0;
 static volatile uint64_t g_wait_total_us = 0;
 static volatile uint32_t g_dac_max_us = 0;
@@ -91,8 +110,56 @@ static uint32_t g_last_move_slow_log_ms = 0;
 #endif
 
 #define SLE_JOB_MOTION_LATE_WARN_US 100U
+typedef enum {
+    MOTION_WAIT_REACHED = 0,
+    MOTION_WAIT_HOLD,
+    MOTION_WAIT_ABORT,
+} motion_wait_result_t;
 
 static uint16_t motion_queue_used_locked(void);
+
+static inline uint32_t clamp_u64_to_u32(uint64_t value)
+{
+    return (value > UINT32_MAX) ? UINT32_MAX : (uint32_t)value;
+}
+
+static void record_latency_histogram(volatile uint32_t histogram[6], uint64_t latency_us)
+{
+    if (latency_us < 100U) {
+        histogram[0]++;
+    } else if (latency_us < 500U) {
+        histogram[1]++;
+    } else if (latency_us < 1000U) {
+        histogram[2]++;
+    } else if (latency_us < 3000U) {
+        histogram[3]++;
+    } else if (latency_us < 10000U) {
+        histogram[4]++;
+    } else {
+        histogram[5]++;
+    }
+}
+
+/* Run only after the time-critical action following a timer wake has completed. */
+static void process_pending_timer_stats(void)
+{
+    if (!g_motion_timer_stats_pending.valid) {
+        return;
+    }
+
+    motion_timer_stats_pending_t sample = g_motion_timer_stats_pending;
+    g_motion_timer_stats_pending.valid = false;
+    g_timer_block_total_us += sample.block_elapsed_us;
+
+    if (sample.wake_us > sample.timer_target_us) {
+        uint64_t wake_late_us = sample.wake_us - sample.timer_target_us;
+        g_timer_wake_late_total_us += wake_late_us;
+        record_latency_histogram(g_timer_wake_late_histogram, wake_late_us);
+        if (wake_late_us > g_timer_wake_late_max_us) {
+            g_timer_wake_late_max_us = clamp_u64_to_u32(wake_late_us);
+        }
+    }
+}
 
 static inline double clamp_axis(double value, double min_value, double max_value)
 {
@@ -117,11 +184,13 @@ static inline uint16_t mm_to_dac(double mm, double scale)
     return (uint16_t)(value + 0.5);
 }
 
-static bool write_current_position(bool force)
+static bool write_position(double x_mm, double y_mm, bool force)
 {
-    uint16_t x = mm_to_dac(g_current_x, SLE_JOB_BEILV_X);
-    uint16_t y = mm_to_dac(g_current_y, SLE_JOB_BEILV_Y);
+    uint16_t x = mm_to_dac(x_mm, SLE_JOB_BEILV_X);
+    uint16_t y = mm_to_dac(y_mm, SLE_JOB_BEILV_Y);
     if (!force && g_last_dac_valid && x == g_last_dac_x && y == g_last_dac_y) {
+        g_current_x = x_mm;
+        g_current_y = y_mm;
         g_dac_skip_count++;
         return true;
     }
@@ -155,8 +224,15 @@ static bool write_current_position(bool force)
     g_last_dac_x = x;
     g_last_dac_y = y;
     g_last_dac_valid = true;
+    g_current_x = x_mm;
+    g_current_y = y_mm;
     g_dac_write_count++;
     return true;
+}
+
+static bool write_current_position(bool force)
+{
+    return write_position(g_current_x, g_current_y, force);
 }
 
 static bool arm_output_if_needed(void)
@@ -192,7 +268,7 @@ static bool arm_output_if_needed(void)
     g_arm_count++;
 
     uint32_t total_ms = (uint32_t)uapi_systick_get_ms() - start_ms;
-    if (total_ms >= SLE_JOB_TIMING_SLOW_MS || g_arm_count <= 4UL) {
+    if (total_ms >= SLE_JOB_TIMING_SLOW_MS) {
         osal_printk("[JOB_MOTION_ARM] count=%lu recover=%u off_ms=%u recover_ms=%u "
                     "pos_ms=%u total_ms=%u x_um=%d y_um=%d\r\n",
                     g_arm_count,
@@ -221,6 +297,90 @@ static void kick_watchdog_periodic(uint64_t now_us, bool force)
     }
 }
 
+static bool motion_wait_while_held(uint64_t *held_us)
+{
+    if (!g_hold_requested) {
+        return !g_abort_requested && !g_motion_timer_fault;
+    }
+    if (!g_hold_sems_ready) {
+        laser_force_off();
+        g_abort_requested = true;
+        return false;
+    }
+
+    uint64_t hold_start_us = uapi_tcxo_get_us();
+    laser_force_off();
+    /* An intentional pause must not appear as a pathological DAC scheduling gap. */
+    g_last_dac_start_us = 0U;
+
+    bool released = false;
+    while (true) {
+        uint32_t irq_state = osal_irq_lock();
+        if (g_abort_requested || g_motion_timer_fault) {
+            g_motion_held = false;
+            osal_irq_restore(irq_state);
+            break;
+        }
+        if (!g_hold_requested) {
+            /* Check and clear atomically so a rapid RESUME -> STOP cannot slip
+             * between observing release and clearing the physical-held state. */
+            g_motion_held = false;
+            released = true;
+            osal_irq_restore(irq_state);
+            break;
+        }
+
+        uint32_t generation = g_hold_generation;
+        bool signal_ack = !g_motion_held || g_held_generation != generation;
+        g_motion_held = true;
+        g_held_generation = generation;
+        osal_irq_restore(irq_state);
+
+        if (signal_ack) {
+            /* RESUME followed immediately by STOP may replace the hold generation
+             * before this task gets CPU time. Remain stopped and ACK the new hold. */
+            osal_sem_up(&g_hold_ack_sem);
+        }
+        (void)osal_sem_down(&g_resume_sem);
+    }
+
+    if (held_us != NULL) {
+        *held_us += uapi_tcxo_get_us() - hold_start_us;
+    }
+    return released;
+}
+
+static bool motion_prepare_laser(bool laser_marking, uint16_t laser_power,
+                                 uint64_t *held_us)
+{
+    while (!g_abort_requested && !g_motion_timer_fault) {
+        if (g_hold_requested && !motion_wait_while_held(held_us)) {
+            return false;
+        }
+        if (!laser_marking) {
+            laser_enable(false);
+            if (g_hold_requested) {
+                continue;
+            }
+            return true;
+        }
+
+        laser_set_power(laser_power);
+        if (g_hold_requested) {
+            laser_force_off();
+            continue;
+        }
+        laser_enable(true);
+        if (g_hold_requested) {
+            laser_force_off();
+            continue;
+        }
+        return true;
+    }
+    laser_force_off();
+    return false;
+}
+
 static void record_wait_duration(uint64_t start_us, uint64_t end_us)
 {
     uint64_t elapsed_us = end_us - start_us;
@@ -233,9 +393,16 @@ static void record_wait_duration(uint64_t start_us, uint64_t end_us)
 
 static void motion_timer_callback(uintptr_t data)
 {
-    (void)data;
+    uint32_t generation = (uint32_t)data;
+    if (!g_motion_timer_waiting || generation == 0U ||
+        generation != g_motion_timer_active_generation) {
+        return;
+    }
+
+    g_motion_timer_callback_generation = generation;
     g_motion_timer_waiting = false;
     osal_sem_up(&g_motion_timer_sem);
+    g_timer_callback_count++;
 }
 
 static bool wait_with_motion_timer(uint64_t target_us, uint64_t now_us)
@@ -245,13 +412,32 @@ static bool wait_with_motion_timer(uint64_t target_us, uint64_t now_us)
         return false;
     }
 
+    uint64_t timer_target_us = target_us - SLE_JOB_MOTION_TIMER_TAIL_US;
     uint32_t timer_us = (uint32_t)(remain_us - SLE_JOB_MOTION_TIMER_TAIL_US);
-    g_motion_timer_waiting = true;
+    uint32_t generation;
     uint64_t start_begin_us = uapi_tcxo_get_us();
-    errcode_t ret = uapi_timer_start(g_motion_timer, timer_us, motion_timer_callback, 0);
-    g_timer_start_total_us += uapi_tcxo_get_us() - start_begin_us;
+    uint32_t irq_state = osal_irq_lock();
+    if (g_abort_requested || g_hold_requested) {
+        osal_irq_restore(irq_state);
+        return true;
+    }
+    generation = g_motion_timer_generation + 1U;
+    if (generation == 0U) {
+        generation = 1U;
+    }
+    g_motion_timer_generation = generation;
+    g_motion_timer_callback_generation = 0U;
+    g_motion_timer_active_generation = generation;
+    g_motion_timer_waiting = true;
+    errcode_t ret = uapi_timer_start(g_motion_timer, timer_us, motion_timer_callback,
+                                     (uintptr_t)generation);
     if (ret != ERRCODE_SUCC) {
         g_motion_timer_waiting = false;
+        g_motion_timer_active_generation = 0U;
+    }
+    osal_irq_restore(irq_state);
+    g_timer_start_total_us += uapi_tcxo_get_us() - start_begin_us;
+    if (ret != ERRCODE_SUCC) {
         g_timer_fail_count++;
         g_motion_timer_fault = true;
         osal_printk("[JOB_MOTION_TIMER_FAIL] op=start ret=0x%x wait_us=%u\r\n",
@@ -269,10 +455,16 @@ static bool wait_with_motion_timer(uint64_t target_us, uint64_t now_us)
     uint64_t block_begin_us = uapi_tcxo_get_us();
     int sem_ret = osal_sem_down_timeout(&g_motion_timer_sem, timeout_ms);
     uint64_t wake_us = uapi_tcxo_get_us();
-    g_timer_block_total_us += wake_us - block_begin_us;
     if (sem_ret != OSAL_SUCCESS) {
-        (void)uapi_timer_stop(g_motion_timer);
+        g_timer_block_total_us += wake_us - block_begin_us;
+        irq_state = osal_irq_lock();
         g_motion_timer_waiting = false;
+        g_motion_timer_active_generation = 0U;
+        osal_irq_restore(irq_state);
+        (void)uapi_timer_stop(g_motion_timer);
+        if (g_motion_timer_callback_generation != generation) {
+            g_timer_callback_missing_count++;
+        }
         g_timer_fail_count++;
         g_motion_timer_fault = true;
         osal_printk("[JOB_MOTION_TIMER_FAIL] op=wait wait_us=%u timeout_ms=%u\r\n",
@@ -282,39 +474,35 @@ static bool wait_with_motion_timer(uint64_t target_us, uint64_t now_us)
         return true;
     }
 
-    uint64_t timer_target_us = target_us - SLE_JOB_MOTION_TIMER_TAIL_US;
-    if (wake_us > timer_target_us) {
-        uint64_t late_us = wake_us - timer_target_us;
-        g_timer_wake_late_total_us += late_us;
-        if (late_us < 100U) {
-            g_timer_wake_late_histogram[0]++;
-        } else if (late_us < 500U) {
-            g_timer_wake_late_histogram[1]++;
-        } else if (late_us < 1000U) {
-            g_timer_wake_late_histogram[2]++;
-        } else if (late_us < 3000U) {
-            g_timer_wake_late_histogram[3]++;
-        } else if (late_us < 10000U) {
-            g_timer_wake_late_histogram[4]++;
-        } else {
-            g_timer_wake_late_histogram[5]++;
-        }
-        if (late_us > g_timer_wake_late_max_us) {
-            g_timer_wake_late_max_us = (late_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)late_us;
-        }
+    uint32_t callback_generation = g_motion_timer_callback_generation;
+    g_motion_timer_waiting = false;
+    g_motion_timer_active_generation = 0U;
+    bool callback_valid = callback_generation == generation;
+    if (!callback_valid && !g_abort_requested && !g_hold_requested) {
+        g_timer_callback_missing_count++;
+    }
+    if (callback_valid) {
+        g_motion_timer_stats_pending = (motion_timer_stats_pending_t) {
+            .valid = true,
+            .timer_target_us = timer_target_us,
+            .wake_us = wake_us,
+            .block_elapsed_us = wake_us - block_begin_us,
+        };
+    } else {
+        g_timer_block_total_us += wake_us - block_begin_us;
     }
     return true;
 }
 
-static bool delay_until_us_interruptible(uint64_t target_us)
+static motion_wait_result_t delay_until_us_interruptible(uint64_t target_us)
 {
     uint64_t start_us = uapi_tcxo_get_us();
     uint64_t now_us = start_us;
-    while (!g_abort_requested) {
+    while (!g_abort_requested && !g_hold_requested && !g_motion_timer_fault) {
         kick_watchdog_periodic(now_us, false);
         if (now_us >= target_us) {
             record_wait_duration(start_us, now_us);
-            return true;
+            return MOTION_WAIT_REACHED;
         }
 
         uint64_t remain_us = target_us - now_us;
@@ -324,7 +512,7 @@ static bool delay_until_us_interruptible(uint64_t target_us)
         }
         uint32_t chunk_us = (remain_us > SLE_JOB_MOTION_DELAY_CHUNK_US) ?
                             SLE_JOB_MOTION_DELAY_CHUNK_US : (uint32_t)remain_us;
-        if (g_abort_requested) {
+        if (g_abort_requested || g_hold_requested || g_motion_timer_fault) {
             break;
         }
         if (chunk_us > 0U) {
@@ -334,21 +522,33 @@ static bool delay_until_us_interruptible(uint64_t target_us)
     }
 
     record_wait_duration(start_us, uapi_tcxo_get_us());
-    return false;
+    return g_hold_requested ? MOTION_WAIT_HOLD : MOTION_WAIT_ABORT;
 }
 
 static bool wait_for_g0_settle_if_needed(void)
 {
-    uint64_t settle_until_us = g_g0_settle_until_us;
-    if (settle_until_us == 0U) {
-        return true;
+    while (!g_abort_requested && !g_motion_timer_fault) {
+        uint64_t settle_until_us = g_g0_settle_until_us;
+        if (settle_until_us == 0U) {
+            return true;
+        }
+        motion_wait_result_t wait_result = delay_until_us_interruptible(settle_until_us);
+        process_pending_timer_stats();
+        if (wait_result == MOTION_WAIT_REACHED) {
+            g_g0_settle_until_us = 0;
+            return true;
+        }
+        if (wait_result == MOTION_WAIT_HOLD) {
+            if (!motion_wait_while_held(NULL)) {
+                break;
+            }
+            g_g0_settle_until_us = uapi_tcxo_get_us() + SLE_JOB_G0_SETTLE_US;
+            continue;
+        }
+        break;
     }
-    if (!delay_until_us_interruptible(settle_until_us)) {
-        laser_force_off();
-        return false;
-    }
-    g_g0_settle_until_us = 0;
-    return true;
+    laser_force_off();
+    return false;
 }
 
 static int ceil_step_count(double value)
@@ -383,45 +583,63 @@ static void record_late_sample(uint64_t late_us)
     }
 }
 
-static void perform_move(double target_x, double target_y, double feed_rate_mm_min,
-                         double spatial_step_mm, bool laser_marking)
+static bool perform_move(double target_x, double target_y, double feed_rate_mm_min,
+                         double spatial_step_mm, bool laser_marking, uint16_t laser_power)
 {
     uint64_t actual_start_us = uapi_tcxo_get_us();
-#if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
-    uint32_t move_start_ms = (uint32_t)uapi_systick_get_ms();
-#endif
+    uint64_t held_total_us = 0;
+    bool move_completed = false;
+    double distance = 0.0;
+    double duration_us = 0.0;
+    int steps = 0;
+    double start_x;
+    double start_y;
+    double dx;
+    double dy;
+    double feed_sec;
+    double unclamped_duration_us;
+    bool short_segment;
+    int time_steps;
+    int space_steps;
+    double step_time_us;
+    uint32_t planned_step_us;
+    double next_step_us;
+    uint32_t catchup_budget;
     g_motion_active = true;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 
     target_x = clamp_axis(target_x, SLE_JOB_GALVO_X_MIN_MM, SLE_JOB_GALVO_X_MAX_MM);
     target_y = clamp_axis(target_y, SLE_JOB_GALVO_Y_MIN_MM, SLE_JOB_GALVO_Y_MAX_MM);
 
-    double start_x = g_current_x;
-    double start_y = g_current_y;
-    double dx = target_x - start_x;
-    double dy = target_y - start_y;
-    double distance = sqrt(dx * dx + dy * dy);
-
-    if (distance <= 0.000001) {
-        g_current_x = target_x;
-        g_current_y = target_y;
-        (void)write_current_position(false);
-        update_activity();
-        kick_watchdog_periodic(uapi_tcxo_get_us(), true);
-        g_motion_active = false;
-        return;
+    if (!motion_prepare_laser(laser_marking, laser_power, &held_total_us)) {
+        goto move_done;
     }
 
-    double feed_sec = feed_rate_mm_min / 60.0;
+    start_x = g_current_x;
+    start_y = g_current_y;
+    dx = target_x - start_x;
+    dy = target_y - start_y;
+    distance = sqrt(dx * dx + dy * dy);
+
+    if (distance <= 0.000001) {
+        if (g_hold_requested &&
+            !motion_prepare_laser(laser_marking, laser_power, &held_total_us)) {
+            goto move_done;
+        }
+        move_completed = write_position(target_x, target_y, false);
+        goto move_done;
+    }
+
+    feed_sec = feed_rate_mm_min / 60.0;
     if (feed_sec < 0.1) {
         feed_sec = 0.1;
     }
 
-    double duration_us = (distance / feed_sec) * 1000000.0;
-    double unclamped_duration_us = duration_us;
+    duration_us = (distance / feed_sec) * 1000000.0;
+    unclamped_duration_us = duration_us;
     g_motion_segment_count++;
-    bool short_segment = (distance <= spatial_step_mm ||
-                          duration_us <= (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
+    short_segment = (distance <= spatial_step_mm ||
+                     duration_us <= (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
     if (short_segment) {
         g_short_segment_count++;
     }
@@ -432,15 +650,15 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
     }
     g_planned_motion_us += (uint64_t)(duration_us + 0.5);
 
-    int time_steps = ceil_step_count(duration_us / (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
-    int space_steps = ceil_step_count(distance / spatial_step_mm);
-    int steps = (time_steps > space_steps) ? time_steps : space_steps;
-    double step_time_us = duration_us / (double)steps;
+    time_steps = ceil_step_count(duration_us / (double)SLE_JOB_MOTION_SAMPLE_PERIOD_US);
+    space_steps = ceil_step_count(distance / spatial_step_mm);
+    steps = (time_steps > space_steps) ? time_steps : space_steps;
+    step_time_us = duration_us / (double)steps;
     if (step_time_us < 1.0) {
         step_time_us = 1.0;
     }
-    uint32_t planned_step_us = (step_time_us >= (double)UINT32_MAX) ?
-                               UINT32_MAX : (uint32_t)(step_time_us + 0.5);
+    planned_step_us = (step_time_us >= (double)UINT32_MAX) ?
+                      UINT32_MAX : (uint32_t)(step_time_us + 0.5);
     if (g_min_planned_step_us == 0U || planned_step_us < g_min_planned_step_us) {
         g_min_planned_step_us = planned_step_us;
     }
@@ -448,101 +666,133 @@ static void perform_move(double target_x, double target_y, double feed_rate_mm_m
         g_max_planned_step_us = planned_step_us;
     }
 
-    double next_step_us = (double)uapi_tcxo_get_us();
-    uint32_t catchup_budget = SLE_JOB_MOTION_CATCHUP_MAX_STEPS;
+    next_step_us = (double)uapi_tcxo_get_us();
+    catchup_budget = SLE_JOB_MOTION_CATCHUP_MAX_STEPS;
     for (int i = 1; i <= steps; i++) {
-        if (g_abort_requested) {
-            break;
-        }
-
-        next_step_us += step_time_us;
-        uint64_t target_us = (uint64_t)(next_step_us + 0.5);
-        if (!delay_until_us_interruptible(target_us)) {
-            break;
-        }
-
-        uint64_t now_us = uapi_tcxo_get_us();
-        if (now_us > target_us) {
-            uint64_t late_us = now_us - target_us;
-            record_late_sample(late_us);
-            if (late_us >= SLE_JOB_MOTION_LATE_WARN_US) {
-                unsigned long slipped = (unsigned long)((double)late_us / step_time_us);
-                g_missed_sample_count += (slipped > 0UL) ? slipped : 1UL;
-                if (catchup_budget > 0U && slipped > 0UL) {
-                    double reset_us = (double)now_us - step_time_us;
-                    if (reset_us > next_step_us) {
-                        g_deadline_reset_discarded_us +=
-                            (uint64_t)(reset_us - next_step_us + 0.5);
-                    }
-                    next_step_us = reset_us;
-                    catchup_budget--;
-                    g_deadline_catchup_count++;
-                } else {
-                    g_deadline_reset_discarded_us +=
-                        (uint64_t)((double)now_us - next_step_us + 0.5);
-                    next_step_us = (double)now_us;
+        bool sample_written = false;
+        while (!sample_written && !g_abort_requested && !g_motion_timer_fault) {
+            if (g_hold_requested) {
+                if (!motion_prepare_laser(laser_marking, laser_power, &held_total_us)) {
+                    goto move_done;
                 }
-                g_deadline_reset_count++;
+                /* Issue the first remaining sample immediately after re-arming.
+                 * Waiting a full step here would burn at the stationary pause point. */
+                next_step_us = (double)uapi_tcxo_get_us() - step_time_us;
+                catchup_budget = SLE_JOB_MOTION_CATCHUP_MAX_STEPS;
             }
-        }
 
-        double fraction = (double)i / (double)steps;
-        g_current_x = start_x + dx * fraction;
-        g_current_y = start_y + dy * fraction;
-        if (!write_current_position(false)) {
-            break;
-        }
+            next_step_us += step_time_us;
+            uint64_t target_us = (uint64_t)(next_step_us + 0.5);
+            motion_wait_result_t wait_result = delay_until_us_interruptible(target_us);
+            if (wait_result != MOTION_WAIT_REACHED) {
+                process_pending_timer_stats();
+                if (wait_result == MOTION_WAIT_HOLD) {
+                    continue;
+                }
+                goto move_done;
+            }
+            if (g_hold_requested) {
+                continue;
+            }
+
+            uint64_t now_us = uapi_tcxo_get_us();
+            if (now_us > target_us) {
+                uint64_t late_us = now_us - target_us;
+                record_late_sample(late_us);
+                if (late_us >= SLE_JOB_MOTION_LATE_WARN_US) {
+                    unsigned long slipped = (unsigned long)((double)late_us / step_time_us);
+                    g_missed_sample_count += (slipped > 0UL) ? slipped : 1UL;
+                    if (catchup_budget > 0U && slipped > 0UL) {
+                        double reset_us = (double)now_us - step_time_us;
+                        if (reset_us > next_step_us) {
+                            g_deadline_reset_discarded_us +=
+                                (uint64_t)(reset_us - next_step_us + 0.5);
+                        }
+                        next_step_us = reset_us;
+                        catchup_budget--;
+                        g_deadline_catchup_count++;
+                    } else {
+                        g_deadline_reset_discarded_us +=
+                            (uint64_t)((double)now_us - next_step_us + 0.5);
+                        next_step_us = (double)now_us;
+                    }
+                    g_deadline_reset_count++;
+                }
+            }
+
+            double fraction = (double)i / (double)steps;
+            double sample_x = start_x + dx * fraction;
+            double sample_y = start_y + dy * fraction;
+            if (g_hold_requested) {
+                continue;
+            }
+            sample_written = write_position(sample_x, sample_y, false);
+            process_pending_timer_stats();
+            if (!sample_written) {
+                goto move_done;
+            }
 
 #if SLE_JOB_MOTION_SCHED_RELIEF_INTERVAL > 0U && SLE_JOB_MOTION_SCHED_RELIEF_MS > 0U
-        g_sched_relief_samples++;
-        if (g_sched_relief_samples >= SLE_JOB_MOTION_SCHED_RELIEF_INTERVAL) {
-            g_sched_relief_samples = 0;
-            g_sched_relief_count++;
-            osal_msleep(SLE_JOB_MOTION_SCHED_RELIEF_MS);
-        }
+            g_sched_relief_samples++;
+            if (g_sched_relief_samples >= SLE_JOB_MOTION_SCHED_RELIEF_INTERVAL) {
+                g_sched_relief_samples = 0;
+                g_sched_relief_count++;
+                osal_msleep(SLE_JOB_MOTION_SCHED_RELIEF_MS);
+            }
 #endif
 
-        kick_watchdog_periodic(now_us, false);
-        if ((i % 200) == 0) {
-            update_activity();
+            kick_watchdog_periodic(now_us, false);
+            if ((i % 200) == 0) {
+                update_activity();
+            }
+        }
+        if (!sample_written) {
+            goto move_done;
         }
     }
 
-    if (!g_abort_requested) {
-        g_current_x = target_x;
-        g_current_y = target_y;
-        (void)write_current_position(false);
+    if (!g_abort_requested && !g_motion_timer_fault) {
+        if (g_hold_requested &&
+            !motion_prepare_laser(laser_marking, laser_power, &held_total_us)) {
+            goto move_done;
+        }
+        move_completed = write_position(target_x, target_y, false);
     }
 
+move_done:
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     g_motion_active = false;
-    g_actual_motion_us += uapi_tcxo_get_us() - actual_start_us;
+    uint64_t actual_elapsed_us = uapi_tcxo_get_us() - actual_start_us;
+    if (actual_elapsed_us >= held_total_us) {
+        actual_elapsed_us -= held_total_us;
+    }
+    g_actual_motion_us += actual_elapsed_us;
 
     g_move_count++;
 #if SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE
-    uint32_t wall_ms = (uint32_t)uapi_systick_get_ms() - move_start_ms;
+    uint32_t wall_ms = (uint32_t)(actual_elapsed_us / 1000U);
     if (wall_ms >= SLE_JOB_MOTION_MOVE_SLOW_MS) {
         uint32_t now_ms = (uint32_t)uapi_systick_get_ms();
-        if (g_last_move_slow_log_ms != 0U &&
-            (uint32_t)(now_ms - g_last_move_slow_log_ms) < SLE_JOB_MOTION_MOVE_SLOW_LOG_PERIOD_MS) {
-            return;
+        if (g_last_move_slow_log_ms == 0U ||
+            (uint32_t)(now_ms - g_last_move_slow_log_ms) >= SLE_JOB_MOTION_MOVE_SLOW_LOG_PERIOD_MS) {
+            g_last_move_slow_log_ms = now_ms;
+            osal_printk("[JOB_MOTION_MOVE_SLOW] move=%lu laser=%u dist_um=%u steps=%d "
+                        "plan_ms=%u wall_ms=%u late=%lu missed=%lu max_late_us=%lu q=%u\r\n",
+                        g_move_count,
+                        (unsigned int)(laser_marking ? 1U : 0U),
+                        (unsigned int)(distance * 1000.0 + 0.5),
+                        steps,
+                        (unsigned int)(duration_us / 1000.0 + 0.5),
+                        (unsigned int)wall_ms,
+                        g_late_sample_count,
+                        g_missed_sample_count,
+                        g_max_sample_late_us,
+                        (unsigned int)sle_job_motion_executor_queue_depth());
         }
-        g_last_move_slow_log_ms = now_ms;
-        osal_printk("[JOB_MOTION_MOVE_SLOW] move=%lu laser=%u dist_um=%u steps=%d "
-                    "plan_ms=%u wall_ms=%u late=%lu missed=%lu max_late_us=%lu q=%u\r\n",
-                    g_move_count,
-                    (unsigned int)(laser_marking ? 1U : 0U),
-                    (unsigned int)(distance * 1000.0 + 0.5),
-                    steps,
-                    (unsigned int)(duration_us / 1000.0 + 0.5),
-                    (unsigned int)wall_ms,
-                    g_late_sample_count,
-                    g_missed_sample_count,
-                    g_max_sample_late_us,
-                    (unsigned int)sle_job_motion_executor_queue_depth());
     }
 #endif
+    return move_completed && !g_abort_requested && !g_motion_timer_fault;
 }
 
 void sle_job_motion_executor_reset_stats(void)
@@ -564,6 +814,8 @@ void sle_job_motion_executor_reset_stats(void)
     g_sched_relief_samples = 0;
     g_timer_wait_count = 0;
     g_timer_fail_count = 0;
+    g_timer_callback_count = 0;
+    g_timer_callback_missing_count = 0;
     g_timer_wait_max_us = 0;
     g_timer_wake_late_max_us = 0;
     g_short_clamped_count = 0;
@@ -579,6 +831,7 @@ void sle_job_motion_executor_reset_stats(void)
     g_deadline_reset_discarded_us = 0;
     memset((void *)g_late_histogram, 0, sizeof(g_late_histogram));
     memset((void *)g_timer_wake_late_histogram, 0, sizeof(g_timer_wake_late_histogram));
+    memset(&g_motion_timer_stats_pending, 0, sizeof(g_motion_timer_stats_pending));
     g_queue_min_depth = UINT16_MAX;
     g_queue_max_depth = 0;
     g_queue_depth_sum = 0;
@@ -605,11 +858,17 @@ void sle_job_motion_executor_init(void)
     g_command_active = false;
     g_motion_active = false;
     g_abort_requested = false;
+    g_hold_requested = false;
+    g_motion_held = false;
+    g_hold_generation = 0U;
+    g_held_generation = 0U;
     g_last_activity_ms = 0;
     g_queue_head = 0;
     g_queue_tail = 0;
     g_output_armed = false;
     g_motion_timer_waiting = false;
+    g_motion_timer_active_generation = 0U;
+    g_motion_timer_callback_generation = 0U;
     g_motion_timer_fault = false;
     sle_job_motion_executor_reset_stats();
     g_last_dac_x = 0;
@@ -623,6 +882,20 @@ void sle_job_motion_executor_init(void)
             osal_sem_init(&g_queue_sem, 0) == OSAL_SUCCESS) {
             g_queue_ready = true;
         }
+    }
+    if (!g_hold_sems_ready &&
+        osal_sem_init(&g_hold_ack_sem, 0) == OSAL_SUCCESS &&
+        osal_sem_init(&g_resume_sem, 0) == OSAL_SUCCESS) {
+        g_hold_sems_ready = true;
+    }
+    if (!g_hold_sems_ready) {
+        osal_printk("[JOB_MOTION_HOLD] semaphore init failed\r\n");
+    }
+    while (g_hold_sems_ready &&
+           osal_sem_down_timeout(&g_hold_ack_sem, 0) == OSAL_SUCCESS) {
+    }
+    while (g_hold_sems_ready &&
+           osal_sem_down_timeout(&g_resume_sem, 0) == OSAL_SUCCESS) {
     }
     while (g_queue_ready &&
            osal_sem_down_timeout(&g_queue_sem, 0) == OSAL_SUCCESS) {
@@ -699,28 +972,39 @@ static bool cmd_uses_laser(const sle_job_motion_cmd_t *cmd)
 
 bool sle_job_motion_executor_enqueue(const sle_job_motion_cmd_t *cmd)
 {
-    if (!g_queue_ready || !g_worker_started || cmd == NULL || g_motion_timer_fault) {
+    return sle_job_motion_executor_enqueue_batch(cmd, 1U);
+}
+
+bool sle_job_motion_executor_enqueue_batch(const sle_job_motion_cmd_t *cmds, uint8_t count)
+{
+    if (!g_queue_ready || !g_worker_started || cmds == NULL || count == 0U ||
+        g_motion_timer_fault) {
         return false;
     }
 
-    while (!g_abort_requested) {
+    while (!g_abort_requested && !g_motion_timer_fault) {
         osal_mutex_lock(&g_queue_mutex);
-        uint16_t next = (uint16_t)((g_queue_head + 1U) % SLE_JOB_MOTION_QUEUE_SIZE);
-        if (next != g_queue_tail) {
-            memcpy(&g_motion_queue[g_queue_head], cmd, sizeof(sle_job_motion_cmd_t));
-            g_queue_head = next;
-            uint16_t depth = motion_queue_used_locked();
-            if (depth < g_queue_min_depth) {
-                g_queue_min_depth = depth;
+        uint16_t used = motion_queue_used_locked();
+        uint16_t free_slots = (uint16_t)(SLE_JOB_MOTION_QUEUE_SIZE - 1U - used);
+        if (free_slots >= count && !g_abort_requested && !g_motion_timer_fault) {
+            for (uint8_t i = 0; i < count; i++) {
+                memcpy(&g_motion_queue[g_queue_head], &cmds[i], sizeof(sle_job_motion_cmd_t));
+                g_queue_head = (uint16_t)((g_queue_head + 1U) % SLE_JOB_MOTION_QUEUE_SIZE);
+                uint16_t depth = motion_queue_used_locked();
+                if (depth < g_queue_min_depth) {
+                    g_queue_min_depth = depth;
+                }
+                if (depth > g_queue_max_depth) {
+                    g_queue_max_depth = depth;
+                }
+                g_queue_depth_sum += depth;
+                g_queue_depth_samples++;
             }
-            if (depth > g_queue_max_depth) {
-                g_queue_max_depth = depth;
+            g_enqueued_count += count;
+            for (uint8_t i = 0; i < count; i++) {
+                osal_sem_up(&g_queue_sem);
             }
-            g_queue_depth_sum += depth;
-            g_queue_depth_samples++;
-            g_enqueued_count++;
             osal_mutex_unlock(&g_queue_mutex);
-            osal_sem_up(&g_queue_sem);
             return true;
         }
         osal_mutex_unlock(&g_queue_mutex);
@@ -752,6 +1036,10 @@ static int sle_job_motion_executor_task(void *arg)
 
     sle_job_motion_cmd_t cmd;
     while (1) {
+        if (g_hold_requested && !motion_wait_while_held(NULL)) {
+            osal_msleep(1);
+            continue;
+        }
         if (motion_queue_pop(&cmd)) {
             sle_job_motion_executor_execute(&cmd);
             g_command_active = false;
@@ -793,17 +1081,22 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
         laser_force_off();
         return;
     }
+    if (g_hold_requested && !motion_wait_while_held(NULL)) {
+        laser_force_off();
+        return;
+    }
 
+    bool command_completed = false;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
     switch (cmd->cmd) {
         case SLE_JOB_CMD_G0_MOVE:
             if (!arm_output_if_needed()) {
                 break;
             }
-            laser_enable(false);
-            perform_move(cmd->target_x, cmd->target_y, SLE_JOB_G0_FEED_RATE,
-                         SLE_JOB_G0_STEP_NUM, false);
-            if (!g_abort_requested) {
+            command_completed = perform_move(cmd->target_x, cmd->target_y,
+                                             SLE_JOB_G0_FEED_RATE,
+                                             SLE_JOB_G0_STEP_NUM, false, 0U);
+            if (command_completed) {
                 g_g0_settle_until_us = uapi_tcxo_get_us() + SLE_JOB_G0_SETTLE_US;
             }
             break;
@@ -820,17 +1113,9 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
                 if (!wait_for_g0_settle_if_needed()) {
                     break;
                 }
-                if (!laser_is_enabled() || laser_get_power() != cmd->laser_pwr) {
-                    laser_set_power(cmd->laser_pwr);
-                }
-                if (!laser_is_enabled()) {
-                    laser_enable(true);
-                }
-            } else {
-                laser_enable(false);
             }
-            perform_move(cmd->target_x, cmd->target_y, feed_rate,
-                         SLE_JOB_STEP_NUM, laser_on);
+            command_completed = perform_move(cmd->target_x, cmd->target_y, feed_rate,
+                                             SLE_JOB_STEP_NUM, laser_on, cmd->laser_pwr);
             if (!laser_on) {
                 laser_enable(false);
             }
@@ -840,18 +1125,22 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
             if (!wait_for_g0_settle_if_needed()) {
                 break;
             }
-            laser_set_power(cmd->laser_pwr);
-            laser_enable(cmd->laser_pwr > 0);
-            update_activity();
+            command_completed = motion_prepare_laser(cmd->laser_pwr > 0U,
+                                                     cmd->laser_pwr, NULL);
+            if (command_completed) {
+                update_activity();
+            }
             break;
         case SLE_JOB_CMD_LASER_OFF:
             laser_enable(false);
             laser_set_power(0);
             update_activity();
+            command_completed = true;
             break;
         case SLE_JOB_CMD_SET_ORIGIN:
             laser_force_off();
             sle_job_motion_executor_set_origin();
+            command_completed = !g_abort_requested && !g_motion_timer_fault;
             break;
         case SLE_JOB_CMD_EMERGENCY_STOP:
             sle_job_motion_executor_request_abort();
@@ -861,13 +1150,24 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
             break;
         case SLE_JOB_CMD_PROGRESS_MARK:
             update_activity();
+            command_completed = true;
             break;
         default:
             break;
     }
-    if (!g_abort_requested && !g_motion_timer_fault &&
+    if (command_completed && !g_abort_requested && !g_motion_timer_fault &&
         cmd->completion_line > g_completed_line) {
-        g_completed_line = cmd->completion_line;
+        uint32_t expected_line = g_completed_line + 1U;
+        if (cmd->completion_line != expected_line) {
+            osal_printk("[JOB_MOTION_LINE_GAP] completed=%u next=%u expected=%u\r\n",
+                        (unsigned int)g_completed_line,
+                        (unsigned int)cmd->completion_line,
+                        (unsigned int)expected_line);
+            laser_force_off();
+            sle_job_motion_executor_request_abort();
+        } else {
+            g_completed_line = cmd->completion_line;
+        }
     }
     g_executed_count++;
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
@@ -876,31 +1176,142 @@ void sle_job_motion_executor_execute(const sle_job_motion_cmd_t *cmd)
 void sle_job_motion_executor_set_origin(void)
 {
     laser_force_off();
-    g_current_x = 0.0;
-    g_current_y = 0.0;
-    (void)write_current_position(true);
+    (void)write_position(0.0, 0.0, true);
     g_g0_settle_until_us = g_abort_requested ? 0U :
                            uapi_tcxo_get_us() + SLE_JOB_G0_SETTLE_US;
     update_activity();
     kick_watchdog_periodic(uapi_tcxo_get_us(), true);
 }
 
+bool sle_job_motion_executor_request_hold(uint32_t timeout_ms)
+{
+    if (!g_hold_sems_ready || !g_queue_ready || !g_worker_started) {
+        return false;
+    }
+
+    bool wake_timer_wait = false;
+    uint32_t irq_state = osal_irq_lock();
+    if (g_abort_requested || g_motion_timer_fault) {
+        osal_irq_restore(irq_state);
+        return false;
+    }
+    if (!g_hold_requested) {
+        g_hold_generation++;
+        if (g_hold_generation == 0U) {
+            g_hold_generation = 1U;
+        }
+        g_hold_requested = true;
+    }
+    uint32_t generation = g_hold_generation;
+    if (g_motion_timer_ready && g_motion_timer_waiting) {
+        g_motion_timer_waiting = false;
+        g_motion_timer_active_generation = 0U;
+        wake_timer_wait = true;
+    }
+    osal_irq_restore(irq_state);
+
+    laser_force_off();
+    if (wake_timer_wait) {
+        (void)uapi_timer_stop(g_motion_timer);
+        osal_sem_up(&g_motion_timer_sem);
+    }
+    /* Wake a worker which may be blocked on an empty motion queue. */
+    osal_sem_up(&g_queue_sem);
+
+    uint32_t start_ms = (uint32_t)uapi_systick_get_ms();
+    while (true) {
+        irq_state = osal_irq_lock();
+        bool held = g_motion_held && g_held_generation == generation;
+        bool failed = g_abort_requested || g_motion_timer_fault;
+        osal_irq_restore(irq_state);
+        if (held) {
+            return true;
+        }
+        if (failed) {
+            return false;
+        }
+
+        uint32_t elapsed_ms = (uint32_t)uapi_systick_get_ms() - start_ms;
+        if (elapsed_ms >= timeout_ms) {
+            return false;
+        }
+        uint32_t remaining_ms = timeout_ms - elapsed_ms;
+        if (osal_sem_down_timeout(&g_hold_ack_sem, remaining_ms) != OSAL_SUCCESS) {
+            return g_motion_held && g_held_generation == generation;
+        }
+    }
+}
+
+bool sle_job_motion_executor_resume(void)
+{
+    if (!g_hold_sems_ready) {
+        return false;
+    }
+
+    uint32_t irq_state = osal_irq_lock();
+    if (!g_hold_requested || !g_motion_held || g_abort_requested || g_motion_timer_fault) {
+        osal_irq_restore(irq_state);
+        return false;
+    }
+    g_hold_requested = false;
+    osal_irq_restore(irq_state);
+    osal_sem_up(&g_resume_sem);
+    return true;
+}
+
+bool sle_job_motion_executor_is_held(void)
+{
+    return g_motion_held && g_hold_requested;
+}
+
 void sle_job_motion_executor_request_abort(void)
 {
+    bool wake_timer_wait = false;
+    bool wake_hold_wait = false;
+    uint32_t irq_state = osal_irq_lock();
+    wake_hold_wait = g_hold_requested || g_motion_held;
     g_abort_requested = true;
+    g_hold_requested = false;
     g_g0_settle_until_us = 0;
     if (g_motion_timer_ready && g_motion_timer_waiting) {
-        (void)uapi_timer_stop(g_motion_timer);
         g_motion_timer_waiting = false;
+        g_motion_timer_active_generation = 0U;
+        wake_timer_wait = true;
+    }
+    osal_irq_restore(irq_state);
+    if (wake_timer_wait) {
+        (void)uapi_timer_stop(g_motion_timer);
         osal_sem_up(&g_motion_timer_sem);
+    }
+    laser_force_off();
+    if (g_hold_sems_ready && wake_hold_wait) {
+        osal_sem_up(&g_resume_sem);
+        osal_sem_up(&g_hold_ack_sem);
+    }
+    if (g_queue_ready) {
+        osal_sem_up(&g_queue_sem);
     }
 }
 
 void sle_job_motion_executor_clear_abort(void)
 {
+    uint32_t irq_state = osal_irq_lock();
+    g_motion_timer_waiting = false;
+    g_motion_timer_active_generation = 0U;
+    g_hold_requested = false;
+    g_motion_held = false;
+    g_held_generation = 0U;
+    osal_irq_restore(irq_state);
+    if (g_hold_sems_ready) {
+        while (osal_sem_down_timeout(&g_hold_ack_sem, 0) == OSAL_SUCCESS) {
+        }
+        while (osal_sem_down_timeout(&g_resume_sem, 0) == OSAL_SUCCESS) {
+        }
+    }
     while (g_motion_timer_sem_ready &&
            osal_sem_down_timeout(&g_motion_timer_sem, 0) == OSAL_SUCCESS) {
     }
+    memset(&g_motion_timer_stats_pending, 0, sizeof(g_motion_timer_stats_pending));
     g_motion_timer_fault = false;
     g_abort_requested = false;
 }
@@ -917,6 +1328,9 @@ double sle_job_motion_executor_get_y(void)
 
 bool sle_job_motion_executor_is_busy(void)
 {
+    if (g_hold_requested || g_motion_held) {
+        return true;
+    }
     if (g_command_active) {
         return true;
     }
@@ -1016,6 +1430,7 @@ void sle_job_motion_executor_get_diag(sle_job_motion_diag_t *diag)
         return;
     }
 
+    uint32_t irq_state = osal_irq_lock();
     diag->dac_write_count = g_dac_write_count;
     diag->dac_skip_count = g_dac_skip_count;
     diag->wait_call_count = g_wait_call_count;
@@ -1025,6 +1440,8 @@ void sle_job_motion_executor_get_diag(sle_job_motion_diag_t *diag)
     diag->sched_relief_count = g_sched_relief_count;
     diag->timer_wait_count = g_timer_wait_count;
     diag->timer_fail_count = g_timer_fail_count;
+    diag->timer_callback_count = g_timer_callback_count;
+    diag->timer_callback_missing_count = g_timer_callback_missing_count;
     diag->dac_total_us = g_dac_total_us;
     diag->wait_total_us = g_wait_total_us;
     diag->dac_max_us = g_dac_max_us;
@@ -1054,4 +1471,5 @@ void sle_job_motion_executor_get_diag(sle_job_motion_diag_t *diag)
     diag->queue_max_depth = g_queue_max_depth;
     diag->queue_avg_depth = (g_queue_depth_samples == 0U) ? 0U :
         (uint16_t)(g_queue_depth_sum / g_queue_depth_samples);
+    osal_irq_restore(irq_state);
 }

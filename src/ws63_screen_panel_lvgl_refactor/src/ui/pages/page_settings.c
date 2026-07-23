@@ -6,6 +6,7 @@
 #include "panel_theme.h"
 #include "ui_manager.h"
 #include "lcd_driver.h"
+#include "../service/panel_model.h"
 #include "soc_osal.h"
 #include <stdio.h>
 
@@ -69,7 +70,17 @@ static void brightness_cb(lv_event_t *e)
 static void file_btn_cb(lv_event_t *e)
 {
     (void)e;
-    osal_printk("[SETTINGS] file -> file browser\r\n");
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    if (model.view_mode == PANEL_VIEW_ONLINE) {
+        panel_model_toggle_primary_mode();
+        panel_model_get_snapshot(&model);
+        if (model.view_mode != PANEL_VIEW_OFFLINE) {
+            osal_printk("[SETTINGS] SD task rejected: online job still active\r\n");
+            return;
+        }
+    }
+    osal_printk("[SETTINGS] file -> offline file browser\r\n");
     ui_manager_switch_page(PAGE_FILE_BROWSER);
 }
 

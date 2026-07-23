@@ -258,7 +258,7 @@ void page_job_monitor_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(cache_lbl, COLOR_TEXT_MUTED, 0);
 
     g_lbl_cache_free = lv_label_create(cache_card);
-    lv_label_set_text(g_lbl_cache_free, "128 KB");
+    lv_label_set_text(g_lbl_cache_free, "--");
     lv_obj_set_style_text_font(g_lbl_cache_free, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(g_lbl_cache_free, COLOR_LASER_GREEN, 0);
 }
@@ -267,44 +267,48 @@ void page_job_monitor_update(void)
 {
     /* Update from the RX-backed panel model. */
     char buf[24];
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
 
-    if (g_rendered_seq == g_model.seq) {
+    if (g_rendered_seq == model.seq) {
         return;
     }
 
-    if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+    if (model.view_mode == PANEL_VIEW_OFFLINE) {
         lv_label_set_text(g_lbl_title, "离线任务");
-    } else if (g_model.owner == PANEL_OWNER_HOST) {
+    } else if (model.owner == PANEL_OWNER_HOST) {
         lv_label_set_text(g_lbl_title, "在线监控");
-    } else if (g_model.owner == PANEL_OWNER_SCREEN) {
+    } else if (model.owner == PANEL_OWNER_SCREEN) {
         lv_label_set_text(g_lbl_title, "离线监控");
     } else {
         lv_label_set_text(g_lbl_title, "任务控制");
     }
 
-    lv_label_set_text(g_lbl_owner, panel_model_owner_label(g_model.owner));
-    lv_label_set_text(g_lbl_mode, panel_model_mode_label(g_model.mode));
-    lv_label_set_text(g_lbl_job_id, g_model.job_name);
+    lv_label_set_text(g_lbl_owner, panel_model_owner_label(model.owner));
+    lv_label_set_text(g_lbl_mode, panel_model_mode_label(model.mode));
+    lv_label_set_text(g_lbl_job_id, model.job_name);
 
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.executed_lines);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.executed_lines);
     lv_label_set_text(g_lbl_lines_exec, buf);
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.total_lines);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.total_lines);
     lv_label_set_text(g_lbl_lines_total, buf);
 
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.received_size);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.received_size);
     lv_label_set_text(g_lbl_bytes_rx, buf);
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.total_size);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.total_size);
     lv_label_set_text(g_lbl_bytes_total, buf);
 
-    snprintf(buf, sizeof(buf), "%.1f", g_model.progress * 0.7f);
-    lv_label_set_text(g_lbl_pos_x, buf);
-    snprintf(buf, sizeof(buf), "%.1f", g_model.progress * 0.5f);
-    lv_label_set_text(g_lbl_pos_y, buf);
+    /* RX panel status does not currently carry motion coordinates or setpoints. */
+    lv_label_set_text(g_lbl_pos_x, "--");
+    lv_label_set_text(g_lbl_pos_y, "--");
+    lv_label_set_text(g_lbl_feed, "--");
+    lv_label_set_text(g_lbl_power, "--");
 
-    lv_label_set_text(g_lbl_feed, "1000");
-    lv_label_set_text(g_lbl_power, g_model.laser_output_active ? "S500" : "S0");
-
-    snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
-    lv_label_set_text(g_lbl_cache_free, buf);
-    g_rendered_seq = g_model.seq;
+    if (model.cache_free_valid) {
+        snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(model.cache_free / 1024U));
+        lv_label_set_text(g_lbl_cache_free, buf);
+    } else {
+        lv_label_set_text(g_lbl_cache_free, "--");
+    }
+    g_rendered_seq = model.seq;
 }

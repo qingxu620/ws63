@@ -18,6 +18,8 @@ void panel_transport_sle_poll(void);
 bool panel_transport_sle_tx_is_connected(void);
 bool panel_transport_sle_rx_is_connected(void);
 bool panel_transport_sle_can_control_rx(void);
+bool panel_transport_sle_rx_owner_claimed(void);
+void panel_transport_sle_release_rx_owner(void);
 void panel_transport_sle_set_standalone_session_active(bool active);
 errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len);
 

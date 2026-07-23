@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "errcode.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,7 @@ typedef struct {
 typedef struct {
     bool mounted;
     bool real_backend;
+    bool scanning;
     uint32_t seq;
     uint8_t count;
     int8_t selected_index;
@@ -46,7 +48,7 @@ typedef struct {
 } panel_file_manager_t;
 
 void panel_file_manager_init(void);
-void panel_file_manager_refresh(void);
+errcode_t panel_file_manager_refresh(void);
 
 const panel_file_manager_t *panel_file_manager_get(void);
 const panel_file_entry_t *panel_file_manager_get_entry(uint8_t index);

@@ -85,7 +85,9 @@ typedef struct {
     panel_view_mode_t view_mode;
     int progress;
     uint32_t job_seconds;
+    /* Monotonic local UI revision. Never populated from a remote status seq. */
     uint32_t seq;
+    uint32_t status_seq;
     uint32_t event_id;
     uint32_t job_id;
     uint32_t received_size;
@@ -93,6 +95,9 @@ typedef struct {
     uint32_t executed_lines;
     uint32_t total_lines;
     uint32_t cache_free;
+    bool status_valid;
+    bool cache_free_valid;
+    bool control_claimed;
     bool rx_connected;
     bool tx_connected;
     bool host_connected;
@@ -118,6 +123,12 @@ void panel_model_request_abort(void);
 void panel_model_request_focus_off(void);
 void panel_model_mark_focus_ack(bool active);
 void panel_model_set_transport_links(bool tx_connected, bool rx_connected);
+/* Called only after the transport has actually acquired/released RX control. */
+void panel_model_set_control_claimed(bool claimed);
+/* Clear remote truth and force a safe, non-owner link-lost presentation. */
+void panel_model_invalidate_remote_status(const char *reason);
+/* Copy one coherent model view for UI/task consumers. */
+void panel_model_get_snapshot(panel_model_t *out);
 void panel_model_select_offline_file(const char *name, uint32_t size_bytes, uint32_t line_count);
 void panel_model_start_offline_selected(void);
 void panel_model_offline_upload_begin(const char *name, uint32_t size_bytes, uint32_t line_count);

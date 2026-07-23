@@ -374,7 +374,9 @@ archive() {
     [ -f "$src_bin" ] && cp "$src_bin" "${run_dir}/${dest_name}.bin"
     [ -f "$src_sign" ] && cp "$src_sign" "${run_dir}/${dest_name}-sign.bin"
     [ -f "$src_map" ] && cp "$src_map" "${run_dir}/${dest_name}.map"
-    [ -f "$log_file" ] && cp "$log_file" "${run_dir}/build.log"
+    if [ -f "$log_file" ] && [ "$log_file" != "${run_dir}/build.log" ]; then
+        cp "$log_file" "${run_dir}/build.log"
+    fi
     cp "$CONFIG" "${run_dir}/effective.config"
     [ -f "$src_mconfig" ] && cp "$src_mconfig" "${run_dir}/mconfig.h"
 
@@ -502,7 +504,7 @@ main() {
     check_variant_selected "$variant"
 
     # Build
-    local log_file="${ROOT}/fwstage/${variant}/${TIMESTAMP}-${GIT_HASH}/build.log"
+    local log_file="${STAGE_DIR}/${variant}/${TIMESTAMP}-${GIT_HASH}/build.log"
     mkdir -p "$(dirname "$log_file")"
     do_build "$variant" "$log_file"
 

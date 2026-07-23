@@ -100,7 +100,7 @@ static errcode_t ensure_rx_control_link(void)
         if (waited_ms >= PANEL_RX_CMD_CONNECT_WAIT_MS) {
             return ERRCODE_SLE_TIMEOUT;
         }
-        panel_transport_sle_poll();
+        /* The dedicated panel_sle_listen task is the sole transport poller. */
         osal_msleep(20);
         waited_ms += 20U;
     }
@@ -380,8 +380,10 @@ errcode_t panel_rx_commands_request_focus_on(uint8_t power)
         osal_printk("[PANEL_CMD] reject display-only focus_on\r\n");
         return ERRCODE_SLE_FAIL;
     }
-    if (power > 100U) {
-        power = 100U;
+    if (power == 0U || power > 100U) {
+        osal_printk("[PANEL_CMD] reject invalid focus power=%u\r\n",
+                    (unsigned int)power);
+        return ERRCODE_INVALID_PARAM;
     }
     uint32_t lock = osal_irq_lock();
     if ((g_pending_mask & PANEL_RX_CMD_ABORT) == 0U) {

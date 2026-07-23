@@ -38,6 +38,8 @@ typedef enum {
     PKT_EXEC_STOP     = 0x13,
     PKT_FOCUS_CTRL    = 0x14,
     PKT_ROUTE_SWITCH  = 0x15,
+    PKT_OWNER_CLAIM   = 0x16,
+    PKT_OWNER_RELEASE = 0x17,
 
     PKT_STATUS_REQ    = 0x20,
     PKT_STATUS_RESP = 0x21,
@@ -69,6 +71,7 @@ typedef enum {
     JOB_STATUS_BAD_JOB = 7,
     JOB_STATUS_NOT_READY = 8,
     JOB_STATUS_INTERNAL_ERROR = 9,
+    JOB_STATUS_BUSY = 10,
 } sle_job_status_t;
 
 typedef struct __attribute__((packed)) {
@@ -140,6 +143,12 @@ typedef struct __attribute__((packed)) {
     uint8_t flags;
     uint16_t reserved;
 } route_switch_payload_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t owner;
+    uint8_t reserved0;
+    uint16_t reserved1;
+} owner_control_payload_t;
 
 #define SLE_JOB_ROUTE_TARGET_NONE 0U
 #define SLE_JOB_ROUTE_TARGET_LEGACY_UART 1U

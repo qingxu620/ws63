@@ -33,6 +33,7 @@ static bool g_rendered_busy = false;
 static bool g_rendered_tx_present = false;
 static bool g_rendered_rx_ready = false;
 static bool g_rendered_worker_ready = false;
+static bool g_rendered_rx_claimed = false;
 
 static void bind_click(lv_obj_t *obj, lv_event_cb_t cb, void *user_data)
 {
@@ -56,8 +57,29 @@ static void refresh_btn_cb(lv_event_t *e)
         return;
     }
     osal_printk("[FILE_PAGE] refresh click\r\n");
-    panel_file_manager_refresh();
+    errcode_t ret = panel_file_manager_refresh();
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[FILE_PAGE] refresh queue failed: 0x%x\r\n", ret);
+    }
     page_file_browser_update();
+}
+
+static void online_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    if (model.view_mode == PANEL_VIEW_OFFLINE) {
+        panel_model_toggle_primary_mode();
+        panel_model_get_snapshot(&model);
+    }
+    if (model.view_mode == PANEL_VIEW_ONLINE) {
+        osal_printk("[FILE_PAGE] return online requested\r\n");
+        ui_manager_switch_page(PAGE_HOME);
+    } else {
+        osal_printk("[FILE_PAGE] return online rejected state=%u owner=%u\r\n",
+                    (unsigned int)model.state, (unsigned int)model.owner);
+    }
 }
 
 static void file_row_cb(lv_event_t *e)
@@ -67,6 +89,11 @@ static void file_row_cb(lv_event_t *e)
     }
 
     uint8_t index = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+    const panel_file_manager_t *mgr = panel_file_manager_get();
+    if (mgr->scanning) {
+        osal_printk("[FILE_PAGE] select rejected: SD scan active\r\n");
+        return;
+    }
     const panel_file_entry_t *entry = panel_file_manager_get_entry(index);
     if (entry == NULL) {
         osal_printk("[FILE_PAGE] click invalid index=%u\r\n", (unsigned int)index);
@@ -102,7 +129,7 @@ static void start_btn_cb(lv_event_t *e)
         return;
     }
     if (!panel_transport_sle_can_control_rx()) {
-        osal_printk("[FILE_PAGE] start rejected: tx present display-only\r\n");
+        osal_printk("[FILE_PAGE] start rejected: RX control not claimed\r\n");
         return;
     }
     if (!panel_transport_sle_rx_is_connected()) {
@@ -225,6 +252,7 @@ void page_file_browser_create(lv_obj_t *parent)
     g_rendered_tx_present = false;
     g_rendered_rx_ready = false;
     g_rendered_worker_ready = false;
+    g_rendered_rx_claimed = false;
 
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
@@ -273,6 +301,7 @@ void page_file_browser_create(lv_obj_t *parent)
     lv_obj_set_style_border_width(spacer, 0, 0);
     lv_obj_set_flex_grow(spacer, 1);
 
+    create_header_btn(header, "在线", online_btn_cb);
     create_header_btn(header, "刷新", refresh_btn_cb);
 
     lv_obj_t *body = lv_obj_create(scr);
@@ -345,33 +374,42 @@ void page_file_browser_update(void)
     bool tx_present = panel_transport_sle_tx_is_connected();
     bool rx_ready = panel_transport_sle_rx_is_connected();
     bool worker_ready = panel_offline_job_is_ready();
+    bool rx_claimed = panel_transport_sle_can_control_rx();
 
     if (g_rendered_seq == mgr->seq &&
         g_rendered_selected_index == mgr->selected_index &&
         g_rendered_busy == busy &&
         g_rendered_tx_present == tx_present &&
         g_rendered_rx_ready == rx_ready &&
-        g_rendered_worker_ready == worker_ready) {
+        g_rendered_worker_ready == worker_ready &&
+        g_rendered_rx_claimed == rx_claimed) {
         return;
     }
 
-    snprintf(buf, sizeof(buf), "%s %s | %u个文件 | %s",
-             mgr->mount_label,
-             mgr->mounted ? "已挂载" : "未挂载",
-             (unsigned int)mgr->count,
-             mgr->last_error);
+    if (mgr->scanning) {
+        snprintf(buf, sizeof(buf), "%s 正在扫描...", mgr->mount_label);
+    } else {
+        snprintf(buf, sizeof(buf), "%s %s | %u个文件 | %s",
+                 mgr->mount_label,
+                 mgr->mounted ? "已挂载" : "未挂载",
+                 (unsigned int)mgr->count,
+                 mgr->last_error);
+    }
     lv_label_set_text(g_lbl_status, buf);
     lv_obj_set_style_text_color(g_lbl_status,
-        mgr->mounted ? COLOR_LASER_ORANGE : COLOR_LASER_RED, 0);
+        mgr->scanning ? COLOR_LASER_BLUE :
+        (mgr->mounted ? COLOR_LASER_ORANGE : COLOR_LASER_RED), 0);
 
     const panel_file_entry_t *selected = panel_file_manager_get_selected();
     bool has_selection = selected != NULL && !busy && !tx_present;
-    bool can_start = has_selection && rx_ready && worker_ready;
+    bool can_start = has_selection && rx_ready && rx_claimed && worker_ready;
     if (selected != NULL) {
         if (busy) {
             snprintf(buf, sizeof(buf), "正在发送：%s", selected->name);
         } else if (!rx_ready) {
             snprintf(buf, sizeof(buf), "已选择：%s | 等待RX连接", selected->name);
+        } else if (!rx_claimed) {
+            snprintf(buf, sizeof(buf), "已选择：%s | 等待RX控制权", selected->name);
         } else if (!worker_ready) {
             snprintf(buf, sizeof(buf), "已选择：%s | 任务未就绪", selected->name);
         } else {
@@ -410,14 +448,24 @@ void page_file_browser_update(void)
             (mgr->selected_index == (int8_t)i) ? COLOR_LASER_GREEN :
             (entry->selectable ? COLOR_TEXT_BRIGHT : COLOR_TEXT_MUTED), 0);
 
-        snprintf(buf, sizeof(buf), "%s | %lu B | %lu lines",
-                 panel_file_manager_type_text(entry->type),
-                 (unsigned long)entry->size_bytes,
-                 (unsigned long)entry->line_count);
+        if (entry->line_count == 0U) {
+            snprintf(buf, sizeof(buf), "%s | %lu B | 待统计",
+                     panel_file_manager_type_text(entry->type),
+                     (unsigned long)entry->size_bytes);
+        } else {
+            snprintf(buf, sizeof(buf), "%s | %lu B | %lu lines",
+                     panel_file_manager_type_text(entry->type),
+                     (unsigned long)entry->size_bytes,
+                     (unsigned long)entry->line_count);
+        }
         lv_label_set_text(g_rows[i].meta, buf);
     }
 
-    if (selected != NULL && mgr->selected_index >= 0) {
+    if (busy) {
+        lv_label_set_text(g_lbl_preview, "离线任务执行中，预览暂停");
+    } else if (mgr->scanning) {
+        lv_label_set_text(g_lbl_preview, "正在扫描SD卡...");
+    } else if (selected != NULL && mgr->selected_index >= 0) {
         char preview[PANEL_FILE_PREVIEW_MAX];
         if (panel_file_manager_read_preview((uint8_t)mgr->selected_index,
                                             preview, sizeof(preview))) {
@@ -435,4 +483,5 @@ void page_file_browser_update(void)
     g_rendered_tx_present = tx_present;
     g_rendered_rx_ready = rx_ready;
     g_rendered_worker_ready = worker_ready;
+    g_rendered_rx_claimed = rx_claimed;
 }

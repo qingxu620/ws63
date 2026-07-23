@@ -63,7 +63,9 @@
 typedef struct {
     uint16_t conn_id;
     uint16_t len;
+    bool owner_bypass;
     uint32_t serial;
+    uint32_t diag_epoch;
     uint32_t cb_start_ms;
     uint32_t enqueue_ms;
     uint32_t ready_ms;
@@ -85,6 +87,8 @@ static const uint8_t g_receiver_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x1
 static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
 static const uint8_t g_screen_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
 static volatile uint16_t g_owner_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_tx_conn_id = SLE_CONN_INVALID;
+static volatile uint16_t g_screen_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_phone_conn_id = SLE_CONN_INVALID;
 static volatile uint16_t g_conn_ids[SLE_JOB_ROUTE_MAX_CONNECTIONS];
 static volatile bool g_conn_table_ready = false;
@@ -123,6 +127,7 @@ static volatile uint32_t g_rx_diag_work_count = 0;
 static volatile uint32_t g_rx_diag_max_callback_to_work_ms = 0;
 static volatile uint32_t g_rx_diag_max_work_wait_ms = 0;
 static volatile uint32_t g_rx_diag_max_work_process_ms = 0;
+static volatile uint32_t g_rx_diag_epoch = 0;
 static volatile uint32_t g_rx_diag_notify_count = 0;
 static volatile uint32_t g_rx_diag_notify_fail_count = 0;
 static volatile uint32_t g_rx_diag_notify_slow_count = 0;
@@ -134,8 +139,25 @@ static uint8_t sle_uuid_base[] = {
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+static bool rx_diag_record_callback(uint32_t epoch, uint32_t callback_ms)
+{
+    uint32_t irq_state = osal_irq_lock();
+    if (epoch != g_rx_diag_epoch) {
+        osal_irq_restore(irq_state);
+        return false;
+    }
+    g_rx_diag_callback_count++;
+    if (callback_ms > g_rx_diag_max_callback_ms) {
+        g_rx_diag_max_callback_ms = callback_ms;
+    }
+    osal_irq_restore(irq_state);
+    return true;
+}
+
 void sle_job_route_server_reset_diag(void)
 {
+    uint32_t irq_state = osal_irq_lock();
+    g_rx_diag_epoch++;
     g_rx_diag_callback_count = 0;
     g_rx_diag_max_callback_gap_ms = 0;
     g_rx_diag_max_callback_ms = 0;
@@ -152,6 +174,7 @@ void sle_job_route_server_reset_diag(void)
     g_rx_cb_last_owner_ms = 0;
     g_rx_cb_slow_count = 0;
     g_rx_work_slow_count = 0;
+    osal_irq_restore(irq_state);
 }
 
 void sle_job_route_server_get_diag(sle_job_route_diag_t *diag)
@@ -160,6 +183,7 @@ void sle_job_route_server_get_diag(sle_job_route_diag_t *diag)
         return;
     }
 
+    uint32_t irq_state = osal_irq_lock();
     diag->callback_count = g_rx_diag_callback_count;
     diag->callback_slow_count = g_rx_cb_slow_count;
     diag->max_callback_gap_ms = g_rx_diag_max_callback_gap_ms;
@@ -175,6 +199,7 @@ void sle_job_route_server_get_diag(sle_job_route_diag_t *diag)
     diag->max_notify_ms = g_rx_diag_max_notify_ms;
     diag->work_dropped = g_rx_work_dropped;
     diag->work_max_used = g_rx_work_max_used;
+    osal_irq_restore(irq_state);
 }
 
 static void conn_table_reset(void)
@@ -183,6 +208,8 @@ static void conn_table_reset(void)
         g_conn_ids[i] = SLE_CONN_INVALID;
     }
     g_owner_conn_id = SLE_CONN_INVALID;
+    g_tx_conn_id = SLE_CONN_INVALID;
+    g_screen_conn_id = SLE_CONN_INVALID;
     g_phone_conn_id = SLE_CONN_INVALID;
     g_conn_table_ready = true;
 }
@@ -272,6 +299,28 @@ static sle_job_rx_cb_diag_t rx_cb_diag_parse_packet(const uint8_t *data, uint16_
     return diag;
 }
 
+/*
+ * Ownership negotiation and read-only status queries must reach the manager
+ * before a writer owns the route.  This is deliberately a shallow routing
+ * check only; packet CRC, sequence and payload validation remain in manager.
+ */
+static bool rx_packet_allows_nonowner(const uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len < SLE_JOB_PACKET_HEADER_LEN ||
+        rx_diag_le16(&data[0]) != SLE_JOB_PACKET_MAGIC) {
+        return false;
+    }
+    uint16_t payload_len = rx_diag_le16(&data[6]);
+    if (payload_len > SLE_JOB_PACKET_MAX_PAYLOAD ||
+        len != (uint16_t)(SLE_JOB_PACKET_HEADER_LEN + payload_len)) {
+        return false;
+    }
+    uint8_t type = data[2];
+    return type == SLE_JOB_PKT_OWNER_CLAIM ||
+           type == SLE_JOB_PKT_OWNER_RELEASE ||
+           type == SLE_JOB_PKT_STATUS_REQ;
+}
+
 static void rx_work_queue_clear_locked(void)
 {
     g_rx_work_head = 0;
@@ -282,18 +331,19 @@ static void rx_work_queue_clear_locked(void)
 #endif
 }
 
-static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t len, uint32_t cb_start_ms)
+static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t len,
+                               bool owner_bypass, uint32_t cb_start_ms)
 {
     if (!g_rx_work_sync_ready || !g_rx_work_accepting || data == NULL || len == 0 ||
         len > SLE_JOB_PACKET_MAX_SIZE) {
         return false;
     }
 
+    uint32_t callback_epoch = g_rx_diag_epoch;
     sle_job_rx_cb_diag_t diag = rx_cb_diag_parse_packet(data, len);
     uint32_t prev_cb_ms = g_rx_cb_last_owner_ms;
     uint32_t cb_gap_ms = (prev_cb_ms == 0U) ? 0U : (uint32_t)(cb_start_ms - prev_cb_ms);
     g_rx_cb_last_owner_ms = cb_start_ms;
-    g_rx_diag_callback_count++;
     if (cb_gap_ms > g_rx_diag_max_callback_gap_ms) {
         g_rx_diag_max_callback_gap_ms = cb_gap_ms;
     }
@@ -301,6 +351,7 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
     uint32_t pre_lock_ms = t_lock - cb_start_ms;
     osal_mutex_lock(&g_rx_work_mutex);
     uint32_t lock_ms = (uint32_t)uapi_systick_get_ms() - t_lock;
+    uint32_t serial = g_rx_work_enqueued + 1U;
 
     uint8_t next = (uint8_t)((g_rx_work_head + 1U) % SLE_JOB_RX_WORK_QUEUE_SIZE);
     if (next == g_rx_work_tail) {
@@ -310,24 +361,27 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
             g_rx_work_max_used = used;
         }
         osal_mutex_unlock(&g_rx_work_mutex);
+        uint32_t cb_ms = (uint32_t)uapi_systick_get_ms() - cb_start_ms;
+        (void)rx_diag_record_callback(callback_epoch, cb_ms);
         osal_printk("[RX_CB_DROP] conn=%u len=%u used=%u drops=%u lock_ms=%u cb_ms=%u\r\n",
                     (unsigned int)conn_id, (unsigned int)len, (unsigned int)used,
                     (unsigned int)g_rx_work_dropped, (unsigned int)lock_ms,
-                    (unsigned int)((uint32_t)uapi_systick_get_ms() - cb_start_ms));
+                    (unsigned int)cb_ms);
         return false;
     }
 
-    uint32_t serial = g_rx_work_enqueued + 1U;
     uint32_t t_copy = (uint32_t)uapi_systick_get_ms();
     sle_job_rx_work_item_t *item = &g_rx_work_queue[g_rx_work_head];
     item->conn_id = conn_id;
     item->len = len;
+    item->owner_bypass = owner_bypass;
     item->serial = serial;
+    item->diag_epoch = callback_epoch;
     item->cb_start_ms = cb_start_ms;
-    item->enqueue_ms = t_copy;
     (void)memcpy_s(item->data, sizeof(item->data), data, len);
     uint32_t copy_ms = (uint32_t)uapi_systick_get_ms() - t_copy;
     uint32_t ready_ms = (uint32_t)uapi_systick_get_ms();
+    item->enqueue_ms = ready_ms;
     item->ready_ms = ready_ms;
     g_rx_work_head = next;
     g_rx_work_enqueued++;
@@ -346,9 +400,7 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
 #endif
 
     uint32_t cb_ms = (uint32_t)uapi_systick_get_ms() - cb_start_ms;
-    if (cb_ms > g_rx_diag_max_callback_ms) {
-        g_rx_diag_max_callback_ms = cb_ms;
-    }
+    bool same_diag_epoch = rx_diag_record_callback(callback_epoch, cb_ms);
     bool cb_phase_slow = cb_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          pre_lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
                          lock_ms >= SLE_JOB_RX_CB_SLOW_MS ||
@@ -358,7 +410,7 @@ static bool rx_work_queue_push(uint16_t conn_id, const uint8_t *data, uint16_t l
     bool queue_pressure = used > (SLE_JOB_RX_WORK_QUEUE_SIZE / 2U);
     bool cb_slow = cb_phase_slow || queue_pressure;
     bool slow_log_due = false;
-    if (cb_slow) {
+    if (cb_slow && same_diag_epoch) {
         g_rx_cb_slow_count++;
         slow_log_due = g_rx_cb_slow_last_log_ms == 0U ||
                        (uint32_t)(cb_start_ms - g_rx_cb_slow_last_log_ms) >=
@@ -418,18 +470,12 @@ static int rx_work_task(void *arg)
         }
 
         uint32_t t_start = (uint32_t)uapi_systick_get_ms();
+        uint32_t diag_epoch = item.diag_epoch;
         uint32_t wait_ms = t_start - item.enqueue_ms;
         uint32_t cb_to_work_ms = t_start - item.cb_start_ms;
         uint32_t ready_to_work_ms = t_start - item.ready_ms;
-        g_rx_diag_work_count++;
-        if (wait_ms > g_rx_diag_max_work_wait_ms) {
-            g_rx_diag_max_work_wait_ms = wait_ms;
-        }
-        if (cb_to_work_ms > g_rx_diag_max_callback_to_work_ms) {
-            g_rx_diag_max_callback_to_work_ms = cb_to_work_ms;
-        }
         sle_job_rx_cb_diag_t diag = rx_cb_diag_parse_packet(item.data, item.len);
-        if (item.conn_id == g_owner_conn_id && g_packet_cb != NULL) {
+        if ((item.owner_bypass || item.conn_id == g_owner_conn_id) && g_packet_cb != NULL) {
             g_packet_cb(item.conn_id, item.data, item.len);
         } else {
             osal_printk("[RX_WORK_DROP] conn=%u owner=%u len=%u wait_ms=%u cb=%u\r\n",
@@ -438,14 +484,24 @@ static int rx_work_task(void *arg)
                         (unsigned int)(g_packet_cb != NULL));
         }
         uint32_t proc_ms = (uint32_t)uapi_systick_get_ms() - t_start;
-        if (proc_ms > g_rx_diag_max_work_process_ms) {
-            g_rx_diag_max_work_process_ms = proc_ms;
+        bool same_diag_epoch = diag_epoch == g_rx_diag_epoch;
+        if (same_diag_epoch) {
+            g_rx_diag_work_count++;
+            if (wait_ms > g_rx_diag_max_work_wait_ms) {
+                g_rx_diag_max_work_wait_ms = wait_ms;
+            }
+            if (cb_to_work_ms > g_rx_diag_max_callback_to_work_ms) {
+                g_rx_diag_max_callback_to_work_ms = cb_to_work_ms;
+            }
+            if (proc_ms > g_rx_diag_max_work_process_ms) {
+                g_rx_diag_max_work_process_ms = proc_ms;
+            }
         }
         bool work_slow = wait_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
                          proc_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
                          cb_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS ||
                          ready_to_work_ms >= SLE_JOB_RX_WORK_SLOW_MS;
-        if (work_slow) {
+        if (work_slow && same_diag_epoch) {
             uint32_t now = (uint32_t)uapi_systick_get_ms();
             g_rx_work_slow_count++;
             if (g_rx_work_slow_last_log_ms == 0U ||
@@ -643,19 +699,22 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         write_cb_para->type != SSAP_PROPERTY_TYPE_VALUE) {
         const char *write_tag =
             (write_cb_para->type == SSAP_DESCRIPTOR_CLIENT_CONFIGURATION) ? "RX_CCCD" : "RX_CONTROL_WRITE";
-        osal_printk("[%s] conn=%u handle=%u data_handle=%u type=%u len=%u "
-                    "need_rsp=%u req=%u status=0x%x rsp_sent=%u rsp_ret=0x%x\r\n",
-                    write_tag,
-                    (unsigned int)conn_id,
-                    (unsigned int)write_cb_para->handle,
-                    (unsigned int)g_data_property_handle,
-                    (unsigned int)write_cb_para->type,
-                    (unsigned int)write_cb_para->length,
-                    (unsigned int)write_cb_para->need_rsp,
-                    (unsigned int)write_cb_para->request_id,
-                    (unsigned int)status,
-                    (unsigned int)write_rsp_sent,
-                    (unsigned int)write_rsp_ret);
+        if (status != ERRCODE_SLE_SUCCESS ||
+            (write_rsp_sent && write_rsp_ret != ERRCODE_SLE_SUCCESS)) {
+            osal_printk("[%s] conn=%u handle=%u data_handle=%u type=%u len=%u "
+                        "need_rsp=%u req=%u status=0x%x rsp_sent=%u rsp_ret=0x%x\r\n",
+                        write_tag,
+                        (unsigned int)conn_id,
+                        (unsigned int)write_cb_para->handle,
+                        (unsigned int)g_data_property_handle,
+                        (unsigned int)write_cb_para->type,
+                        (unsigned int)write_cb_para->length,
+                        (unsigned int)write_cb_para->need_rsp,
+                        (unsigned int)write_cb_para->request_id,
+                        (unsigned int)status,
+                        (unsigned int)write_rsp_sent,
+                        (unsigned int)write_rsp_ret);
+        }
         return;
     }
 
@@ -675,18 +734,28 @@ static void ssaps_write_request_cbk(uint8_t server_id, uint16_t conn_id,
         return;
     }
 
-    if (g_owner_conn_id == SLE_CONN_INVALID) {
+    bool owner_bypass = rx_packet_allows_nonowner(write_cb_para->value,
+                                                  write_cb_para->length);
+    bool is_screen_conn = conn_id == g_screen_conn_id;
+    uint32_t irq_state = osal_irq_lock();
+    if (!owner_bypass && !is_screen_conn && g_owner_conn_id == SLE_CONN_INVALID) {
+        /* Backwards compatibility for existing TX firmware: its first normal
+         * job/control packet still acquires the otherwise idle route. */
         g_owner_conn_id = conn_id;
     }
+    osal_irq_restore(irq_state);
 
-    if (conn_id != g_owner_conn_id) {
-        osal_printk("[job_rx] drop non-owner write conn_id=%u owner=%u len=%u\r\n",
-                    conn_id, g_owner_conn_id, write_cb_para->length);
-        return;
-    }
+    /* Valid fixed peers are dispatched even when they are not the owner so
+     * manager can return a directed OWNER_BUSY NACK instead of silently
+     * discarding the request.  The manager still rejects it before mutation. */
+    /* Keep the item dispatchable even if ownership changes while it waits in
+     * the queue.  Manager performs the authoritative owner check and can
+     * return a directed OWNER_BUSY response instead of dropping it here. */
+    owner_bypass = true;
 
     if (g_packet_cb != NULL) {
-        if (!rx_work_queue_push(conn_id, write_cb_para->value, write_cb_para->length, t_cb)) {
+        if (!rx_work_queue_push(conn_id, write_cb_para->value, write_cb_para->length,
+                                owner_bypass, t_cb)) {
             osal_printk("[RX_CB_DROP] reason=enqueue_fail conn=%u len=%u accepting=%u cb=%u\r\n",
                         (unsigned int)conn_id, (unsigned int)write_cb_para->length,
                         (unsigned int)g_rx_work_accepting,
@@ -915,7 +984,11 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
                     is_tx ? "TX" : (is_screen ? "Screen" : "Phone"),
                     (unsigned int)conn_id);
         conn_table_add(conn_id);
-        if (is_phone) {
+        if (is_tx) {
+            g_tx_conn_id = conn_id;
+        } else if (is_screen) {
+            g_screen_conn_id = conn_id;
+        } else if (is_phone) {
             g_phone_conn_id = conn_id;
             /*
              * The phone needs the larger data length for STATUS responses,
@@ -937,7 +1010,10 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             unused(adv_ret);
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        uint32_t owner_irq = osal_irq_lock();
         bool was_owner = (conn_id == g_owner_conn_id);
+        bool was_tx = (conn_id == g_tx_conn_id);
+        bool was_screen = (conn_id == g_screen_conn_id);
         bool was_phone = (conn_id == g_phone_conn_id);
         const char *disc_source = (disc_reason == SLE_DISCONNECT_BY_REMOTE) ? "remote" :
                                   ((disc_reason == SLE_DISCONNECT_BY_LOCAL) ? "local" : "unknown");
@@ -948,11 +1024,20 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
                     (unsigned int)disc_reason,
                     disc_source);
         (void)conn_table_remove(conn_id);
+        if (was_tx) {
+            g_tx_conn_id = SLE_CONN_INVALID;
+        }
+        if (was_screen) {
+            g_screen_conn_id = SLE_CONN_INVALID;
+        }
         if (was_phone) {
             g_phone_conn_id = SLE_CONN_INVALID;
         }
         if (was_owner) {
             g_owner_conn_id = SLE_CONN_INVALID;
+        }
+        osal_irq_restore(owner_irq);
+        if (was_owner) {
             rx_work_queue_clear();
         }
         if (g_server_stopping) {
@@ -1314,7 +1399,13 @@ bool sle_job_route_server_is_connected(void)
 
 errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
 {
-    if (data == NULL || len == 0 || g_owner_conn_id == SLE_CONN_INVALID || g_resp_property_handle == 0) {
+    return sle_job_route_server_send_packet_to(g_owner_conn_id, data, len);
+}
+
+errcode_t sle_job_route_server_send_packet_to(uint16_t conn_id, const void *data, uint16_t len)
+{
+    if (data == NULL || len == 0 || conn_id == SLE_CONN_INVALID ||
+        !conn_table_contains(conn_id) || g_resp_property_handle == 0) {
         return ERRCODE_SLE_FAIL;
     }
 
@@ -1324,7 +1415,7 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
     param.value_len = len;
     param.value = (uint8_t *)data;
     uint32_t t_notify = (uint32_t)uapi_systick_get_ms();
-    errcode_t ret = ssaps_notify_indicate(g_server_id, g_owner_conn_id, &param);
+    errcode_t ret = ssaps_notify_indicate(g_server_id, conn_id, &param);
     uint32_t call_ms = (uint32_t)uapi_systick_get_ms() - t_notify;
     g_rx_diag_notify_count++;
     if (ret != ERRCODE_SLE_SUCCESS) {
@@ -1342,7 +1433,7 @@ errcode_t sle_job_route_server_send_packet(const void *data, uint16_t len)
                     (unsigned int)len,
                     (unsigned int)ret,
                     (unsigned int)call_ms,
-                    (unsigned int)g_owner_conn_id);
+                    (unsigned int)conn_id);
     }
     return ret;
 }
@@ -1393,6 +1484,52 @@ errcode_t sle_job_route_server_update_panel_status_adv(const sle_job_panel_statu
 uint16_t sle_job_route_server_get_owner_conn_id(void)
 {
     return g_owner_conn_id;
+}
+
+uint8_t sle_job_route_server_get_owner_role(void)
+{
+    uint16_t owner_conn_id = g_owner_conn_id;
+    if (owner_conn_id == SLE_CONN_INVALID || !conn_table_contains(owner_conn_id)) {
+        return SLE_JOB_PANEL_OWNER_NONE;
+    }
+    return owner_conn_id == g_screen_conn_id ? SLE_JOB_PANEL_OWNER_SCREEN :
+                                               SLE_JOB_PANEL_OWNER_HOST;
+}
+
+bool sle_job_route_server_is_screen_conn(uint16_t conn_id)
+{
+    return conn_id != SLE_CONN_INVALID && conn_id == g_screen_conn_id &&
+           conn_table_contains(conn_id);
+}
+
+bool sle_job_route_server_claim_owner(uint16_t conn_id, uint8_t owner_role)
+{
+    if (owner_role != SLE_JOB_PANEL_OWNER_SCREEN || conn_id == SLE_CONN_INVALID) {
+        return false;
+    }
+
+    uint32_t irq_state = osal_irq_lock();
+    bool valid_screen = conn_id == g_screen_conn_id && conn_table_contains(conn_id);
+    bool claimed = valid_screen &&
+                   (g_owner_conn_id == SLE_CONN_INVALID ||
+                    g_owner_conn_id == conn_id ||
+                    g_owner_conn_id == g_tx_conn_id);
+    if (claimed) {
+        g_owner_conn_id = conn_id;
+    }
+    osal_irq_restore(irq_state);
+    return claimed;
+}
+
+bool sle_job_route_server_release_owner(uint16_t conn_id)
+{
+    uint32_t irq_state = osal_irq_lock();
+    bool released = conn_id != SLE_CONN_INVALID && g_owner_conn_id == conn_id;
+    if (released) {
+        g_owner_conn_id = SLE_CONN_INVALID;
+    }
+    osal_irq_restore(irq_state);
+    return released;
 }
 
 uint8_t sle_job_route_server_get_connection_count(void)

@@ -198,7 +198,7 @@ static errcode_t wait_rx_link(uint32_t timeout_ms)
         if ((uint32_t)((uint32_t)uapi_systick_get_ms() - start) >= timeout_ms) {
             return ERRCODE_SLE_TIMEOUT;
         }
-        panel_transport_sle_poll();
+        /* The dedicated panel_sle_listen task advances connection state. */
         osal_msleep(20);
     }
     return ERRCODE_SUCC;
@@ -338,7 +338,6 @@ static bool wait_data_window(uint16_t seq, uint32_t data_index,
             return false;
         }
 
-        panel_transport_sle_poll();
         osal_msleep(PANEL_OFFLINE_DATA_WINDOW_POLL_MS);
     }
 
@@ -372,7 +371,6 @@ static bool wait_data_drain(uint32_t target_offset)
                         (unsigned int)panel_transport_sle_rx_is_connected());
             return false;
         }
-        panel_transport_sle_poll();
         osal_msleep(10);
     }
 
@@ -828,17 +826,19 @@ static void poll_execution_until_idle(void)
             last_status = now;
         }
 
-        if (g_model.state == SYS_STATE_RUNNING) {
+        panel_model_t model;
+        panel_model_get_snapshot(&model);
+        if (model.state == SYS_STATE_RUNNING) {
             saw_executing = true;
         }
-        if (g_model.state == SYS_STATE_DONE ||
-            (saw_executing && g_model.state == SYS_STATE_NO_JOB)) {
+        if (model.state == SYS_STATE_DONE ||
+            (saw_executing && model.state == SYS_STATE_NO_JOB)) {
             osal_printk("[PANEL_OFFLINE] execution complete state=%s\r\n",
-                        panel_model_state_text(g_model.state));
+                        panel_model_state_text(model.state));
             panel_model_offline_job_done();
             return;
         }
-        if (g_model.state == SYS_STATE_ERROR || g_model.state == SYS_STATE_LINK_LOST) {
+        if (model.state == SYS_STATE_ERROR || model.state == SYS_STATE_LINK_LOST) {
             return;
         }
         osal_msleep(50);
@@ -888,6 +888,17 @@ static void run_offline_job(uint8_t index)
         return;
     }
 
+    /* OWNER_CLAIM has already been acknowledged by RX.  Reassert the model
+     * boundary before resetting the local upload fields so the UI cannot
+     * briefly fall back to display-only during the first DATA packet. */
+    panel_model_set_control_claimed(true);
+    panel_model_t claim_model;
+    panel_model_get_snapshot(&claim_model);
+    if (!claim_model.control_claimed || claim_model.owner != PANEL_OWNER_SCREEN) {
+        panel_model_offline_error("OWNER_NOT_CONFIRMED");
+        osal_printk("[PANEL_OFFLINE] owner model not confirmed before upload\r\n");
+        return;
+    }
     panel_model_offline_upload_begin(entry->name, entry->size_bytes, total_lines);
 
     uint16_t crc = 0;

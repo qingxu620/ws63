@@ -61,8 +61,15 @@
 #define SLE_JOB_TASK_STACK_SIZE_SLE 0x4000
 #define SLE_JOB_TASK_PRIO_JOB_UART 3
 #define SLE_JOB_TASK_PRIO_SLE 2
-#define SLE_JOB_TASK_PRIO_JOB_EXECUTOR 4
 #define SLE_JOB_TASK_PRIO_MOTION 4
+#define SLE_JOB_TASK_PRIO_JOB_EXECUTOR 5
+
+/* LiteOS uses lower numbers for higher priorities.  The timer-woken motion
+ * task must be able to preempt the cache/parser producer instead of waiting
+ * for the producer's two-tick (20 ms) same-priority time slice. */
+#if SLE_JOB_TASK_PRIO_JOB_EXECUTOR <= SLE_JOB_TASK_PRIO_MOTION
+#error "SLE job executor must run below the motion task"
+#endif
 
 #define SLE_JOB_MTU_SIZE 512U
 #define SLE_JOB_CONN_INTERVAL_UNIT_US 125U
@@ -84,6 +91,8 @@
 #define SLE_JOB_MOTION_TIMER_THRESHOLD_US 200U
 #define SLE_JOB_MOTION_TIMER_TAIL_US 35U
 #define SLE_JOB_MOTION_TIMER_TIMEOUT_MARGIN_MS 20U
+#define SLE_JOB_MOTION_HOLD_ACK_TIMEOUT_MS 500U
+#define SLE_JOB_EXEC_HOLD_QUIESCE_TIMEOUT_MS 500U
 #define SLE_JOB_MOTION_CATCHUP_MAX_STEPS 1U
 #define SLE_JOB_MOTION_MOVE_SLOW_MS 500U
 #define SLE_JOB_MOTION_MOVE_SLOW_LOG_ENABLE 0
@@ -122,11 +131,6 @@
 #define SLE_JOB_EXEC_PREROLL_MAX_BYTES \
     (SLE_JOB_CACHE_SIZE - SLE_JOB_EXEC_PREROLL_CACHE_HEADROOM_BYTES)
 
-#define SLE_JOB_DIAG_LOG 0
-#define SLE_JOB_DIAG_LOG_MAX_DATA 8U
-#define SLE_JOB_TIMING_LOG 1
-#define SLE_JOB_TIMING_FIRST_PACKETS 0U
-#define SLE_JOB_TIMING_EVERY_PACKETS 0U
 #define SLE_JOB_TIMING_SLOW_MS 50U
 
 #define SLE_JOB_TX_DATA_CHUNK_MAX 300U

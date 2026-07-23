@@ -113,6 +113,8 @@ static uint16_t g_panel_packet_seq = 1;
 static uint32_t g_panel_status_last_ms = 0;
 static volatile bool g_panel_status_pending = false;
 static uint8_t g_panel_local_job_state = JOB_STATE_IDLE;
+static uint8_t g_panel_pause_origin_state = JOB_STATE_IDLE;
+static bool g_panel_pause_origin_valid = false;
 static bool g_panel_local_exec_started = false;
 static uint32_t g_panel_local_last_error = JOB_STATUS_OK;
 static bool g_panel_local_terminal_confirmed = false;
@@ -235,6 +237,8 @@ static void clear_local_job_state(void)
     g_final_data_ack_logged = false;
     clear_async_data_retx();
     g_panel_local_job_state = JOB_STATE_IDLE;
+    g_panel_pause_origin_state = JOB_STATE_IDLE;
+    g_panel_pause_origin_valid = false;
     g_panel_local_exec_started = false;
     g_panel_local_last_error = JOB_STATUS_OK;
     g_panel_local_terminal_confirmed = false;
@@ -601,19 +605,9 @@ static uint16_t payload_len_for_type(uint8_t type, const void *payload, uint16_t
 
 static bool tx_should_log_timing(uint8_t type, uint32_t data_index, uint32_t total_ms)
 {
-#if JOB_TX_TIMING_LOG
-    if (type != PKT_JOB_DATA) {
-        return true;
-    }
-    return data_index <= JOB_TX_TIMING_FIRST_PACKETS ||
-           (JOB_TX_TIMING_EVERY_PACKETS > 0U && (data_index % JOB_TX_TIMING_EVERY_PACKETS) == 0U) ||
-           total_ms >= JOB_TX_TIMING_SLOW_MS;
-#else
     unused(type);
     unused(data_index);
-    unused(total_ms);
-    return false;
-#endif
+    return total_ms >= JOB_TX_TIMING_SLOW_MS;
 }
 
 static uint32_t tx_ack_timeout_ms_for_type(uint8_t type)
@@ -973,9 +967,7 @@ static bool handle_async_data_ack(const ack_payload_t *ack)
                     (unsigned int)(now_ms - g_final_data_submit_ms));
     }
 
-    if ((ack_gap_ms >= JOB_TX_TIMING_SLOW_MS) ||
-        (JOB_TX_TIMING_EVERY_PACKETS > 0U &&
-         ((uint32_t)ack->ack_seq % JOB_TX_TIMING_EVERY_PACKETS) == 0U)) {
+    if (ack_gap_ms >= JOB_TX_TIMING_SLOW_MS) {
         uint32_t delta = (ack->offset >= old_ack_offset) ?
                          (ack->offset - old_ack_offset) : 0U;
         osal_printk("[TX_DATA_ASYNC_ACK] t=%u seq=%u off=%u old_off=%u delta=%u "
@@ -1268,8 +1260,8 @@ static void response_cb(const uint8_t *data, uint16_t length)
             osal_sem_up(&g_ack_sem);
             sem_ms = (uint32_t)uapi_systick_get_ms() - sem_start_ms;
         }
-        if (ack.ack_type != PKT_JOB_DATA || ack.status != JOB_STATUS_OK ||
-            wait_cost_ms >= JOB_TX_TIMING_SLOW_MS || sem_ms > 0U) {
+        if (ack.status != JOB_STATUS_OK || wait_cost_ms >= JOB_TX_TIMING_SLOW_MS ||
+            sem_ms > 0U) {
             osal_printk("[TX_ACK_TRACE] t=%u ack_type=0x%02x ack_seq=%u wait_seq=%u st=%u "
                         "off=%u credit=%u active=%u wait_ms=%u sem_ms=%u\r\n",
                         (unsigned int)ack_cb_ms,
@@ -1865,12 +1857,21 @@ static void handle_data_byte(uint8_t ch)
 
 static errcode_t send_simple_control(uint8_t type)
 {
+    uint8_t state_before_control = g_panel_local_job_state;
     errcode_t ret = send_packet_wait_ack(type, NULL, 0);
     if (ret == ERRCODE_SUCC) {
         if (type == PKT_EXEC_STOP) {
+            if (state_before_control != JOB_STATE_PAUSED) {
+                g_panel_pause_origin_state = state_before_control;
+                g_panel_pause_origin_valid = true;
+            }
             g_panel_local_job_state = JOB_STATE_PAUSED;
         } else if (type == PKT_EXEC_RESUME) {
-            g_panel_local_job_state = JOB_STATE_EXECUTING;
+            g_panel_local_job_state = g_panel_pause_origin_valid ?
+                                      g_panel_pause_origin_state :
+                                      JOB_STATE_EXECUTING;
+            g_panel_pause_origin_state = JOB_STATE_IDLE;
+            g_panel_pause_origin_valid = false;
         }
         tx_panel_publish_local_status(true);
         host_sendf("@ACK type=%u seq=0 status=0\r\n", (unsigned int)type);
@@ -2043,6 +2044,8 @@ static void handle_command_line(char *line)
         g_preroll_signaled = false;
         g_rx_auto_start_enabled = rx_auto_start;
         g_panel_local_job_state = JOB_STATE_RECEIVING_JOB;
+        g_panel_pause_origin_state = JOB_STATE_IDLE;
+        g_panel_pause_origin_valid = false;
         g_panel_local_exec_started = false;
         g_panel_local_last_error = JOB_STATUS_OK;
         g_panel_local_terminal_confirmed = false;

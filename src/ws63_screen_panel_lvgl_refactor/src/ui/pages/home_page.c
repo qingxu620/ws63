@@ -83,7 +83,7 @@ static void status_bar_click_cb(lv_event_t *e)
     ui_manager_switch_page(PAGE_DIAGNOSTICS);
 }
 
-static void create_status_bar(lv_obj_t *parent)
+static void create_status_bar(lv_obj_t *parent, const panel_model_t *model)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_set_size(bar, 320, 32);
@@ -113,7 +113,7 @@ static void create_status_bar(lv_obj_t *parent)
     g_lbl_title = create_label(bar, PANEL_FONT_CN, COLOR_TEXT_BRIGHT);
     lv_label_set_text(g_lbl_title, "WS63 激光主控");
     lv_obj_set_style_text_color(g_lbl_title,
-        g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
+        model->view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_YELLOW : COLOR_LASER_BLUE, 0);
 
     lv_obj_t *spacer = lv_obj_create(bar);
     lv_obj_set_size(spacer, 1, 1);
@@ -150,7 +150,7 @@ static void create_status_bar(lv_obj_t *parent)
     lv_label_set_text(g_lbl_sle, "SLE");
 }
 
-static void create_progress_block(lv_obj_t *parent)
+static void create_progress_block(lv_obj_t *parent, const panel_model_t *model)
 {
     lv_obj_t *block = create_card(parent, 114, 152);
     lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
@@ -164,7 +164,7 @@ static void create_progress_block(lv_obj_t *parent)
     lv_label_set_text(g_lbl_pct, "0%");
 
     g_lbl_substate = create_label(block, PANEL_FONT_CN, COLOR_TEXT_MUTED);
-    lv_label_set_text(g_lbl_substate, panel_model_state_detail(g_model.state));
+    lv_label_set_text(g_lbl_substate, panel_model_state_detail(model->state));
     lv_obj_set_width(g_lbl_substate, 100);
     lv_obj_set_style_text_align(g_lbl_substate, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(g_lbl_substate, LV_LABEL_LONG_CLIP);
@@ -176,7 +176,20 @@ static void create_progress_block(lv_obj_t *parent)
 static void sd_file_card_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        osal_printk("[HOME] sd file click -> file browser\r\n");
+        panel_model_t model;
+        panel_model_get_snapshot(&model);
+        if (model.view_mode == PANEL_VIEW_ONLINE) {
+            /* Opening SD tasks is an explicit authority switch, not merely a
+             * page navigation.  The transport will claim RX after TX is
+             * safely released. */
+            panel_model_toggle_primary_mode();
+            panel_model_get_snapshot(&model);
+            if (model.view_mode != PANEL_VIEW_OFFLINE) {
+                osal_printk("[HOME] SD task rejected: online job still active\r\n");
+                return;
+            }
+        }
+        osal_printk("[HOME] sd file click -> offline file browser\r\n");
         ui_manager_switch_page(PAGE_FILE_BROWSER);
     }
 }
@@ -255,6 +268,8 @@ static void btn_event_cb(lv_event_t *e)
 
     panel_button_permissions_t perms;
     panel_model_get_button_permissions(&perms);
+    panel_model_t g_model;
+    panel_model_get_snapshot(&g_model);
 
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
     osal_printk("[HOME] action click idx=%u owner=%d mode=%d state=%d start=%d stop=%d abort=%d\r\n",
@@ -268,7 +283,8 @@ static void btn_event_cb(lv_event_t *e)
             break;
         }
         if (g_model.view_mode == PANEL_VIEW_OFFLINE &&
-            (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING)) {
+            (g_model.state == SYS_STATE_NO_JOB || g_model.state == SYS_STATE_BROWSING ||
+             g_model.state == SYS_STATE_DONE)) {
             ui_manager_switch_page(PAGE_FILE_BROWSER);
             break;
         }
@@ -388,8 +404,9 @@ static void create_action_bar(lv_obj_t *parent)
     bind_click(g_lbl_settings, btn_event_cb, (void *)4);
 }
 
-static void apply_state(void)
+static void apply_state(const panel_model_t *model)
 {
+#define g_model (*model)
     panel_button_permissions_t perms;
     panel_model_get_button_permissions(&perms);
     bool start_en = false, pause_en = false, resume_en = false, force_stop_en = false;
@@ -635,16 +652,19 @@ static void apply_state(void)
     lv_label_set_text(g_lbl_pause, perms.requesting_stop ? "暂停中" : "暂停");
     lv_label_set_text(g_lbl_resume, "恢复");
     lv_label_set_text(g_lbl_force_stop, perms.requesting_abort ? "停止中" : "强制停止");
+#undef g_model
 }
 
 void home_page_create(lv_obj_t *parent)
 {
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
     lv_obj_t *scr = parent;
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_screen, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    create_status_bar(scr);
+    create_status_bar(scr, &model);
 
     lv_obj_t *body = lv_obj_create(scr);
     lv_obj_set_size(body, 320, 152);
@@ -658,7 +678,7 @@ void home_page_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(body, 0, 0);
 
-    create_progress_block(body);
+    create_progress_block(body, &model);
     create_info_block(body);
     create_action_bar(scr);
     g_rendered_model_seq = UINT32_MAX;
@@ -669,11 +689,13 @@ void home_page_update(void)
 {
     const panel_file_manager_t *file_mgr = panel_file_manager_get();
     uint32_t file_seq = (file_mgr != NULL) ? file_mgr->seq : 0U;
-    if (g_rendered_model_seq == g_model.seq && g_rendered_file_seq == file_seq) {
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    if (g_rendered_model_seq == model.seq && g_rendered_file_seq == file_seq) {
         return;
     }
 
-    apply_state();
-    g_rendered_model_seq = g_model.seq;
+    apply_state(&model);
+    g_rendered_model_seq = model.seq;
     g_rendered_file_seq = file_seq;
 }

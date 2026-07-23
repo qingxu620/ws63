@@ -206,62 +206,72 @@ void page_diagnostics_create(lv_obj_t *parent)
     g_lbl_focus = create_info_row(sys_card, "调焦", "--", COLOR_TEXT_LIGHT);
     g_lbl_laser = create_info_row(sys_card, "激光输出", "--", COLOR_TEXT_LIGHT);
     g_lbl_last_error = create_info_row(sys_card, "最近错误", "--", COLOR_TEXT_LIGHT);
-    g_lbl_seq = create_info_row(sys_card, "PANEL seq", "--", COLOR_TEXT_LIGHT);
+    g_lbl_seq = create_info_row(sys_card, "RX状态序号", "--", COLOR_TEXT_LIGHT);
 }
 
 void page_diagnostics_update(void)
 {
     char buf[32];
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
 
-    if (g_rendered_seq == g_model.seq) {
+    if (g_rendered_seq == model.seq) {
         return;
     }
 
-    lv_label_set_text(g_lbl_host, g_model.host_connected ? "已连接" : "未连接");
+    lv_label_set_text(g_lbl_host, model.host_connected ? "已连接" : "未连接");
     lv_obj_set_style_text_color(g_lbl_host,
-        g_model.host_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
-    lv_label_set_text(g_lbl_tx, g_model.tx_connected ? "正常" : "断开");
+        model.host_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
+    lv_label_set_text(g_lbl_tx, model.tx_connected ? "正常" : "断开");
     lv_obj_set_style_text_color(g_lbl_tx,
-        g_model.tx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
-    lv_label_set_text(g_lbl_rx, g_model.rx_connected ? "正常" : "断开");
+        model.tx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
+    lv_label_set_text(g_lbl_rx, model.rx_connected ? "正常" : "断开");
     lv_obj_set_style_text_color(g_lbl_rx,
-        g_model.rx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
-    lv_label_set_text(g_lbl_sle, g_model.sle_connected ? "已连接" : "未连接");
+        model.rx_connected ? COLOR_LASER_GREEN : COLOR_LASER_RED, 0);
+    lv_label_set_text(g_lbl_sle, model.sle_connected ? "已连接" : "未连接");
     lv_obj_set_style_text_color(g_lbl_sle,
-        g_model.sle_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
+        model.sle_connected ? COLOR_LASER_GREEN : COLOR_TEXT_MUTED, 0);
 
-    lv_label_set_text(g_lbl_view, panel_model_view_mode_label(g_model.view_mode));
+    lv_label_set_text(g_lbl_view, panel_model_view_mode_label(model.view_mode));
     lv_obj_set_style_text_color(g_lbl_view,
-        g_model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE : COLOR_LASER_BLUE, 0);
-    lv_label_set_text(g_lbl_owner, panel_model_owner_label(g_model.owner));
-    lv_label_set_text(g_lbl_mode, panel_model_mode_label(g_model.mode));
-    lv_label_set_text(g_lbl_job_state, panel_model_state_label(g_model.state));
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.job_id);
+        model.view_mode == PANEL_VIEW_OFFLINE ? COLOR_LASER_ORANGE : COLOR_LASER_BLUE, 0);
+    lv_label_set_text(g_lbl_owner, panel_model_owner_label(model.owner));
+    lv_label_set_text(g_lbl_mode, panel_model_mode_label(model.mode));
+    lv_label_set_text(g_lbl_job_state, panel_model_state_label(model.state));
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.job_id);
     lv_label_set_text(g_lbl_job_id, buf);
-    snprintf(buf, sizeof(buf), "%d%%", g_model.progress);
+    snprintf(buf, sizeof(buf), "%d%%", model.progress);
     lv_label_set_text(g_lbl_progress, buf);
     snprintf(buf, sizeof(buf), "%lu/%lu",
-             (unsigned long)g_model.received_size,
-             (unsigned long)g_model.total_size);
+             (unsigned long)model.received_size,
+             (unsigned long)model.total_size);
     lv_label_set_text(g_lbl_bytes, buf);
     snprintf(buf, sizeof(buf), "%lu/%lu",
-             (unsigned long)g_model.executed_lines,
-             (unsigned long)g_model.total_lines);
+             (unsigned long)model.executed_lines,
+             (unsigned long)model.total_lines);
     lv_label_set_text(g_lbl_lines, buf);
 
-    snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(g_model.cache_free / 1024U));
-    lv_label_set_text(g_lbl_cache, buf);
-    lv_label_set_text(g_lbl_focus, g_model.focus_active ? "开启" : "关闭");
+    if (model.cache_free_valid) {
+        snprintf(buf, sizeof(buf), "%lu KB", (unsigned long)(model.cache_free / 1024U));
+        lv_label_set_text(g_lbl_cache, buf);
+    } else {
+        lv_label_set_text(g_lbl_cache, "--");
+    }
+    lv_label_set_text(g_lbl_focus, model.focus_active ? "开启" : "关闭");
     lv_obj_set_style_text_color(g_lbl_focus,
-        g_model.focus_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
-    lv_label_set_text(g_lbl_laser, g_model.laser_output_active ? "开启" : "关闭");
+        model.focus_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
+    lv_label_set_text(g_lbl_laser, model.laser_output_active ? "开启" : "关闭");
     lv_obj_set_style_text_color(g_lbl_laser,
-        g_model.laser_output_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
-    lv_label_set_text(g_lbl_last_error, g_model.last_error);
+        model.laser_output_active ? COLOR_LASER_RED : COLOR_LASER_GREEN, 0);
+    lv_label_set_text(g_lbl_last_error, model.last_error);
     lv_obj_set_style_text_color(g_lbl_last_error,
-        g_model.state == SYS_STATE_ERROR || g_model.state == SYS_STATE_LINK_LOST ?
+        model.state == SYS_STATE_ERROR || model.state == SYS_STATE_LINK_LOST ?
         COLOR_LASER_RED : COLOR_TEXT_LIGHT, 0);
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)g_model.seq);
-    lv_label_set_text(g_lbl_seq, buf);
-    g_rendered_seq = g_model.seq;
+    if (model.status_valid) {
+        snprintf(buf, sizeof(buf), "%lu", (unsigned long)model.status_seq);
+        lv_label_set_text(g_lbl_seq, buf);
+    } else {
+        lv_label_set_text(g_lbl_seq, "--");
+    }
+    g_rendered_seq = model.seq;
 }

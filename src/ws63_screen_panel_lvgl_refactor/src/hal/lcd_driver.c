@@ -35,8 +35,12 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     uint32_t src_y_offset = (uint32_t)(y0 - area->y1);
     const uint8_t *src = px_map + ((src_y_offset * (uint32_t)src_w + src_x_offset) * 2U);
 
-    errcode_t ret = ili9341_set_window((uint16_t)x0, (uint16_t)y0,
-                                       (uint16_t)x1, (uint16_t)y1);
+    /* Keep CASET/RASET/RAMWR and all pixel chunks atomic against SD SPI reads. */
+    errcode_t ret = screen_lcd_bus_begin(1000U);
+    if (ret == ERRCODE_SUCC) {
+        ret = ili9341_set_window((uint16_t)x0, (uint16_t)y0,
+                                 (uint16_t)x1, (uint16_t)y1);
+    }
     if (ret == ERRCODE_SUCC) {
         if (w == (uint32_t)src_w) {
             ret = ili9341_write_pixels_rgb565((const uint16_t *)src, byte_len / 2U);
@@ -47,6 +51,7 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
             }
         }
     }
+    screen_lcd_bus_end();
     if (ret != ERRCODE_SUCC) {
         osal_printk("[LCD] flush failed: 0x%x\r\n", ret);
     }

@@ -4,7 +4,7 @@
 
 本文档定义 Screen 在 Host Online Mode 与 Panel Offline Mode 下的最终通信链路、状态镜像原则、任务数据归属和 RX owner 模型。
 
-当前阶段仅做文档设计，不实现真实 UART / SLE / SD / 音频 / 小游戏，不修改 TX/RX/Host 正式工程，不修改冻结目录。
+当前文档描述的是现行产品链路。Screen 的 SLE、SD 文件扫描和离线任务路径已经接入活动工程；音频/小游戏仍不在本产品范围内。RX 仍是执行、安全和任务状态的唯一真相源。
 
 ## 2. 总体结论
 
@@ -73,14 +73,13 @@ Screen 在 Host 模式下：
 - 不抢 START。
 - 不作为 job owner。
 - 通过 TX 镜像读取 RX 状态。
-- 作为本地安全面板。
+- 作为只读状态与诊断面板。
 - 作为完成提醒器。
 - 作为诊断显示面板。
 
-Screen 在 Host Online Mode 可通过 TX 请求的命令：
+当前实现中，Screen 在 Host Online Mode 不通过 TX 发送控制命令。以下安全命令仍由 Host/TX/RX 主链路负责：
 
 ```text
-STATUS
 EXEC_STOP
 ABORT
 FOCUS_OFF
@@ -101,7 +100,7 @@ FOCUS_ON
 - `BEGIN/DATA/END` 是任务上传数据流，必须属于当前 owner。
 - `EXEC_START` 会改变任务执行状态，不应由非 owner 抢占。
 - `FOCUS_ON` 会打开激光调焦输出，不应由非 owner 在 Host 任务上下文中触发。
-- `STOP/ABORT/FOCUS_OFF` 属于安全类命令，允许非 owner 请求，但必须由 RX 最终确认。
+- `STOP/ABORT/FOCUS_OFF` 虽属于安全类命令，但当前 Screen 在线页面只读，避免形成未经验证的 Screen -> TX 控制旁路。
 
 Host Online Mode 下不推荐 Screen 直连 RX。若未来做研究性直连状态监听，权限仍必须收窄为：
 
@@ -378,9 +377,7 @@ Screen 在 Host Online Mode 下应遵守：
 - `owner=HOST` 时，Screen 禁用 START。
 - `owner=HOST` 时，Screen 禁用 SEND。
 - `owner=HOST` 时，Screen 禁用 FOCUS_ON。
-- Screen 可显示 STOP / ABORT / FOCUS_OFF。
-- Screen 点击 STOP / ABORT / FOCUS_OFF 后进入 `REQUESTING_*`。
-- Screen 必须等待 RX 状态或响应确认后更新 UI。
+- Screen 在线页面不发送 STOP / ABORT / FOCUS_OFF，安全操作继续由 Host/TX/RX 主链路完成。
 - RX 状态优先于 Screen 本地状态。
 
 推荐 UI 文案：
@@ -388,7 +385,7 @@ Screen 在 Host Online Mode 下应遵守：
 ```text
 控制源：HOST
 模式：ONLINE
-本机屏幕：监控 / 安全面板
+本机屏幕：只读监控 / 诊断
 ```
 
 ## 9. Screen 在 Panel Offline Mode 的状态策略
@@ -410,13 +407,19 @@ Screen 在 Panel Offline Mode 下应遵守：
 离线任务：发送 / 执行 / 完成
 ```
 
-## 10. 与现有设计文档的关系
+## 10. 当前实现约束
 
 - `screen_role_and_feature_scope.md` 定义 Screen 的产品角色和功能层级。
 - `screen_tx_integration_plan.md` 定义 Host Online Mode 下经 TX 接入和状态镜像的主线。
 - 本文档修正最终通信判断：Host Online Mode 使用 `RX -> TX -> Screen` 状态镜像让 Screen 成为实时 HMI；Panel Offline Mode 中 Screen 取代 TX 的生态位成为无线任务入口。
 
-短期仍不实现真实通信。当前 UI 原型应继续使用 fake model 验证信息架构。
+当前实现已经落实以下约束：
+
+- Screen 进入离线模式后，先停止 TX 镜像链路，再向固定 RX 发起 `OWNER_CLAIM`；只有收到 RX 的成功 ACK，离线发送/执行控件才会启用。
+- `OWNER_CLAIM` / `OWNER_RELEASE` 是点对点控制权事务，不使用广播，也不靠“选中文件”或“已建立连接”推断控制权。
+- RX 只有在空闲、缓存和运动队列均清空、激光关闭且没有暂停/执行切换竞态时才接受 owner 交接；忙时返回 `BUSY`，不抢占当前 Host 任务。
+- Screen 保持 owner 覆盖整个离线模式生命周期；单个文件完成后仍保留控制权，便于连续发送第二个文件，只有明确回到在线模式时才发送 `OWNER_RELEASE`。断链会使本地远端状态失效，不能合成“空闲”覆盖 RX 的最后真实任务。
+- `PANEL_SCENE_*` 仅保留为显式诊断/测试注入接口，运行时页面使用 RX 状态、SLE ACK 和 SD 扫描结果，不把演示常量当作实时数据。
 
 ## 11. untracked 文档审核命令
 

@@ -9,6 +9,7 @@
 #include "common_def.h"
 #include "errcode.h"
 #include "packet.h"
+#include "panel_job_proto.h"
 #include "protocol.h"
 #include "securec.h"
 #include "soc_osal.h"
@@ -75,6 +76,7 @@
 #define PANEL_SLE_DISCONNECT_RETRY_MS 1000U
 #define PANEL_SLE_ANNOUNCE_RETRY_MS 1000U
 #define PANEL_SLE_RX_CONNECT_TIMEOUT_MS 5000U
+#define PANEL_SLE_OWNER_CTRL_RETRY_MS 1000U
 
 static const uint8_t g_panel_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x02};
 static const uint8_t g_tx_mac[SLE_ADDR_LEN] = {0x20, 0x06, 0x09, 0x27, 0x12, 0x03};
@@ -122,6 +124,21 @@ static volatile bool g_status_listen_task_started;
 static panel_transport_rx_response_cb_t g_offline_response_cb;
 static panel_transport_rx_response_cb_t g_cmd_response_cb;
 static volatile bool g_standalone_session_active;
+
+typedef enum {
+    PANEL_RX_OWNER_NONE = 0,
+    PANEL_RX_OWNER_CLAIM_PENDING,
+    PANEL_RX_OWNER_CLAIMED,
+    PANEL_RX_OWNER_RELEASE_PENDING,
+} panel_rx_owner_state_t;
+
+static volatile panel_rx_owner_state_t g_rx_owner_state = PANEL_RX_OWNER_NONE;
+static volatile uint16_t g_rx_owner_ctrl_seq = 0U;
+static volatile uint32_t g_rx_owner_ctrl_request_ms = 0U;
+static volatile uint32_t g_rx_owner_ctrl_retry_ms = 0U;
+static volatile bool g_rx_owner_release_requested = false;
+static volatile bool g_write_cfm_waiting = false;
+static volatile uint16_t g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
 
 typedef enum {
     PANEL_STATUS_SOURCE_TX = 0,
@@ -302,13 +319,7 @@ static bool seek_result_matches_receiver(const sle_seek_result_info_t *seek_resu
 
 static bool rx_control_allowed_now(void)
 {
-    /*
-     * Normal product topology is Host/TX -> RX plus TX -> Screen mirror.
-     * A standalone session keeps Screen control authority while a job or
-     * command is active. Merely viewing Offline mode does not grant that
-     * authority when TX is present.
-     */
-    return g_standalone_session_active;
+    return g_rx_owner_state == PANEL_RX_OWNER_CLAIMED;
 }
 
 static bool rx_link_requested_now(void)
@@ -318,9 +329,10 @@ static bool rx_link_requested_now(void)
      * Keep the idle link only while TX is absent; an active standalone
      * session may retain it until its command/job lifecycle is complete.
      */
-    return g_standalone_session_active ||
+    return g_rx_owner_state != PANEL_RX_OWNER_NONE ||
            (g_model.view_mode == PANEL_VIEW_OFFLINE &&
-            !panel_transport_sle_tx_is_connected());
+            (g_standalone_session_active ||
+             !panel_transport_sle_tx_is_connected()));
 }
 
 static bool addr_matches_pending_rx(const sle_addr_t *addr)
@@ -464,6 +476,75 @@ static void disconnect_rx_expected(void)
         osal_printk("[PANEL_SLE_CLI] rx disconnect submit fail: 0x%x\r\n", ret);
     }
 }
+
+static void drain_write_cfm_sem(void)
+{
+    if (!g_write_cfm_sem_ready) {
+        return;
+    }
+    while (osal_sem_down_timeout(&g_write_cfm_sem, 0) == OSAL_SUCCESS) {
+    }
+}
+
+static void reset_rx_owner_state(const char *reason)
+{
+    if (g_rx_owner_state != PANEL_RX_OWNER_NONE && reason != NULL) {
+        osal_printk("[PANEL_RX_OWNER] state->none reason=%s\r\n", reason);
+    }
+    g_rx_owner_state = PANEL_RX_OWNER_NONE;
+    g_rx_owner_ctrl_seq = 0U;
+    g_rx_owner_ctrl_request_ms = 0U;
+    g_rx_owner_ctrl_retry_ms = 0U;
+}
+
+static void mark_model_rx_untrusted(const char *reason)
+{
+    panel_model_set_transport_links(panel_transport_sle_tx_is_connected(), false);
+
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    /* RX is the authoritative source in Offline view.  In Online view an RX
+     * helper link may be absent while the TX mirror remains healthy. */
+    if (model.view_mode == PANEL_VIEW_OFFLINE || !model.tx_connected) {
+        panel_model_invalidate_remote_status(reason);
+    }
+}
+
+static void mark_model_tx_untrusted(const char *reason)
+{
+    panel_model_set_transport_links(false, panel_transport_sle_rx_is_connected());
+
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    if (model.view_mode == PANEL_VIEW_ONLINE && !model.rx_connected) {
+        panel_model_invalidate_remote_status(reason);
+    }
+}
+
+static bool rx_owner_claim_desired_now(void)
+{
+    return g_model.view_mode == PANEL_VIEW_OFFLINE &&
+           !panel_transport_sle_tx_is_connected() &&
+           !g_rx_owner_release_requested;
+}
+
+static void mark_rx_link_untrusted(const char *reason)
+{
+    g_write_cfm_waiting = false;
+    g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
+    drain_write_cfm_sem();
+    g_rx_handles_ready = false;
+    g_rx_data_handle = 0U;
+    g_rx_resp_handle = 0U;
+    reset_rx_owner_state(reason);
+    panel_model_set_control_claimed(false);
+    mark_model_rx_untrusted(reason);
+    if (g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
+        disconnect_rx_expected();
+    }
+}
+
+static errcode_t send_owner_control(uint8_t type, bool release);
 
 static void disconnect_tx_for_offline(void)
 {
@@ -772,7 +853,19 @@ static void apply_panel_status(const panel_status_payload_t *st,
     uint8_t flags = st->flags;
     flags |= (source == PANEL_STATUS_SOURCE_TX) ?
              PANEL_STATUS_FLAG_OWNER_LINK : PANEL_STATUS_FLAG_ANY_LINK;
-    panel_model_apply_rx_panel_status(st->owner, st->mode, st->job_state, flags, st->seq,
+    uint8_t owner = st->owner;
+    uint8_t mode = st->mode;
+    /* RX may still advertise a stale SCREEN owner while this connection is
+     * negotiating.  Never present that as local control before our explicit
+     * OWNER_CLAIM ACK arrives. */
+    if (source == PANEL_STATUS_SOURCE_RX &&
+        owner == PANEL_OWNER_SCREEN &&
+        g_rx_owner_state != PANEL_RX_OWNER_CLAIMED) {
+        owner = PANEL_OWNER_NONE;
+        mode = PANEL_MODE_IDLE;
+        flags &= (uint8_t)~PANEL_STATUS_FLAG_OWNER_LINK;
+    }
+    panel_model_apply_rx_panel_status(owner, mode, st->job_state, flags, st->seq,
                                       st->job_id, st->received_size, st->total_size,
                                       st->executed_lines, st->completed_lines,
                                       st->total_lines, st->cache_free, st->last_error,
@@ -921,6 +1014,11 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         if (addr_matches_mac(addr, g_receiver_mac)) {
             g_rx_conn_id = conn_id;
+            reset_rx_owner_state("connected");
+            panel_model_set_control_claimed(false);
+            g_write_cfm_waiting = false;
+            g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
+            drain_write_cfm_sem();
             g_rx_disconnect_expected = false;
             g_rx_disconnect_request_ms = 0U;
             g_rx_connect_request_ms = 0U;
@@ -982,23 +1080,23 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             }
         }
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
-        bool tracked_disconnect = false;
-        bool expected_disconnect = false;
         bool rx_connection_ended = false;
+        panel_model_t model_before_disconnect;
+        panel_model_get_snapshot(&model_before_disconnect);
         if (conn_id == g_panel_conn_id) {
-            tracked_disconnect = true;
-            expected_disconnect = g_tx_disconnect_expected;
+            bool expected_tx_disconnect = g_tx_disconnect_expected;
             g_panel_conn_id = PANEL_SLE_CONN_INVALID;
             g_tx_disconnect_expected = false;
             g_tx_disconnect_request_ms = 0U;
             panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "disconnected");
             panel_model_set_transport_links(false, panel_transport_sle_rx_is_connected());
+            if (!expected_tx_disconnect && model_before_disconnect.view_mode == PANEL_VIEW_ONLINE) {
+                mark_model_tx_untrusted("TX_STATUS_LOST");
+            }
         }
         if (conn_id == g_rx_conn_id) {
-            tracked_disconnect = true;
             rx_connection_ended = true;
             bool expected = g_rx_disconnect_expected;
-            expected_disconnect = expected_disconnect || expected;
             g_rx_disconnect_expected = false;
             g_rx_disconnect_request_ms = 0U;
             g_rx_conn_id = PANEL_SLE_CONN_INVALID;
@@ -1006,23 +1104,27 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             g_rx_handles_ready = false;
             g_rx_data_handle = 0;
             g_rx_resp_handle = 0;
+            g_write_cfm_waiting = false;
+            g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
+            drain_write_cfm_sem();
+            reset_rx_owner_state("disconnected");
+            panel_model_set_control_claimed(false);
             g_rx_connect_cancel_after_connect = false;
             memset(&g_rx_addr, 0, sizeof(g_rx_addr));
             g_rx_addr_valid = false;
             osal_printk("[PANEL_SLE_CLI] rx disconnected\r\n");
             panel_model_set_transport_links(panel_transport_sle_tx_is_connected(), false);
+            if (!expected) {
+                mark_model_rx_untrusted("RX_STATUS_LOST");
+            }
         }
         if (rx_connection_ended ||
             (g_client_connecting && addr_matches_pending_rx(addr))) {
             g_client_connecting = false;
             g_rx_connect_request_ms = 0U;
         }
-        if (tracked_disconnect && !expected_disconnect &&
-            !panel_transport_sle_tx_is_connected() && !panel_transport_sle_rx_is_connected()) {
-            panel_model_apply_rx_panel_status(PANEL_OWNER_NONE, PANEL_MODE_LINK_LOST, JOB_STATE_IDLE,
-                                               0, g_model.seq + 1U, 0, 0, 0,
-                                               0, 0, 0, 0, 1, 0U);
-        }
+        /* The model invalidation above is deliberately explicit; do not
+         * synthesize a fake idle status packet that could erase a real job. */
         start_seek_if_needed();
     }
 }
@@ -1254,7 +1356,7 @@ static void sle_enable_cbk(errcode_t status)
     g_announce_configured = true;
     reconcile_panel_announce((uint32_t)uapi_systick_get_ms());
 
-    osal_printk("[PANEL_SLE_CLI] rx client gated until standalone session\r\n");
+    osal_printk("[PANEL_SLE_CLI] rx client gated until offline OWNER_CLAIM\r\n");
     start_status_listen_task_once();
     start_seek_if_needed();
 }
@@ -1331,13 +1433,60 @@ static void ssapc_write_cfm_cbk(uint8_t client_id, uint16_t conn_id,
     ssapc_write_result_t *write_result, errcode_t status)
 {
     unused(client_id);
-    unused(write_result);
-    if (conn_id != g_rx_conn_id) {
+    if (conn_id != g_rx_conn_id || !g_write_cfm_waiting ||
+        g_write_cfm_conn_id != conn_id || write_result == NULL ||
+        write_result->handle != g_rx_data_handle ||
+        write_result->type != SSAP_PROPERTY_TYPE_VALUE) {
         return;
     }
     g_last_write_cfm_status = status;
+    g_write_cfm_waiting = false;
     if (g_write_cfm_sem_ready) {
         osal_sem_up(&g_write_cfm_sem);
+    }
+}
+
+static void handle_owner_control_ack(const ack_payload_t *ack)
+{
+    if (ack == NULL ||
+        (ack->ack_type != PKT_OWNER_CLAIM && ack->ack_type != PKT_OWNER_RELEASE) ||
+        ack->ack_seq != g_rx_owner_ctrl_seq) {
+        return;
+    }
+
+    if (ack->ack_type == PKT_OWNER_CLAIM &&
+        g_rx_owner_state == PANEL_RX_OWNER_CLAIM_PENDING) {
+        g_rx_owner_ctrl_request_ms = 0U;
+        if (ack->status == JOB_STATUS_OK) {
+            g_rx_owner_state = PANEL_RX_OWNER_CLAIMED;
+            g_rx_owner_ctrl_retry_ms = 0U;
+            panel_model_set_control_claimed(true);
+            osal_printk("[PANEL_RX_OWNER] claim confirmed seq=%u\r\n",
+                        (unsigned int)ack->ack_seq);
+        } else {
+            g_rx_owner_state = PANEL_RX_OWNER_NONE;
+            g_rx_owner_ctrl_retry_ms = (uint32_t)uapi_systick_get_ms();
+            panel_model_set_control_claimed(false);
+            osal_printk("[PANEL_RX_OWNER] claim rejected seq=%u status=%u\r\n",
+                        (unsigned int)ack->ack_seq, (unsigned int)ack->status);
+        }
+        return;
+    }
+
+    if (ack->ack_type == PKT_OWNER_RELEASE &&
+        g_rx_owner_state == PANEL_RX_OWNER_RELEASE_PENDING) {
+        g_rx_owner_ctrl_request_ms = 0U;
+        if (ack->status == JOB_STATUS_OK) {
+            reset_rx_owner_state("release-confirmed");
+            panel_model_set_control_claimed(false);
+            osal_printk("[PANEL_RX_OWNER] release confirmed seq=%u\r\n",
+                        (unsigned int)ack->ack_seq);
+        } else {
+            g_rx_owner_state = PANEL_RX_OWNER_CLAIMED;
+            g_rx_owner_ctrl_retry_ms = (uint32_t)uapi_systick_get_ms();
+            osal_printk("[PANEL_RX_OWNER] release rejected seq=%u status=%u\r\n",
+                        (unsigned int)ack->ack_seq, (unsigned int)ack->status);
+        }
     }
 }
 
@@ -1349,8 +1498,16 @@ static void handle_rx_response_packet(const uint8_t *data, uint16_t len)
         return;
     }
 
+    if ((pkt.type == PKT_ACK || pkt.type == PKT_NACK) &&
+        pkt.len == sizeof(ack_payload_t)) {
+        ack_payload_t ack;
+        (void)memcpy_s(&ack, sizeof(ack), pkt.payload, sizeof(ack));
+        handle_owner_control_ack(&ack);
+    }
+
     if (pkt.type == PKT_STATUS_RESP && pkt.len == sizeof(status_resp_payload_t) &&
-        g_model.view_mode == PANEL_VIEW_OFFLINE) {
+        g_model.view_mode == PANEL_VIEW_OFFLINE &&
+        g_rx_owner_state == PANEL_RX_OWNER_CLAIMED) {
         status_resp_payload_t st;
         (void)memcpy_s(&st, sizeof(st), pkt.payload, sizeof(st));
         apply_status_resp_as(&st, PANEL_OWNER_SCREEN, PANEL_MODE_OFFLINE);
@@ -1434,6 +1591,10 @@ errcode_t panel_transport_sle_start(void)
     g_status_listen_last_ms = 0;
     g_status_listen_started_ms = 0;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
+    g_write_cfm_waiting = false;
+    g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
+    reset_rx_owner_state("transport-start");
+    g_rx_owner_release_requested = false;
     g_standalone_session_active = false;
     panel_status_seq_reset(PANEL_STATUS_SOURCE_TX, "transport-start");
     panel_status_seq_reset(PANEL_STATUS_SOURCE_RX, "transport-start");
@@ -1456,6 +1617,58 @@ errcode_t panel_transport_sle_start(void)
     return ret;
 }
 
+static void reconcile_rx_owner_control(uint32_t now)
+{
+    bool want_claim = rx_owner_claim_desired_now();
+    if ((g_rx_owner_state == PANEL_RX_OWNER_CLAIM_PENDING ||
+         g_rx_owner_state == PANEL_RX_OWNER_RELEASE_PENDING) &&
+        g_rx_owner_ctrl_request_ms != 0U &&
+        (uint32_t)(now - g_rx_owner_ctrl_request_ms) >=
+            (PANEL_SLE_WRITE_CFM_TIMEOUT_MS + PANEL_SLE_OWNER_CTRL_RETRY_MS)) {
+        osal_printk("[PANEL_RX_OWNER] control ack timeout state=%u seq=%u\r\n",
+                    (unsigned int)g_rx_owner_state,
+                    (unsigned int)g_rx_owner_ctrl_seq);
+        mark_rx_link_untrusted("owner-control-ack-timeout");
+        return;
+    }
+
+    if (!panel_transport_sle_rx_is_connected()) {
+        return;
+    }
+
+    /*
+     * Owner lifetime is the Offline mode lifetime.  Repair a stale local
+     * model if the transport still has the confirmed owner after a local
+     * completion/status transition; do not send a second CLAIM, because RX
+     * already owns this connection.
+     */
+    if (g_rx_owner_state == PANEL_RX_OWNER_CLAIMED && want_claim) {
+        panel_model_t model;
+        panel_model_get_snapshot(&model);
+        if (!model.control_claimed || model.owner != PANEL_OWNER_SCREEN ||
+            model.mode != PANEL_MODE_OFFLINE) {
+            osal_printk("[PANEL_RX_OWNER] repair model claim state=%u owner=%u mode=%u\r\n",
+                        (unsigned int)model.state, (unsigned int)model.owner,
+                        (unsigned int)model.mode);
+            panel_model_set_control_claimed(true);
+        }
+    }
+
+    if (g_rx_owner_state == PANEL_RX_OWNER_NONE && want_claim &&
+        (g_rx_owner_ctrl_retry_ms == 0U ||
+         (uint32_t)(now - g_rx_owner_ctrl_retry_ms) >= PANEL_SLE_OWNER_CTRL_RETRY_MS)) {
+        (void)send_owner_control(PKT_OWNER_CLAIM, false);
+        return;
+    }
+
+    if (g_rx_owner_state == PANEL_RX_OWNER_CLAIMED && !want_claim) {
+        if (g_rx_owner_ctrl_retry_ms == 0U ||
+            (uint32_t)(now - g_rx_owner_ctrl_retry_ms) >= PANEL_SLE_OWNER_CTRL_RETRY_MS) {
+            (void)send_owner_control(PKT_OWNER_RELEASE, true);
+        }
+    }
+}
+
 void panel_transport_sle_poll(void)
 {
     uint32_t now = (uint32_t)uapi_systick_get_ms();
@@ -1471,6 +1684,12 @@ void panel_transport_sle_poll(void)
                     (unsigned int)panel_transport_sle_rx_is_connected());
         g_transport_view_mode = g_model.view_mode;
         g_last_seek_ms = 0U;
+        if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
+            g_rx_owner_release_requested = false;
+        } else {
+            g_rx_owner_release_requested = true;
+            g_standalone_session_active = false;
+        }
     }
 
     if (g_model.view_mode == PANEL_VIEW_OFFLINE) {
@@ -1478,6 +1697,7 @@ void panel_transport_sle_poll(void)
     } else {
         stop_rx_seek_for_online();
     }
+    reconcile_rx_owner_control(now);
     if (!rx_link_requested_now() &&
         g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
         disconnect_rx_expected();
@@ -1501,35 +1721,47 @@ bool panel_transport_sle_tx_is_connected(void)
 
 bool panel_transport_sle_can_control_rx(void)
 {
-    if (g_model.view_mode == PANEL_VIEW_ONLINE) {
-        return false;
-    }
-    return !panel_transport_sle_tx_is_connected() || g_standalone_session_active;
+    panel_model_t model;
+    panel_model_get_snapshot(&model);
+    return model.view_mode == PANEL_VIEW_OFFLINE &&
+           model.control_claimed &&
+           g_rx_owner_state == PANEL_RX_OWNER_CLAIMED &&
+           panel_transport_sle_rx_is_connected();
+}
+
+bool panel_transport_sle_rx_owner_claimed(void)
+{
+    return g_rx_owner_state == PANEL_RX_OWNER_CLAIMED;
+}
+
+void panel_transport_sle_release_rx_owner(void)
+{
+    g_rx_owner_release_requested = true;
 }
 
 void panel_transport_sle_set_standalone_session_active(bool active)
 {
-    bool was_active = g_standalone_session_active;
     g_standalone_session_active = active;
     if (active) {
+        g_rx_owner_release_requested = false;
         g_rx_connect_cancel_after_connect = false;
     }
     if (!active) {
         if (g_client_connecting) {
             g_rx_connect_cancel_after_connect = true;
         }
-    }
-    if (!active && was_active &&
-        !rx_link_requested_now() &&
-        g_rx_conn_id != PANEL_SLE_CONN_INVALID) {
-        disconnect_rx_expected();
+        /* Ownership is bound to Offline mode, not to one file/command.  Do
+         * not release merely because a job worker went idle; mode transition
+         * below is the explicit lifecycle boundary. */
     }
     start_seek_if_needed();
 }
 
-errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
+static errcode_t send_rx_packet_internal(const void *data, uint16_t len,
+                                         bool require_owner)
 {
-    if (data == NULL || len == 0 || !panel_transport_sle_can_control_rx() ||
+    if (data == NULL || len == 0 ||
+        (require_owner && !panel_transport_sle_can_control_rx()) ||
         !panel_transport_sle_rx_is_connected() || g_rx_data_handle == 0 ||
         !g_write_cfm_sem_ready || !g_write_mutex_ready) {
         return ERRCODE_SLE_FAIL;
@@ -1556,9 +1788,13 @@ errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
         return ret;
     }
 
+    g_write_cfm_waiting = true;
+    g_write_cfm_conn_id = g_rx_conn_id;
     g_last_write_cfm_status = ERRCODE_SLE_FAIL;
     errcode_t ret = ssapc_write_req(PANEL_SLE_CLIENT_ID, g_rx_conn_id, &param);
     if (ret != ERRCODE_SLE_SUCCESS) {
+        g_write_cfm_waiting = false;
+        g_write_cfm_conn_id = PANEL_SLE_CONN_INVALID;
         osal_printk("[PANEL_SLE_CLI] write submit fail ret=0x%x len=%u\r\n",
                     ret, (unsigned int)len);
         osal_mutex_unlock(&g_write_mutex);
@@ -1566,12 +1802,59 @@ errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
     }
     if (osal_sem_down_timeout(&g_write_cfm_sem, PANEL_SLE_WRITE_CFM_TIMEOUT_MS) != OSAL_SUCCESS) {
         osal_printk("[PANEL_SLE_CLI] write cfm timeout len=%u\r\n", (unsigned int)len);
+        /* A late confirmation has no request id in the SDK callback.  Do not
+         * leave this connection available for the next request: invalidate
+         * the link, disconnect it, and require a fresh OWNER_CLAIM. */
+        mark_rx_link_untrusted("write-cfm-timeout");
         osal_mutex_unlock(&g_write_mutex);
         return ERRCODE_SLE_TIMEOUT;
     }
     ret = g_last_write_cfm_status;
     osal_mutex_unlock(&g_write_mutex);
     return ret;
+}
+
+static errcode_t send_owner_control(uint8_t type, bool release)
+{
+    if ((type != PKT_OWNER_CLAIM && type != PKT_OWNER_RELEASE) ||
+        !panel_transport_sle_rx_is_connected()) {
+        return ERRCODE_SLE_FAIL;
+    }
+    if ((!release && g_rx_owner_state != PANEL_RX_OWNER_NONE) ||
+        (release && g_rx_owner_state != PANEL_RX_OWNER_CLAIMED)) {
+        return ERRCODE_SLE_FAIL;
+    }
+
+    owner_control_payload_t payload = {0};
+    payload.owner = PANEL_OWNER_SCREEN;
+    uint8_t packet[SLE_JOB_PACKET_MAX_SIZE];
+    uint16_t packet_len = 0U;
+    uint16_t seq = panel_job_proto_peek_seq();
+    if (!sle_packet_encode(type, 0, seq, &payload, sizeof(payload),
+                           packet, sizeof(packet), &packet_len)) {
+        return ERRCODE_FAIL;
+    }
+
+    g_rx_owner_ctrl_seq = seq;
+    g_rx_owner_ctrl_request_ms = (uint32_t)uapi_systick_get_ms();
+    g_rx_owner_state = release ? PANEL_RX_OWNER_RELEASE_PENDING :
+                                 PANEL_RX_OWNER_CLAIM_PENDING;
+    errcode_t ret = send_rx_packet_internal(packet, packet_len, false);
+    if (ret != ERRCODE_SLE_SUCCESS &&
+        g_rx_owner_state != PANEL_RX_OWNER_NONE) {
+        if (ret != ERRCODE_SLE_TIMEOUT) {
+            g_rx_owner_state = release ? PANEL_RX_OWNER_CLAIMED :
+                                         PANEL_RX_OWNER_NONE;
+            g_rx_owner_ctrl_retry_ms = (uint32_t)uapi_systick_get_ms();
+            panel_model_set_control_claimed(g_rx_owner_state == PANEL_RX_OWNER_CLAIMED);
+        }
+    }
+    return ret;
+}
+
+errcode_t panel_transport_sle_send_rx_packet(const void *data, uint16_t len)
+{
+    return send_rx_packet_internal(data, len, true);
 }
 
 void panel_transport_sle_set_rx_response_cb(panel_transport_rx_response_cb_t cb)

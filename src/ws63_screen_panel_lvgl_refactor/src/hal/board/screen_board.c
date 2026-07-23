@@ -27,6 +27,7 @@
 
 static bool g_lcd_bl_pwm_ready;
 static bool g_lcd_spi_dma_ready;
+static bool g_lcd_bus_transaction_active;
 
 static void screen_gpio_output(pin_t pin, gpio_level_t level)
 {
@@ -233,16 +234,56 @@ errcode_t screen_lcd_bl_set_brightness(uint8_t brightness_pct)
 #endif
 }
 
+errcode_t screen_lcd_bus_begin(uint32_t timeout_ms)
+{
+    if (g_lcd_bus_transaction_active) {
+        return ERRCODE_FAIL;
+    }
+
+    errcode_t ret = spi_bus_lock(timeout_ms);
+    if (ret != ERRCODE_SUCC) {
+        return ret;
+    }
+
+    ret = spi_bus_restore_lcd_mode();
+    if (ret != ERRCODE_SUCC) {
+        spi_bus_unlock();
+        return ret;
+    }
+
+#if defined(SCREEN_PANEL_ENABLE_SD) && SCREEN_PANEL_ENABLE_SD
+    spi_bus_sd_cs_high();
+#endif
+    screen_lcd_cs(true);
+    g_lcd_bus_transaction_active = true;
+    return ERRCODE_SUCC;
+}
+
+void screen_lcd_bus_end(void)
+{
+    if (!g_lcd_bus_transaction_active) {
+        return;
+    }
+
+    screen_lcd_cs(true);
+    g_lcd_bus_transaction_active = false;
+    spi_bus_unlock();
+}
+
 errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
 {
     if (data == NULL || len == 0) {
         return ERRCODE_SUCC;
     }
 
-    errcode_t ret = spi_bus_lock(1000);
-    if (ret != ERRCODE_SUCC) {
-        screen_lcd_cs(true);
-        return ret;
+    bool owns_bus = !g_lcd_bus_transaction_active;
+    errcode_t ret = ERRCODE_SUCC;
+    if (owns_bus) {
+        ret = spi_bus_lock(1000);
+        if (ret != ERRCODE_SUCC) {
+            screen_lcd_cs(true);
+            return ret;
+        }
     }
 
     /*
@@ -261,8 +302,10 @@ errcode_t screen_lcd_spi_write(const uint8_t *data, uint32_t len)
     if (ret != ERRCODE_SUCC && g_lcd_spi_dma_ready) {
         osal_printk("[SCREEN] spi DMA write failed len=%u ret=0x%x\r\n", (unsigned int)len, ret);
     }
-    screen_lcd_cs(true);
-    spi_bus_unlock();
+    if (owns_bus) {
+        screen_lcd_cs(true);
+        spi_bus_unlock();
+    }
     return ret;
 }
 
